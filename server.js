@@ -647,39 +647,94 @@ async function handleCreateOffer(peerId) {
   const ice = await fetchICE();
   createPC(true, ice);
 
-  // Host automatically shares screen + system audio when peer joins
-  // This is the core of StudioSync — the remote sees and hears everything
+  // ── Step 1: Capture AUDIO from DAW (studio quality, no mic) ──
+  // On Mac: getDisplayMedia can't capture system audio reliably.
+  // Solution: Use getUserMedia with a specific audio device (virtual audio routing).
+  // The Host picks their DAW audio output device from a list.
+  let audioAdded = false;
   try {
-    toast('📺 בחר את חלון Ableton (עם סימון "Share system audio")', 'c');
+    // Get all audio input devices — look for virtual/loopback devices
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const audioInputs = devices.filter(d => d.kind === 'audioinput' && d.deviceId !== 'default' && d.deviceId !== 'communications');
+
+    // Check if there's a known virtual audio device
+    const virtualNames = ['blackhole', 'vb-cable', 'loopback', 'virtual', 'aggregate', 'zoom', 'soundflower', 'ecamm'];
+    const virtualDev = audioInputs.find(d => virtualNames.some(v => d.label.toLowerCase().includes(v)));
+    const targetDev = virtualDev || audioInputs[0];
+
+    if (audioInputs.length > 0) {
+      // Show device picker modal
+      const pickerHtml = '<h3>🔊 בחר מקור שמע</h3><p>מאיפה Ableton מנגן? בחר את כרטיס הקול או ה-output של ה-DAW:</p>'
+        + '<div style="display:flex;flex-direction:column;gap:6px;margin:14px 0;max-height:200px;overflow-y:auto">'
+        + audioInputs.map((d,i) => {
+          const isVirtual = virtualNames.some(v => d.label.toLowerCase().includes(v));
+          const label = d.label || 'Audio Device ' + (i+1);
+          return '<div class="stype' + (d.deviceId === targetDev?.deviceId ? ' on' : '') + '" onclick="pickAudioDev(\\'' + d.deviceId + '\\',this)" data-did="' + d.deviceId + '" style="padding:10px 14px;font-size:12px;justify-content:space-between">'
+            + '<span>' + label + '</span>'
+            + (isVirtual ? '<span style="font-size:9px;background:var(--gD);color:var(--green);padding:2px 6px;border-radius:3px">מומלץ</span>' : '')
+            + '</div>';
+        }).join('')
+        + '</div>'
+        + '<div style="background:var(--s2);border:1px solid var(--b1);border-radius:7px;padding:10px;margin-bottom:14px;font-size:11px;color:var(--mid);line-height:1.6">'
+        + '💡 <b>טיפ:</b> באבלטון → Preferences → Audio → Output → בחר את אותו מכשיר שבחרת פה. ככה השמע יגיע ישיר בלי מיקרופון.'
+        + '</div>'
+        + '<div class="mrow"><button class="btn btn-c" style="flex:1" onclick="confirmAudioDev()">✓ התחל שידור שמע</button></div>';
+      modal(pickerHtml);
+
+      // Wait for user to pick device
+      await new Promise((resolve) => {
+        window._audioPickResolve = resolve;
+        window._audioPickDevId = targetDev?.deviceId;
+      });
+      closeModal();
+
+      const chosenId = window._audioPickDevId;
+      if (chosenId) {
+        const audioStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            deviceId: { exact: chosenId },
+            echoCancellation: false,
+            noiseSuppression: false,
+            autoGainControl: false,
+            sampleRate: 48000,
+            channelCount: 2
+          }
+        });
+        audioStream.getAudioTracks().forEach(t => {
+          pc.addTrack(t, audioStream);
+          dlog('Audio track: ' + t.label + ' (48kHz stereo, no processing)');
+        });
+        audioAdded = true;
+        toast('🔊 שמע DAW משודר באיכות סטודיו!', 'g');
+        document.getElementById('audSt').textContent = 'Audio 48kHz ✓';
+        document.getElementById('audSt').className = 'cv ok';
+      }
+    }
+  } catch(e) {
+    dlog('Audio capture error: ' + e.message);
+  }
+
+  if (!audioAdded) {
+    toast('⚠️ לא נבחר מקור שמע — השותף לא ישמע', '');
+  }
+
+  // ── Step 2: Capture SCREEN (Ableton window) ──
+  try {
+    toast('📺 עכשיו בחר את מסך Ableton לשיתוף', 'c');
     screenStream = await navigator.mediaDevices.getDisplayMedia({
       video: { cursor: 'always', width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } },
-      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, sampleRate: 48000 }
+      audio: false  // Audio already captured separately in studio quality
     });
-    // Add all tracks (video + audio) to peer connection
-    screenStream.getTracks().forEach(t => {
+    screenStream.getVideoTracks().forEach(t => {
       pc.addTrack(t, screenStream);
-      dlog('Track added: ' + t.kind + ' (' + t.label + ')');
+      dlog('Video track: ' + t.label);
     });
-    const hasAudio = screenStream.getAudioTracks().length > 0;
-    const hasVideo = screenStream.getVideoTracks().length > 0;
-    if (hasVideo) toast('🖥 מסך משודר!', 'g');
-    if (hasAudio) { toast('🔊 שמע Ableton משודר!', 'g'); document.getElementById('audSt').textContent = 'Audio ✓'; document.getElementById('audSt').className = 'cv ok'; }
-    if (!hasAudio) {
-      toast('⚠️ השמע לא נלכד — וודא ש-"Share system audio" מסומן', '');
-      // Fallback: try mic
-      try {
-        const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        micStream.getAudioTracks().forEach(t => pc.addTrack(t, micStream));
-        toast('🎙 מיקרופון פעיל כגיבוי', 'c');
-      } catch(e2) {}
-    }
-    // Handle stream ending (user clicks "Stop sharing")
+    toast('🖥 מסך Ableton משודר!', 'g');
     screenStream.getVideoTracks()[0]?.addEventListener('ended', () => {
       toast('🖥 שיתוף המסך הופסק', '');
       const btn = document.getElementById('btnSS');
       if (btn) { btn.style.background = ''; btn.style.color = ''; btn.textContent = '🖥 Share'; btn.onclick = doShare; }
     });
-    // Update UI
     const btn = document.getElementById('btnSS');
     if (btn) { btn.style.background = 'var(--cyan)'; btn.style.color = '#000'; btn.textContent = '🖥 Stop'; btn.onclick = stopShare; }
   } catch (e) {
@@ -1171,6 +1226,16 @@ function showCode(){
   modal(\`<h3>🔑 קוד הסשן</h3><p>שלח את הכתובת + הקוד לשותף שלך. הוא פותח את אותה כתובת בדפדפן.</p><div class="mcode" onclick="copyCode()">\${S.code}</div><div style="font-family:var(--mono);font-size:10px;color:var(--dim);text-align:center;margin-bottom:14px">לחץ להעתקה</div><div class="mrow"><button class="btn btn-c" style="flex:1" onclick="copyCode()">📋 העתק קוד</button><button class="btn btn-ghost" onclick="closeModal()">סגור</button></div>\`);
 }
 function copyCode(){ navigator.clipboard?.writeText(S.code); toast('✓ הקוד הועתק: '+S.code,'c'); closeModal(); }
+
+// Audio device picker helpers
+function pickAudioDev(deviceId, el) {
+  window._audioPickDevId = deviceId;
+  document.querySelectorAll('#mBody .stype').forEach(s => s.classList.remove('on'));
+  el.classList.add('on');
+}
+function confirmAudioDev() {
+  if (window._audioPickResolve) { window._audioPickResolve(); window._audioPickResolve = null; }
+}
 
 function leaveSession(){
   S.poll=false; S.cid=null; S.code=null; S.role=null; S.peers=[]; S.playing=false; S.rec=false; S.pos={b:1,bt:1,tk:1}; S.markers=[];
