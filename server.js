@@ -101,11 +101,15 @@ const server = http.createServer(async (req, res) => {
   if (path === '/api/ice') {
     return json(res, { iceServers: [
       { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun1.l.google.com:19302' },
       { urls: 'stun:stun.relay.metered.ca:80' },
       { urls: 'turn:global.relay.metered.ca:80', username: 'open', credential: 'open' },
       { urls: 'turn:global.relay.metered.ca:80?transport=tcp', username: 'open', credential: 'open' },
       { urls: 'turn:global.relay.metered.ca:443', username: 'open', credential: 'open' },
-      { urls: 'turn:global.relay.metered.ca:443?transport=tcp', username: 'open', credential: 'open' }
+      { urls: 'turn:global.relay.metered.ca:443?transport=tcp', username: 'open', credential: 'open' },
+      { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+      { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' },
+      { urls: 'turn:openrelay.metered.ca:443?transport=tcp', username: 'openrelayproject', credential: 'openrelayproject' }
     ]});
   }
 
@@ -556,10 +560,36 @@ function createPC(isInitiator, iceServers) {
       document.getElementById('sb1').textContent = '● WebRTC: P2P Connected';
       document.getElementById('sb1').className = 'sbi ok';
       toast('✓ חיבור P2P פעיל!', 'g');
-    } else if (st === 'disconnected' || st === 'failed') {
-      document.getElementById('sb1').textContent = '● WebRTC: Disconnected';
+      startLatencyPing();
+    } else if (st === 'disconnected') {
+      document.getElementById('sb1').textContent = '● WebRTC: Reconnecting...';
       document.getElementById('sb1').className = 'sbi';
       toast('⚠️ החיבור נפל — מנסה שוב...', '');
+    } else if (st === 'failed') {
+      document.getElementById('sb1').textContent = '● WebRTC: Failed';
+      document.getElementById('sb1').className = 'sbi';
+      toast('⚠️ החיבור נכשל — מנסה ICE restart...', '');
+      // Try ICE restart
+      if (isInitiator && pc) {
+        pc.restartIce();
+        pc.createOffer({ iceRestart: true }).then(offer => {
+          pc.setLocalDescription(offer);
+          const target = S.peers[0]?.id;
+          if (target) send({ type: 'webrtc:offer', peerId: target, offer: pc.localDescription });
+          dlog('ICE restart offer sent');
+        }).catch(e => dlog('ICE restart failed: ' + e.message));
+      }
+    }
+  };
+
+  pc.onicegatheringstatechange = () => {
+    dlog('ICE gathering: ' + pc.iceGatheringState);
+  };
+
+  pc.onconnectionstatechange = () => {
+    dlog('Connection state: ' + pc.connectionState);
+    if (pc.connectionState === 'failed') {
+      toast('⚠️ חיבור WebRTC נכשל — בדוק שאין חומת אש חוסמת', '');
     }
   };
 
@@ -1096,10 +1126,10 @@ function applyDAW(msg){
     if(msg.perms){S.perms=msg.perms;updatePermD();}
     setDot('live','מחובר'); startLatSim();
     document.getElementById('hlth').style.display='flex';
-    document.getElementById('sb1').textContent='● WebRTC: Connected'; document.getElementById('sb1').className='sbi ok';
+    document.getElementById('sb1').textContent='● WebRTC: Connecting...'; document.getElementById('sb1').className='sbi';
     document.getElementById('sb2').textContent='● 1 peer'; document.getElementById('sb2').className='sbi ok';
-    addChat('System','הסשן מסונכרן ✓',false,true);
-    toast('✓ מחובר! השמע מתחיל...','g'); dlog('Snapshot: '+(msg.tracks?.length||0)+' tracks');
+    addChat('System','הסשן מסונכרן ✓ — ממתין לשידור מסך ושמע מהמורה...',false,true);
+    toast('✓ מחובר! ממתין לשידור מסך ושמע...','g'); dlog('Snapshot: '+(msg.tracks?.length||0)+' tracks');
   }
   else if(msg.action==='play'){S.playing=msg.v;updatePlayBtn();}
   else if(msg.action==='bpm'){S.bpm=msg.v;document.getElementById('bpmD').textContent=msg.v;}
@@ -1271,7 +1301,7 @@ function leaveSession(){
   show('lobby');
 }
 
-function dlog(msg){ const log=document.getElementById('dawLog');if(!log)return;const el=document.createElement('div');el.textContent='> '+msg;el.style.cssText='opacity:0;transition:opacity .3s';log.appendChild(el);setTimeout(()=>el.style.opacity='1',10);if(log.children.length>15)log.removeChild(log.firstChild);log.scrollTop=log.scrollHeight; }
+function dlog(msg){ console.log('[SS]',msg); const log=document.getElementById('dawLog');if(!log)return;const el=document.createElement('div');el.textContent='> '+msg;el.style.cssText='opacity:0;transition:opacity .3s';log.appendChild(el);setTimeout(()=>el.style.opacity='1',10);if(log.children.length>15)log.removeChild(log.firstChild);log.scrollTop=log.scrollHeight; }
 function modal(html){ document.getElementById('mBody').innerHTML=html; document.getElementById('mBg').classList.add('on'); }
 function closeModal(){ document.getElementById('mBg').classList.remove('on'); }
 function toast(msg,cls=''){ const a=document.getElementById('toasts');const el=document.createElement('div');el.className='toast'+(cls?' '+cls:'');el.textContent=msg;a.appendChild(el);setTimeout(()=>el.remove(),3200); }
