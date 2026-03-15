@@ -148,6 +148,7 @@ const server = http.createServer(async (req, res) => {
     if      (msg.type === 'webrtc:offer')   push(msg.peerId, { ...msg, peerId: cid });
     else if (msg.type === 'webrtc:answer')  push(msg.peerId, { ...msg, peerId: cid });
     else if (msg.type === 'webrtc:ice')     push(msg.peerId, { ...msg, peerId: cid });
+    else if (msg.type === 'remote:input')   pushAll(c.code, msg, cid); // Forward to all peers (agent + host)
     else if (msg.type === 'chat:msg')       pushAll(c.code, { type:'chat:msg', from: c.role==='host'?'Host':c.name, role:c.role, text:msg.text, ts:Date.now() });
     else if (msg.type === 'daw:state')      pushAll(c.code, msg, cid);
     else if (msg.type === 'session:perms')  pushAll(c.code, msg, cid);
@@ -612,10 +613,13 @@ function setupDataChannel(channel) {
 }
 
 // Send via DataChannel if open, fallback to HTTP
+// remote:input always goes through HTTP too (so the Agent receives it)
 function dcSend(msg) {
   if (dc && dc.readyState === 'open') {
     dc.send(JSON.stringify(msg));
-  } else {
+  }
+  // Always send via HTTP for remote:input (agent needs it) or when DC is closed
+  if (msg.type === 'remote:input' || !dc || dc.readyState !== 'open') {
     send(msg);
   }
 }

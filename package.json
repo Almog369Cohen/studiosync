@@ -8,5 +8,20 @@
   },
   "engines": {
     "node": ">=18"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Almog369Cohen/studiosync.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/Almog369Cohen/studiosync/issues"
+  },
+  "homepage": "https://github.com/Almog369Cohen/studiosync#readme",
+  "dependencies": {
+    "robotjs": "^0.7.0"
   }
 }
