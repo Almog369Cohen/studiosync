@@ -1,0 +1,967 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>StudioSync — מפת אינטגרציות DAW</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Noto+Sans+Hebrew:wght@300;400;600;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #060a0e;
+    --surface: #0d1318;
+    --surface2: #131c24;
+    --border: #1a2535;
+    --accent: #00e5ff;
+    --green: #00ff88;
+    --yellow: #ffe600;
+    --red: #ff3d71;
+    --orange: #ff8c00;
+    --purple: #a259ff;
+    --text: #dce8f0;
+    --muted: #4a6070;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+
+  body {
+    font-family: 'Noto Sans Hebrew', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    padding: 40px;
+  }
+
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(0,229,255,0.02) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,229,255,0.02) 1px, transparent 1px);
+    background-size: 32px 32px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  .container { max-width: 1100px; margin: 0 auto; position: relative; z-index: 1; }
+
+  /* HEADER */
+  .page-header {
+    text-align: center;
+    margin-bottom: 48px;
+    padding-bottom: 32px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .page-header .tag {
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: var(--accent);
+    background: rgba(0,229,255,0.07);
+    border: 1px solid rgba(0,229,255,0.2);
+    padding: 5px 16px;
+    border-radius: 3px;
+    display: inline-block;
+    margin-bottom: 20px;
+  }
+
+  .page-header h1 {
+    font-size: 40px;
+    font-weight: 800;
+    letter-spacing: -1.5px;
+    line-height: 1.1;
+    margin-bottom: 12px;
+  }
+
+  .page-header h1 span {
+    background: linear-gradient(90deg, var(--accent), var(--purple));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .page-header p {
+    color: var(--muted);
+    font-size: 15px;
+    line-height: 1.6;
+  }
+
+  /* LEGEND */
+  .legend {
+    display: flex;
+    gap: 24px;
+    flex-wrap: wrap;
+    margin-bottom: 32px;
+    padding: 16px 20px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+  }
+
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    font-family: 'Space Mono', monospace;
+  }
+
+  .dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+  .dot-green { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .dot-yellow { background: var(--yellow); box-shadow: 0 0 6px var(--yellow); }
+  .dot-red { background: var(--red); box-shadow: 0 0 6px var(--red); }
+  .dot-purple { background: var(--purple); box-shadow: 0 0 6px var(--purple); }
+
+  /* DAW SECTION */
+  .daw-section {
+    margin-bottom: 32px;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    overflow: hidden;
+  }
+
+  .daw-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 20px 28px;
+    border-bottom: 1px solid var(--border);
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+
+  .daw-title-group {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+
+  .daw-emoji { font-size: 26px; }
+
+  .daw-name {
+    font-size: 20px;
+    font-weight: 800;
+    letter-spacing: -0.5px;
+  }
+
+  .daw-version {
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    color: var(--muted);
+    padding: 3px 8px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    letter-spacing: 1px;
+  }
+
+  .daw-score {
+    font-family: 'Space Mono', monospace;
+    font-size: 13px;
+  }
+
+  .score-bar {
+    display: flex;
+    gap: 3px;
+    margin-top: 4px;
+  }
+
+  .score-block {
+    width: 14px; height: 6px;
+    border-radius: 2px;
+    background: var(--border);
+  }
+
+  .score-block.filled { background: var(--green); }
+  .score-block.partial { background: var(--yellow); }
+
+  /* TABLE */
+  .integration-table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+
+  .integration-table th {
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--muted);
+    padding: 12px 20px;
+    text-align: right;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .integration-table th:last-child { text-align: left; }
+
+  .integration-table td {
+    padding: 14px 20px;
+    font-size: 13px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+
+  .integration-table tr:last-child td { border-bottom: none; }
+
+  .integration-table tr:hover td { background: rgba(255,255,255,0.015); }
+
+  .feature-name {
+    font-weight: 600;
+    margin-bottom: 2px;
+  }
+
+  .feature-sub {
+    font-size: 11px;
+    color: var(--muted);
+    font-family: 'Space Mono', monospace;
+  }
+
+  .status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 5px;
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+  }
+
+  .status-exists {
+    background: rgba(0,255,136,0.08);
+    border: 1px solid rgba(0,255,136,0.25);
+    color: var(--green);
+  }
+
+  .status-partial {
+    background: rgba(255,230,0,0.08);
+    border: 1px solid rgba(255,230,0,0.25);
+    color: var(--yellow);
+  }
+
+  .status-missing {
+    background: rgba(255,61,113,0.08);
+    border: 1px solid rgba(255,61,113,0.25);
+    color: var(--red);
+  }
+
+  .status-workaround {
+    background: rgba(162,89,255,0.08);
+    border: 1px solid rgba(162,89,255,0.25);
+    color: var(--purple);
+  }
+
+  .tool-tag {
+    display: inline-block;
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    padding: 2px 7px;
+    background: rgba(255,255,255,0.05);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    color: var(--muted);
+    margin: 2px 2px 0 0;
+  }
+
+  .notes-col {
+    font-size: 12px;
+    color: var(--muted);
+    line-height: 1.5;
+    text-align: left;
+    direction: ltr;
+  }
+
+  /* MISSING SECTION */
+  .missing-section {
+    margin-top: 40px;
+    background: rgba(255,61,113,0.04);
+    border: 1px solid rgba(255,61,113,0.2);
+    border-radius: 14px;
+    padding: 28px 32px;
+  }
+
+  .missing-section h2 {
+    font-size: 20px;
+    font-weight: 800;
+    color: var(--red);
+    margin-bottom: 6px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  .missing-section p {
+    color: var(--muted);
+    font-size: 13px;
+    margin-bottom: 20px;
+    line-height: 1.6;
+  }
+
+  .missing-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 14px;
+  }
+
+  .missing-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px 20px;
+  }
+
+  .missing-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+  }
+
+  .missing-card h3 {
+    font-size: 14px;
+    font-weight: 700;
+  }
+
+  .priority-badge {
+    font-family: 'Space Mono', monospace;
+    font-size: 9px;
+    letter-spacing: 1px;
+    padding: 3px 7px;
+    border-radius: 3px;
+    text-transform: uppercase;
+  }
+
+  .p-critical { background: rgba(255,61,113,0.15); color: var(--red); border: 1px solid rgba(255,61,113,0.3); }
+  .p-high { background: rgba(255,140,0,0.15); color: var(--orange); border: 1px solid rgba(255,140,0,0.3); }
+  .p-medium { background: rgba(255,230,0,0.1); color: var(--yellow); border: 1px solid rgba(255,230,0,0.2); }
+
+  .missing-card p {
+    font-size: 12px;
+    color: var(--muted);
+    line-height: 1.5;
+    margin-bottom: 0;
+  }
+
+  .missing-card .solution {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border);
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    color: var(--accent);
+    direction: ltr;
+    text-align: left;
+  }
+
+  /* SUMMARY SECTION */
+  .summary-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 14px;
+    margin-top: 32px;
+  }
+
+  .summary-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px;
+    text-align: center;
+  }
+
+  .summary-number {
+    font-family: 'Space Mono', monospace;
+    font-size: 36px;
+    font-weight: 700;
+    line-height: 1;
+    margin-bottom: 6px;
+  }
+
+  .summary-label {
+    font-size: 13px;
+    color: var(--muted);
+  }
+
+  @media (max-width: 768px) {
+    body { padding: 16px; }
+    .integration-table th:nth-child(3),
+    .integration-table td:nth-child(3) { display: none; }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+  <!-- PAGE HEADER -->
+  <div class="page-header">
+    <div class="tag">🔍 Technical Integration Audit</div>
+    <h1>מפת אינטגרציות <span>DAW מלאה</span></h1>
+    <p>מה קיים, מה חלקי, מה חסר לחלוטין — לכל תוכנת הפקה</p>
+  </div>
+
+  <!-- LEGEND -->
+  <div class="legend">
+    <div class="legend-item"><div class="dot dot-green"></div> קיים — ניתן לשימוש ישיר</div>
+    <div class="legend-item"><div class="dot dot-yellow"></div> חלקי — דורש התאמה</div>
+    <div class="legend-item"><div class="dot dot-red"></div> חסר — צריך לבנות</div>
+    <div class="legend-item"><div class="dot dot-purple"></div> Workaround — פתרון עקיף</div>
+  </div>
+
+  <!-- ============ ABLETON ============ -->
+  <div class="daw-section">
+    <div class="daw-header" style="background: rgba(255,230,0,0.04);">
+      <div class="daw-title-group">
+        <span class="daw-emoji">⬛</span>
+        <div>
+          <div class="daw-name" style="color:#ffe600">Ableton Live</div>
+          <span class="daw-version">v11+ / v12</span>
+        </div>
+      </div>
+      <div class="daw-score">
+        <div style="color:var(--muted);font-size:11px;margin-bottom:4px;font-family:'Space Mono',monospace">INTEGRATION SCORE</div>
+        <div class="score-bar">
+          <div class="score-block filled"></div><div class="score-block filled"></div>
+          <div class="score-block filled"></div><div class="score-block filled"></div>
+          <div class="score-block partial"></div>
+        </div>
+        <div style="font-size:11px;color:var(--green);margin-top:4px">90% — הכי חזק</div>
+      </div>
+    </div>
+    <table class="integration-table">
+      <thead>
+        <tr>
+          <th>פיצ׳ר</th>
+          <th>סטטוס</th>
+          <th>כלי / פרוטוקול</th>
+          <th>הערות</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>
+            <div class="feature-name">שליטה מלאה על פרמטרים</div>
+            <div class="feature-sub">Tempo, Volume, Pan, FX, Clip Launch</div>
+          </td>
+          <td><span class="status-badge status-exists">✓ קיים</span></td>
+          <td>
+            <span class="tool-tag">AbletonOSC</span>
+            <span class="tool-tag">Port 11000</span>
+          </td>
+          <td class="notes-col">AbletonOSC Remote Script — install as MIDI Remote Script, exposes entire Live Object Model (LOM) via OSC UDP</td>
+        </tr>
+        <tr>
+          <td>
+            <div class="feature-name">Transport Control</div>
+            <div class="feature-sub">Play, Stop, Record, Loop</div>
+          </td>
+          <td><span class="status-badge status-exists">✓ קיים</span></td>
+          <td>
+            <span class="tool-tag">AbletonOSC</span>
+            <span class="tool-tag">/live/song/</span>
+          </td>
+          <td class="notes-col">/live/song/start_playing, /live/song/stop_playing, /live/song/set/tempo — all supported</td>
+        </tr>
+        <tr>
+          <td>
+            <div class="feature-name">Track + Clip Data Sync</div>
+            <div class="feature-sub">Names, Colors, States</div>
+          </td>
+          <td><span class="status-badge status-exists">✓ קיים</span></td>
+          <td>
+            <span class="tool-tag">/live/song/get/track_data</span>
+          </td>
+          <td class="notes-col">Bulk query all tracks and clips in one call. Beat-sync listener available via /live/song/start_listen/beat</td>
+        </tr>
+        <tr>
+          <td>
+            <div class="feature-name">MIDI Remote Input</div>
+            <div class="feature-sub">Notes, CC, Velocity</div>
+          </td>
+          <td><span class="status-badge status-exists">✓ קיים</span></td>
+          <td>
+            <span class="tool-tag">RTP-MIDI</span>
+            <span class="tool-tag">IAC Driver</span>
+          </td>
+          <td class="notes-col">Use rtpMIDI (Windows) or IAC Driver (Mac) to route MIDI over IP into Ableton</td>
+        </tr>
+        <tr>
+          <td>
+            <div class="feature-name">שמע Live Monitoring</div>
+            <div class="feature-sub">Full stereo mix output</div>
+          </td>
+          <td><span class="status-badge status-partial">⚡ חלקי</span></td>
+          <td>
+            <span class="tool-tag">BlackHole (Mac)</span>
+            <span class="tool-tag">VB-Cable (Win)</span>
+          </td>
+          <td class="notes-col">Virtual audio routing needed. Set Ableton output to virtual device → StudioSync captures and streams. No native API for this.</td>
+        </tr>
+        <tr>
+          <td>
+            <div class="feature-name">Ableton Link (Sync)</div>
+            <div class="feature-sub">BPM Sync across devices</div>
+          </td>
+          <td><span class="status-badge status-exists">✓ קיים</span></td>
+          <td>
+            <span class="tool-tag">Ableton Link SDK</span>
+          </td>
+          <td class="notes-col">Open source Link SDK — sync tempo/phase across LAN automatically. Free to integrate.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ============ LOGIC PRO ============ -->
+  <div class="daw-section">
+    <div class="daw-header" style="background: rgba(0,229,255,0.03);">
+      <div class="daw-title-group">
+        <span class="daw-emoji">◆</span>
+        <div>
+          <div class="daw-name" style="color:var(--accent)">Logic Pro</div>
+          <span class="daw-version">v10.7+ / v11</span>
+        </div>
+      </div>
+      <div class="daw-score">
+        <div style="color:var(--muted);font-size:11px;margin-bottom:4px;font-family:'Space Mono',monospace">INTEGRATION SCORE</div>
+        <div class="score-bar">
+          <div class="score-block filled"></div><div class="score-block filled"></div>
+          <div class="score-block filled"></div><div class="score-block partial"></div>
+          <div class="score-block" style="background:var(--border)"></div>
+        </div>
+        <div style="font-size:11px;color:var(--yellow);margin-top:4px">70% — טוב עם מגבלות</div>
+      </div>
+    </div>
+    <table class="integration-table">
+      <thead>
+        <tr>
+          <th>פיצ׳ר</th>
+          <th>סטטוס</th>
+          <th>כלי / פרוטוקול</th>
+          <th>הערות</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>
+            <div class="feature-name">Transport + Mixer Control</div>
+            <div class="feature-sub">Play, Stop, Faders, Pan</div>
+          </td>
+          <td><span class="status-badge status-exists">✓ קיים</span></td>
+          <td>
+            <span class="tool-tag">OSC UDP</span>
+            <span class="tool-tag">Port 8000</span>
+            <span class="tool-tag">Logic CS Plugin</span>
+          </td>
+          <td class="notes-col">Logic accepts OSC via Control Surface plug-in. Predefined OSC paths only (e.g. /mixer/volume/volume1). Must use Logic's CS plugin API.</td>
+        </tr>
+        <tr>
+          <td>
+            <div class="feature-name">Custom OSC Paths</div>
+            <div class="feature-sub">Free-form parameter mapping</div>
+          </td>
+          <td><span class="status-badge status-missing">✗ חסר</span></td>
+          <td>
+            <span class="tool-tag">N/A</span>
+          </td>
+          <td class="notes-col">Logic ONLY accepts predefined OSC controls. Cannot add custom paths. Must map via MIDI CC workaround → OSCulator or NI Reaktor as bridge.</td>
+        </tr>
+        <tr>
+          <td>
+            <div class="feature-name">MIDI Remote Input</div>
+            <div class="feature-sub">Notes, CC over network</div>
+          </td>
+          <td><span class="status-badge status-exists">✓ קיים</span></td>
+          <td>
+            <span class="tool-tag">IAC Driver</span>
+            <span class="tool-tag">Network MIDI (Apple)</span>
+          </td>
+          <td class="notes-col">Apple's built-in Network MIDI (rtpMIDI compatible) works natively. No extra software needed on Mac.</td>
+        </tr>
+        <tr>
+          <td>
+            <div class="feature-name">Logic Remote Protocol</div>
+            <div class="feature-sub">iPad-style full control</div>
+          </td>
+          <td><span class="status-badge status-workaround">◆ Workaround</span></td>
+          <td>
+            <span class="tool-tag">Bonjour</span>
+            <span class="tool-tag">Reverse Engineer</span>
+          </td>
+          <td class="notes-col">Logic Remote uses Bonjour discovery + proprietary OSC. Can be reverse-engineered (monitor port 8000) to replicate full Logic Remote control.</td>
+        </tr>
+        <tr>
+          <td>
+            <div class="feature-name">שמע Live Output</div>
+            <div class="feature-sub">Full mix streaming</div>
+          </td>
+          <td><span class="status-badge status-partial">⚡ חלקי</span></td>
+          <td>
+            <span class="tool-tag">BlackHole</span>
+            <span class="tool-tag">Multi-Output Device</span>
+          </td>
+          <td class="notes-col">Create Aggregate/Multi-Output device in macOS Audio MIDI Setup: output to both physical card + BlackHole. Logic Mac-only = BlackHole only needed.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ============ CUBASE ============ -->
+  <div class="daw-section">
+    <div class="daw-header" style="background: rgba(162,89,255,0.03);">
+      <div class="daw-title-group">
+        <span class="daw-emoji">■</span>
+        <div>
+          <div class="daw-name" style="color:var(--purple)">Cubase / Nuendo</div>
+          <span class="daw-version">v12+ / v13</span>
+        </div>
+      </div>
+      <div class="daw-score">
+        <div style="color:var(--muted);font-size:11px;margin-bottom:4px;font-family:'Space Mono',monospace">INTEGRATION SCORE</div>
+        <div class="score-bar">
+          <div class="score-block filled"></div><div class="score-block filled"></div>
+          <div class="score-block filled"></div><div class="score-block" style="background:var(--border)"></div>
+          <div class="score-block" style="background:var(--border)"></div>
+        </div>
+        <div style="font-size:11px;color:var(--yellow);margin-top:4px">65% — VST Connect מובנה!</div>
+      </div>
+    </div>
+    <table class="integration-table">
+      <thead>
+        <tr>
+          <th>פיצ׳ר</th>
+          <th>סטטוס</th>
+          <th>כלי / פרוטוקול</th>
+          <th>הערות</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>
+            <div class="feature-name">Remote Collaboration</div>
+            <div class="feature-sub">Full P2P recording session</div>
+          </td>
+          <td><span class="status-badge status-exists">✓ קיים</span></td>
+          <td>
+            <span class="tool-tag">VST Connect Pro</span>
+            <span class="tool-tag">Built-in</span>
+          </td>
+          <td class="notes-col">Steinberg's native solution — P2P, MIDI streaming, 16 channels, encrypted. Included in Cubase Pro. Best native collab tool of all DAWs.</td>
+        </tr>
+        <tr>
+          <td>
+            <div class="feature-name">MIDI Remote API</div>
+            <div class="feature-sub">JavaScript controller scripts</div>
+          </td>
+          <td><span class="status-badge status-exists">✓ קיים</span></td>
+          <td>
+            <span class="tool-tag">MIDI Remote JS API</span>
+            <span class="tool-tag">Cubase 12+</span>
+          </td>
+          <td class="notes-col">New in Cubase 12 — full JavaScript API for MIDI controllers. Can map any parameter. Write JS scripts to expose parameters to StudioSync.</td>
+        </tr>
+        <tr>
+          <td>
+            <div class="feature-name">OSC Native Support</div>
+            <div class="feature-sub">Direct OSC control</div>
+          </td>
+          <td><span class="status-badge status-missing">✗ חסר</span></td>
+          <td>
+            <span class="tool-tag">No OSC API</span>
+          </td>
+          <td class="notes-col">Cubase does NOT have native OSC. Must bridge via MIDI Remote JS API → OSC-to-MIDI translator (e.g. oscmidi or custom Node.js bridge).</td>
+        </tr>
+        <tr>
+          <td>
+            <div class="feature-name">Transport + Mixer</div>
+            <div class="feature-sub">via MIDI Remote</div>
+          </td>
+          <td><span class="status-badge status-partial">⚡ חלקי</span></td>
+          <td>
+            <span class="tool-tag">MIDI CC</span>
+            <span class="tool-tag">Mackie Control</span>
+          </td>
+          <td class="notes-col">Mackie Control protocol (HUI emulation) works well for transport + faders. StudioSync bridges MIDI-over-IP → virtual Mackie device.</td>
+        </tr>
+        <tr>
+          <td>
+            <div class="feature-name">שמע Live Output</div>
+            <div class="feature-sub">Full mix streaming</div>
+          </td>
+          <td><span class="status-badge status-partial">⚡ חלקי</span></td>
+          <td>
+            <span class="tool-tag">VB-Cable (Win)</span>
+            <span class="tool-tag">BlackHole (Mac)</span>
+          </td>
+          <td class="notes-col">Same virtual audio approach. Cubase → VB-Cable output → StudioSync captures. Windows users: VB-Cable free or ASIO4ALL.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ============ FL STUDIO ============ -->
+  <div class="daw-section">
+    <div class="daw-header" style="background: rgba(255,140,0,0.03);">
+      <div class="daw-title-group">
+        <span class="daw-emoji">▲</span>
+        <div>
+          <div class="daw-name" style="color:var(--orange)">FL Studio</div>
+          <span class="daw-version">v21+</span>
+        </div>
+      </div>
+      <div class="daw-score">
+        <div style="color:var(--muted);font-size:11px;margin-bottom:4px;font-family:'Space Mono',monospace">INTEGRATION SCORE</div>
+        <div class="score-bar">
+          <div class="score-block filled"></div><div class="score-block filled"></div>
+          <div class="score-block partial"></div>
+          <div class="score-block" style="background:var(--border)"></div>
+          <div class="score-block" style="background:var(--border)"></div>
+        </div>
+        <div style="font-size:11px;color:var(--orange);margin-top:4px">50% — MIDI בלבד, ללא OSC</div>
+      </div>
+    </div>
+    <table class="integration-table">
+      <thead>
+        <tr>
+          <th>פיצ׳ר</th>
+          <th>סטטוס</th>
+          <th>כלי / פרוטוקול</th>
+          <th>הערות</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>
+            <div class="feature-name">MIDI Controller Scripting</div>
+            <div class="feature-sub">Python controller scripts</div>
+          </td>
+          <td><span class="status-badge status-exists">✓ קיים</span></td>
+          <td>
+            <span class="tool-tag">FL MIDI Scripting</span>
+            <span class="tool-tag">Python API</span>
+          </td>
+          <td class="notes-col">FL Studio has Python-based MIDI scripting (device_*.py). Can expose transport, mixer, patterns. Write custom script for StudioSync bridge.</td>
+        </tr>
+        <tr>
+          <td>
+            <div class="feature-name">OSC Support</div>
+            <div class="feature-sub">Direct OSC control</div>
+          </td>
+          <td><span class="status-badge status-missing">✗ חסר</span></td>
+          <td>
+            <span class="tool-tag">No native OSC</span>
+          </td>
+          <td class="notes-col">FL Studio has NO native OSC. Bridge: FL MIDI Script → virtual MIDI port → StudioSync reads MIDI → translates to internal commands.</td>
+        </tr>
+        <tr>
+          <td>
+            <div class="feature-name">Remote Collaboration</div>
+            <div class="feature-sub">Built-in collab tools</div>
+          </td>
+          <td><span class="status-badge status-missing">✗ חסר</span></td>
+          <td>
+            <span class="tool-tag">Requested Feature</span>
+          </td>
+          <td class="notes-col">FL users explicitly requesting VST Connect-style collab on forums (2022+). No native solution — StudioSync fills this gap entirely.</td>
+        </tr>
+        <tr>
+          <td>
+            <div class="feature-name">Transport via MIDI</div>
+            <div class="feature-sub">Play, Stop, BPM</div>
+          </td>
+          <td><span class="status-badge status-partial">⚡ חלקי</span></td>
+          <td>
+            <span class="tool-tag">MIDI CC</span>
+            <span class="tool-tag">MMC Messages</span>
+          </td>
+          <td class="notes-col">MIDI Machine Control (MMC) messages for transport. BPM via MIDI tempo CC. Needs loopMIDI (Windows) or IAC (Mac) virtual port.</td>
+        </tr>
+        <tr>
+          <td>
+            <div class="feature-name">שמע Live Output</div>
+            <div class="feature-sub">Full mix streaming</div>
+          </td>
+          <td><span class="status-badge status-partial">⚡ חלקי</span></td>
+          <td>
+            <span class="tool-tag">VB-Cable</span>
+            <span class="tool-tag">ASIO4ALL</span>
+          </td>
+          <td class="notes-col">FL mainly Windows — VB-Cable is the go-to. Route Master output to VB-Cable Input. StudioSync reads VB-Cable Output. Free solution.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ============ PRO TOOLS ============ -->
+  <div class="daw-section">
+    <div class="daw-header" style="background: rgba(0,255,136,0.02);">
+      <div class="daw-title-group">
+        <span class="daw-emoji">●</span>
+        <div>
+          <div class="daw-name" style="color:var(--green)">Pro Tools</div>
+          <span class="daw-version">v2023+</span>
+        </div>
+      </div>
+      <div class="daw-score">
+        <div style="color:var(--muted);font-size:11px;margin-bottom:4px;font-family:'Space Mono',monospace">INTEGRATION SCORE</div>
+        <div class="score-bar">
+          <div class="score-block filled"></div><div class="score-block filled"></div>
+          <div class="score-block filled"></div><div class="score-block partial"></div>
+          <div class="score-block" style="background:var(--border)"></div>
+        </div>
+        <div style="font-size:11px;color:var(--yellow);margin-top:4px">72% — HUI/MCP חזק</div>
+      </div>
+    </div>
+    <table class="integration-table">
+      <thead>
+        <tr>
+          <th>פיצ׳ר</th>
+          <th>סטטוס</th>
+          <th>כלי / פרוטוקול</th>
+          <th>הערות</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>
+            <div class="feature-name">HUI / Mackie Control</div>
+            <div class="feature-sub">Industry standard surface protocol</div>
+          </td>
+          <td><span class="status-badge status-exists">✓ קיים</span></td>
+          <td>
+            <span class="tool-tag">HUI Protocol</span>
+            <span class="tool-tag">Mackie MCU</span>
+          </td>
+          <td class="notes-col">Pro Tools has excellent HUI and Mackie Control support — industry standard. StudioSync emulates virtual HUI surface over MIDI-IP.</td>
+        </tr>
+        <tr>
+          <td>
+            <div class="feature-name">EuControl / S3/S6 API</div>
+            <div class="feature-sub">EUCON Protocol</div>
+          </td>
+          <td><span class="status-badge status-workaround">◆ Workaround</span></td>
+          <td>
+            <span class="tool-tag">EUCON SDK</span>
+            <span class="tool-tag">Licensed Only</span>
+          </td>
+          <td class="notes-col">EUCON is Avid's proprietary network control protocol. SDK available but requires Avid licensing. HUI is the practical alternative.</td>
+        </tr>
+        <tr>
+          <td>
+            <div class="feature-name">OSC Support</div>
+            <div class="feature-sub">Direct OSC</div>
+          </td>
+          <td><span class="status-badge status-missing">✗ חסר</span></td>
+          <td>
+            <span class="tool-tag">No native OSC</span>
+          </td>
+          <td class="notes-col">Pro Tools does NOT support OSC natively. All control must go through MIDI HUI or EUCON. Bridge via virtual MIDI port.</td>
+        </tr>
+        <tr>
+          <td>
+            <div class="feature-name">שמע Live Output</div>
+            <div class="feature-sub">Full mix streaming</div>
+          </td>
+          <td><span class="status-badge status-partial">⚡ חלקי</span></td>
+          <td>
+            <span class="tool-tag">BlackHole / VB-Cable</span>
+            <span class="tool-tag">I/O Setup</span>
+          </td>
+          <td class="notes-col">Route via Pro Tools I/O Setup → Playback Engine → output to virtual device. Needs explicit routing configuration per session.</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- ============ MISSING PIECES ============ -->
+  <div class="missing-section">
+    <h2>🔴 מה חסר — צריך לבנות</h2>
+    <p>אלה הדברים שלא קיימים off-the-shelf ו-StudioSync חייב לבנות אותם:</p>
+    <div class="missing-grid">
+
+      <div class="missing-card">
+        <div class="missing-card-header">
+          <h3>🎧 Audio Streaming Engine</h3>
+          <span class="priority-badge p-critical">CRITICAL</span>
+        </div>
+        <p>אין שום כלי קיים שלוקח שמע מ-Virtual Audio Device ומשדר אותו ב-WebRTC לדפדפן עם latency נמוך. זה הלב של StudioSync.</p>
+        <div class="solution">→ Node.js + WebRTC (node-webrtc) + BlackHole/VB-Cable capture</div>
+      </div>
+
+      <div class="missing-card">
+        <div class="missing-card-header">
+          <h3>🌉 Universal DAW Bridge</h3>
+          <span class="priority-badge p-critical">CRITICAL</span>
+        </div>
+        <p>גשר שמתרגם בין OSC (Ableton) ← → MIDI HUI (Pro Tools/FL) ← → Logic CS Protocol. שפה אחת לכל ה-DAWs.</p>
+        <div class="solution">→ Node.js bridge: osc.js + midi npm + custom HUI emulator</div>
+      </div>
+
+      <div class="missing-card">
+        <div class="missing-card-header">
+          <h3>🖥 Screen Capture + Remote Control</h3>
+          <span class="priority-badge p-critical">CRITICAL</span>
+        </div>
+        <p>אין כלי שמספק screen share + mouse/keyboard injection ספציפית ל-DAW. צריך lightweight agent שרץ ברקע.</p>
+        <div class="solution">→ Tauri (Rust) + getDisplayMedia API + uinput/CGEvent injection</div>
+      </div>
+
+      <div class="missing-card">
+        <div class="missing-card-header">
+          <h3>📡 P2P Signaling Server</h3>
+          <span class="priority-badge p-high">HIGH</span>
+        </div>
+        <p>שרת קטן שמחבר בין שני המחשבים לצורך WebRTC handshake. לא מחזיק audio — רק מתאם חיבור.</p>
+        <div class="solution">→ Node.js + Socket.io + Fly.io/Railway deployment (free tier)</div>
+      </div>
+
+      <div class="missing-card">
+        <div class="missing-card-header">
+          <h3>🎹 Web MIDI Gateway</h3>
+          <span class="priority-badge p-high">HIGH</span>
+        </div>
+        <p>מאפשר לשותף להשתמש ב-MIDI controller דרך הדפדפן ולהעביר את הנגינה ל-DAW הראשית.</p>
+        <div class="solution">→ Web MIDI API + WebRTC DataChannel → RTP-MIDI / virtual port</div>
+      </div>
+
+      <div class="missing-card">
+        <div class="missing-card-header">
+          <h3>📦 Virtual Audio Installer</h3>
+          <span class="priority-badge p-medium">MEDIUM</span>
+        </div>
+        <p>משתמשים לא יודעים להתקין BlackHole/VB-Cable. StudioSync צריך Auto-installer שמגדיר הכל אוטומטית.</p>
+        <div class="solution">→ Tauri app → silent install + Audio MIDI Setup config via AppleScript/PowerShell</div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- SUMMARY -->
+  <div class="summary-grid">
+    <div class="summary-card">
+      <div class="summary-number" style="color:var(--green)">22</div>
+      <div class="summary-label">פיצ׳רים סה"כ במיפוי</div>
+    </div>
+    <div class="summary-card">
+      <div class="summary-number" style="color:var(--green)">10</div>
+      <div class="summary-label">קיים — ready to use</div>
+    </div>
+    <div class="summary-card">
+      <div class="summary-number" style="color:var(--yellow)">7</div>
+      <div class="summary-label">חלקי — דורש glue code</div>
+    </div>
+    <div class="summary-card">
+      <div class="summary-number" style="color:var(--red)">6</div>
+      <div class="summary-label">חסר — לבנות מאפס</div>
+    </div>
+    <div class="summary-card">
+      <div class="summary-number" style="color:var(--accent)">~3</div>
+      <div class="summary-label">חודשי פיתוח MVP</div>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>

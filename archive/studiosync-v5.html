@@ -1,0 +1,5110 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>StudioSync — DAW Collaboration</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;700&family=Heebo:wght@300;400;500;700;800;900&display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   DESIGN SYSTEM — Industrial / Studio-grade aesthetic
+   Monochromatic dark + surgical accent colors
+   ============================================================ */
+:root {
+  --bg:       #07090c;
+  --bg1:      #0c0f14;
+  --bg2:      #111520;
+  --bg3:      #161c2a;
+  --border:   #1e2840;
+  --border2:  #263050;
+  --muted:    #3a4d68;
+  --dim:      #5a7090;
+  --text:     #c8d8e8;
+  --bright:   #e8f2ff;
+
+  /* Accent palette — surgical */
+  --cyan:     #00d4ff;
+  --cyan-dim: rgba(0,212,255,0.12);
+  --green:    #00e87a;
+  --green-dim:rgba(0,232,122,0.1);
+  --red:      #ff3a5c;
+  --red-dim:  rgba(255,58,92,0.1);
+  --amber:    #ffb800;
+  --amber-dim:rgba(255,184,0,0.1);
+  --purple:   #8b5cf6;
+
+  --radius:   8px;
+  --mono:     'IBM Plex Mono', monospace;
+  --sans:     'Heebo', sans-serif;
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { font-size: 14px; }
+
+body {
+  font-family: var(--sans);
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  overflow-x: hidden;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Scanline overlay */
+body::after {
+  content: '';
+  position: fixed; inset: 0;
+  background: repeating-linear-gradient(
+    0deg, transparent, transparent 2px,
+    rgba(0,0,0,0.03) 2px, rgba(0,0,0,0.03) 4px
+  );
+  pointer-events: none;
+  z-index: 9999;
+}
+
+/* ===== UTILITY ===== */
+.mono { font-family: var(--mono); }
+.hidden { display: none !important; }
+
+/* ===== SCREENS ===== */
+.screen {
+  display: none;
+  min-height: 100vh;
+  animation: fadeIn 0.3s ease;
+}
+.screen.active { display: flex; }
+
+@keyframes fadeIn { from { opacity:0; transform: translateY(6px); } to { opacity:1; transform:none; } }
+
+/* ============================================================
+   LOBBY EXPLAINER ROWS
+   ============================================================ */
+.lobby-card-primary {
+  border-color: rgba(0,212,255,0.25) !important;
+  background: rgba(0,212,255,0.03) !important;
+  position: relative;
+}
+.lobby-card-primary::before {
+  content: 'מחשב ראשי';
+  position: absolute;
+  top: -11px; right: 16px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--cyan);
+  background: var(--bg);
+  padding: 0 8px;
+}
+
+.lobby-explainer {
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.lobby-explainer-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--text);
+}
+.lobby-explainer-icon {
+  font-size: 16px;
+  flex-shrink: 0;
+  width: 22px;
+  text-align: center;
+}
+
+/* OS selector buttons */
+.os-btn {
+  width: 36px; height: 36px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  transition: all 0.15s;
+  font-size: 18px;
+}
+.os-btn:hover { border-color: var(--border2); }
+.os-btn.active { border-color: var(--cyan); background: var(--cyan-dim); }
+
+/* ============================================================
+   SESSION TYPE BUTTONS
+   ============================================================ */
+.session-type-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--dim);
+  cursor: pointer;
+  transition: all 0.15s;
+  user-select: none;
+}
+.session-type-btn:hover { border-color: var(--border2); color: var(--text); }
+.session-type-btn.active { border-color: var(--cyan); color: var(--cyan); background: var(--cyan-dim); }
+
+/* Session health bar */
+.session-health {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-radius: 6px;
+  font-family: var(--mono);
+  font-size: 11px;
+  border: 1px solid;
+}
+.health-healthy  { background: var(--green-dim);  border-color: rgba(0,232,122,0.25); color: var(--green); }
+.health-degraded { background: var(--amber-dim);  border-color: rgba(255,184,0,0.25); color: var(--amber); }
+.health-critical { background: var(--red-dim);    border-color: rgba(255,58,92,0.25); color: var(--red); }
+
+/* Control ownership indicator */
+.control-owner-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--dim);
+}
+.control-owner-bar.mine  { border-color: rgba(0,212,255,0.3); color: var(--cyan); }
+.control-owner-bar.theirs{ border-color: rgba(0,232,122,0.3); color: var(--green); }
+.control-owner-bar.shared{ border-color: rgba(255,184,0,0.3); color: var(--amber); }
+
+/* Marker row in track area */
+.marker-row {
+  height: 20px;
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  gap: 0;
+  border-bottom: 1px solid var(--border);
+  background: rgba(0,212,255,0.03);
+  position: relative;
+  overflow: hidden;
+}
+.marker-pip {
+  position: absolute;
+  width: 2px;
+  height: 14px;
+  border-radius: 1px;
+  cursor: pointer;
+  transition: opacity 0.15s;
+}
+.marker-pip:hover { opacity: 0.7; }
+.marker-pip-label {
+  position: absolute;
+  top: -1px;
+  font-family: var(--mono);
+  font-size: 9px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* Request control button */
+.request-control-btn {
+  padding: 7px 14px;
+  background: var(--amber-dim);
+  border: 1px solid rgba(255,184,0,0.3);
+  border-radius: 6px;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--amber);
+  cursor: pointer;
+  transition: all 0.15s;
+  letter-spacing: 0.5px;
+}
+.request-control-btn:hover { background: rgba(255,184,0,0.2); }
+.request-control-btn.pending { animation: blink 1s infinite; }
+
+/* ============================================================
+   SCREEN 1: LOBBY
+   ============================================================ */
+#screen-lobby {
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 20px;
+  position: relative;
+}
+
+/* Animated waveform background */
+.bg-wave {
+  position: fixed; inset: 0; z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.bg-wave canvas { width: 100%; height: 100%; opacity: 0.15; }
+
+.lobby-wrap {
+  position: relative; z-index: 1;
+  width: 100%;
+  max-width: 480px;
+}
+
+/* Logo */
+.logo-block {
+  text-align: center;
+  margin-bottom: 48px;
+}
+
+.logo-mark {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.logo-icon {
+  width: 48px; height: 48px;
+  background: linear-gradient(135deg, var(--cyan), #0088bb);
+  border-radius: 12px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 22px;
+  box-shadow: 0 0 30px rgba(0,212,255,0.25);
+}
+
+.logo-text {
+  font-family: var(--mono);
+  font-size: 26px;
+  font-weight: 700;
+  color: var(--bright);
+  letter-spacing: -1px;
+}
+
+.logo-text span { color: var(--cyan); }
+
+.logo-sub {
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+/* Cards */
+.lobby-card {
+  background: var(--bg1);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 32px;
+  margin-bottom: 12px;
+  transition: border-color 0.2s;
+  cursor: pointer;
+}
+.lobby-card:hover { border-color: var(--border2); }
+
+.lobby-card-header {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 10px;
+}
+
+.lobby-card-icon {
+  width: 44px; height: 44px;
+  border-radius: 10px;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 20px;
+  flex-shrink: 0;
+}
+
+.icon-host { background: var(--cyan-dim); border: 1px solid rgba(0,212,255,0.2); }
+.icon-join { background: var(--green-dim); border: 1px solid rgba(0,232,122,0.2); }
+
+.lobby-card h2 {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--bright);
+  letter-spacing: -0.3px;
+}
+
+.lobby-card p {
+  font-size: 13px;
+  color: var(--dim);
+  line-height: 1.5;
+  margin-bottom: 20px;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 11px 22px;
+  border: none;
+  border-radius: 7px;
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 500;
+  letter-spacing: 0.5px;
+  cursor: pointer;
+  transition: all 0.15s;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.btn-cyan {
+  background: var(--cyan);
+  color: #000;
+  box-shadow: 0 0 20px rgba(0,212,255,0.3);
+}
+.btn-cyan:hover { box-shadow: 0 0 35px rgba(0,212,255,0.5); transform: translateY(-1px); }
+
+.btn-green {
+  background: var(--green);
+  color: #000;
+  box-shadow: 0 0 20px rgba(0,232,122,0.25);
+}
+.btn-green:hover { box-shadow: 0 0 35px rgba(0,232,122,0.4); transform: translateY(-1px); }
+
+.btn-ghost {
+  background: var(--bg2);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+.btn-ghost:hover { border-color: var(--border2); background: var(--bg3); }
+
+.btn-red {
+  background: var(--red);
+  color: #fff;
+}
+.btn-red:hover { opacity: 0.85; }
+
+.btn-full { width: 100%; justify-content: center; }
+
+/* Join code input */
+.join-input-row {
+  display: flex;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.code-input {
+  flex: 1;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 11px 16px;
+  font-family: var(--mono);
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--bright);
+  letter-spacing: 6px;
+  text-align: center;
+  text-transform: uppercase;
+  outline: none;
+  transition: border-color 0.2s;
+}
+.code-input:focus { border-color: var(--cyan); }
+.code-input::placeholder { letter-spacing: 2px; font-size: 12px; color: var(--muted); font-weight: 400; }
+
+.version-tag {
+  text-align: center;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--muted);
+  margin-top: 20px;
+  letter-spacing: 2px;
+}
+
+/* ============================================================
+   SCREEN 2: SETUP (Host)
+   ============================================================ */
+#screen-setup {
+  flex-direction: column;
+}
+
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
+/* Top bar */
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 24px;
+  height: 52px;
+  background: var(--bg1);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  gap: 16px;
+}
+
+.topbar-left { display: flex; align-items: center; gap: 16px; }
+.topbar-right { display: flex; align-items: center; gap: 10px; }
+
+.tb-logo {
+  font-family: var(--mono);
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--cyan);
+  letter-spacing: -0.5px;
+}
+
+.tb-separator {
+  width: 1px; height: 20px;
+  background: var(--border);
+}
+
+.tb-session-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.session-code-badge {
+  font-family: var(--mono);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--bright);
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  padding: 4px 12px;
+  border-radius: 5px;
+  letter-spacing: 3px;
+  cursor: pointer;
+  transition: border-color 0.2s;
+}
+.session-code-badge:hover { border-color: var(--cyan); }
+
+.status-dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: var(--dim);
+}
+.status-dot.live { background: var(--green); box-shadow: 0 0 6px var(--green); animation: blink 2s infinite; }
+.status-dot.waiting { background: var(--amber); box-shadow: 0 0 6px var(--amber); animation: blink 1s infinite; }
+
+@keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.4} }
+
+.status-label {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--dim);
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+
+.peer-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  font-size: 12px;
+  color: var(--text);
+}
+
+/* Main layout */
+.main-layout {
+  display: grid;
+  grid-template-columns: 280px 1fr 280px;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* ===== LEFT SIDEBAR ===== */
+.sidebar {
+  background: var(--bg1);
+  border-left: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.sidebar-section {
+  border-bottom: 1px solid var(--border);
+  padding: 16px;
+}
+
+.sidebar-section:last-child { border-bottom: none; flex: 1; overflow-y: auto; }
+
+.sidebar-title {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+/* DAW selector */
+.daw-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.daw-btn {
+  padding: 10px 8px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  cursor: pointer;
+  text-align: center;
+  transition: all 0.15s;
+  font-size: 11px;
+  font-family: var(--mono);
+  color: var(--dim);
+}
+.daw-btn:hover { border-color: var(--border2); color: var(--text); }
+.daw-btn.active { border-color: var(--cyan); color: var(--cyan); background: var(--cyan-dim); }
+
+.daw-btn-icon { font-size: 18px; display: block; margin-bottom: 4px; }
+
+/* Connection status panel */
+.conn-items { display: flex; flex-direction: column; gap: 8px; }
+
+.conn-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 9px 12px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.conn-item-label { font-size: 12px; color: var(--text); }
+.conn-item-status { font-family: var(--mono); font-size: 11px; }
+.conn-ok { color: var(--green); }
+.conn-warn { color: var(--amber); }
+.conn-err { color: var(--red); }
+.conn-off { color: var(--muted); }
+
+/* Latency meter */
+.latency-display {
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+  margin-top: 8px;
+}
+.latency-num {
+  font-family: var(--mono);
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--green);
+  line-height: 1;
+}
+.latency-unit { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+
+.latency-bar {
+  height: 3px;
+  background: var(--bg3);
+  border-radius: 2px;
+  margin-top: 6px;
+  overflow: hidden;
+}
+.latency-bar-fill {
+  height: 100%;
+  border-radius: 2px;
+  background: var(--green);
+  width: 15%;
+  transition: width 0.5s;
+}
+
+/* ===== CENTER: DAW MIRROR ===== */
+.center-panel {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+.center-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 20px;
+  background: var(--bg1);
+  border-bottom: 1px solid var(--border);
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.transport-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.tc-btn {
+  width: 36px; height: 36px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  font-size: 14px;
+  transition: all 0.15s;
+  color: var(--text);
+}
+.tc-btn:hover { border-color: var(--border2); background: var(--bg3); }
+.tc-btn.play { background: var(--green); border-color: var(--green); color: #000; }
+.tc-btn.rec { background: var(--red); border-color: var(--red); color: #fff; }
+
+.bpm-display {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.bpm-val {
+  font-family: var(--mono);
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--bright);
+  min-width: 54px;
+}
+.bpm-label { font-family: var(--mono); font-size: 10px; color: var(--muted); letter-spacing: 1px; }
+.bpm-arrows { display: flex; flex-direction: column; gap: 2px; }
+.bpm-arrow {
+  background: none; border: none; cursor: pointer;
+  color: var(--dim); font-size: 10px; line-height: 1; padding: 1px 4px;
+}
+.bpm-arrow:hover { color: var(--cyan); }
+
+.position-display {
+  font-family: var(--mono);
+  font-size: 13px;
+  color: var(--text);
+  padding: 6px 14px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  letter-spacing: 2px;
+}
+
+/* Track list */
+.track-area {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 0;
+}
+
+.track-area::-webkit-scrollbar { width: 4px; }
+.track-area::-webkit-scrollbar-track { background: transparent; }
+.track-area::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+
+.track-row {
+  display: grid;
+  grid-template-columns: 36px 180px 60px 60px 1fr 50px;
+  align-items: center;
+  gap: 0;
+  padding: 0 8px;
+  height: 48px;
+  border-bottom: 1px solid rgba(30,40,64,0.5);
+  transition: background 0.1s;
+}
+.track-row:hover { background: rgba(255,255,255,0.02); }
+.track-row.selected { background: rgba(0,212,255,0.04); border-bottom-color: rgba(0,212,255,0.1); }
+
+.track-num {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.track-name-area {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+}
+
+.track-color {
+  width: 3px; height: 30px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.track-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.track-type-badge {
+  font-family: var(--mono);
+  font-size: 9px;
+  color: var(--muted);
+  background: var(--bg2);
+  padding: 2px 5px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+  white-space: nowrap;
+}
+
+.track-btn-group {
+  display: flex;
+  gap: 3px;
+  padding: 0 4px;
+}
+
+.track-btn {
+  width: 22px; height: 22px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  font-size: 10px;
+  font-family: var(--mono);
+  font-weight: 700;
+  transition: all 0.12s;
+  color: var(--dim);
+}
+.track-btn:hover { background: var(--bg3); color: var(--text); }
+.track-btn.muted { background: var(--amber-dim); border-color: rgba(255,184,0,0.3); color: var(--amber); }
+.track-btn.soloed { background: var(--green-dim); border-color: rgba(0,232,122,0.3); color: var(--green); }
+.track-btn.armed { background: var(--red-dim); border-color: rgba(255,58,92,0.3); color: var(--red); }
+
+/* Volume fader */
+.track-fader-wrap {
+  padding: 0 8px;
+  display: flex;
+  align-items: center;
+}
+
+.fader {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 3px;
+  background: var(--bg3);
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+}
+.fader::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px; height: 12px;
+  border-radius: 50%;
+  background: var(--cyan);
+  box-shadow: 0 0 6px rgba(0,212,255,0.4);
+  cursor: pointer;
+}
+
+.track-db {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--muted);
+  text-align: center;
+  min-width: 42px;
+}
+
+/* VU meters */
+.vu-area {
+  display: flex;
+  gap: 2px;
+  padding: 0 4px;
+}
+
+.vu-bar {
+  width: 3px;
+  background: var(--bg3);
+  border-radius: 1px;
+  height: 32px;
+  position: relative;
+  overflow: hidden;
+}
+
+.vu-fill {
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  border-radius: 1px;
+  transition: height 0.08s ease;
+}
+
+/* ===== RIGHT SIDEBAR ===== */
+.right-sidebar {
+  background: var(--bg1);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* Chat */
+.chat-area {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.chat-area::-webkit-scrollbar { width: 3px; }
+.chat-area::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+
+.chat-msg {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.chat-msg-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--mono);
+  font-size: 10px;
+}
+.chat-msg-user { color: var(--cyan); }
+.chat-msg-user.remote { color: var(--green); }
+.chat-msg-time { color: var(--muted); }
+.chat-msg-body {
+  font-size: 12px;
+  color: var(--text);
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  line-height: 1.5;
+  direction: rtl;
+  text-align: right;
+}
+.chat-msg.system .chat-msg-body {
+  text-align: center;
+  direction: ltr;
+  color: var(--dim);
+  font-family: var(--mono);
+  font-size: 11px;
+  background: transparent;
+  border-style: dashed;
+}
+
+.chat-input-area {
+  border-top: 1px solid var(--border);
+  padding: 10px;
+  display: flex;
+  gap: 6px;
+}
+
+.chat-input {
+  flex: 1;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-family: var(--sans);
+  font-size: 12px;
+  color: var(--text);
+  outline: none;
+  transition: border-color 0.2s;
+  direction: rtl;
+}
+.chat-input:focus { border-color: var(--cyan); }
+
+.chat-send-btn {
+  width: 34px; height: 34px;
+  background: var(--cyan);
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 14px;
+  transition: opacity 0.15s;
+  color: #000;
+}
+.chat-send-btn:hover { opacity: 0.85; }
+
+/* Talkback */
+.talkback-section {
+  border-top: 1px solid var(--border);
+  padding: 12px;
+}
+
+.talkback-btn {
+  width: 100%;
+  padding: 10px;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 11px;
+  letter-spacing: 1px;
+  color: var(--dim);
+  transition: all 0.15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+.talkback-btn:hover { border-color: var(--border2); color: var(--text); }
+.talkback-btn.active { background: var(--red-dim); border-color: var(--red); color: var(--red); }
+
+/* Audio meters big */
+.big-meters {
+  padding: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.meter-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.meter-label { font-family: var(--mono); font-size: 10px; color: var(--muted); width: 16px; text-align: center; }
+.meter-track {
+  flex: 1;
+  height: 6px;
+  background: var(--bg3);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.meter-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, var(--green) 0%, var(--amber) 75%, var(--red) 90%);
+  transition: width 0.06s ease;
+}
+
+/* ============================================================
+   SCREEN 3: REMOTE CLIENT
+   ============================================================ */
+#screen-remote {
+  flex-direction: column;
+}
+
+/* ============================================================
+   BOTTOM STATUS BAR
+   ============================================================ */
+.statusbar {
+  height: 28px;
+  background: var(--bg1);
+  border-top: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+  gap: 20px;
+  flex-shrink: 0;
+}
+
+.sb-item {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--muted);
+  letter-spacing: 0.5px;
+}
+.sb-item.ok { color: var(--green); }
+.sb-item.warn { color: var(--amber); }
+.sb-sep { margin: 0 4px; color: var(--border2); }
+
+/* ============================================================
+   MODAL / OVERLAY
+   ============================================================ */
+.modal-overlay {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.7);
+  backdrop-filter: blur(8px);
+  z-index: 1000;
+  display: none;
+  align-items: center;
+  justify-content: center;
+}
+.modal-overlay.visible { display: flex; }
+
+.modal {
+  background: var(--bg1);
+  border: 1px solid var(--border2);
+  border-radius: 14px;
+  padding: 32px;
+  width: 420px;
+  max-width: 90vw;
+  animation: fadeIn 0.2s ease;
+}
+
+.modal h3 {
+  font-size: 20px;
+  font-weight: 800;
+  margin-bottom: 6px;
+  color: var(--bright);
+}
+.modal p { font-size: 13px; color: var(--dim); margin-bottom: 20px; line-height: 1.5; }
+
+.modal-code {
+  font-family: var(--mono);
+  font-size: 36px;
+  font-weight: 700;
+  letter-spacing: 12px;
+  text-align: center;
+  color: var(--cyan);
+  padding: 20px;
+  background: var(--bg2);
+  border: 1px solid rgba(0,212,255,0.2);
+  border-radius: 10px;
+  margin-bottom: 16px;
+  cursor: pointer;
+  transition: border-color 0.2s;
+  text-shadow: 0 0 20px rgba(0,212,255,0.3);
+}
+.modal-code:hover { border-color: var(--cyan); }
+
+.modal-hint {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--muted);
+  text-align: center;
+  margin-bottom: 20px;
+}
+
+/* ============================================================
+   NOTIFICATION TOAST
+   ============================================================ */
+.toast-area {
+  position: fixed;
+  bottom: 40px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2000;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: center;
+  pointer-events: none;
+}
+
+.toast {
+  padding: 10px 20px;
+  background: var(--bg2);
+  border: 1px solid var(--border2);
+  border-radius: 7px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text);
+  letter-spacing: 0.3px;
+  animation: toastIn 0.3s ease, toastOut 0.3s ease 2.7s forwards;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  pointer-events: all;
+}
+.toast.green { border-color: rgba(0,232,122,0.4); color: var(--green); }
+.toast.cyan { border-color: rgba(0,212,255,0.3); color: var(--cyan); }
+
+@keyframes toastIn { from { opacity:0; transform:translateY(10px); } to { opacity:1; transform:none; } }
+@keyframes toastOut { to { opacity:0; transform:translateY(-6px); } }
+
+/* ============================================================
+   PERMISSIONS SETUP STEP
+   ============================================================ */
+.setup-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 32px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0;
+}
+
+.setup-steps {
+  width: 100%;
+  max-width: 600px;
+}
+
+.setup-header {
+  margin-bottom: 32px;
+  text-align: center;
+}
+
+.setup-header h2 {
+  font-size: 28px;
+  font-weight: 800;
+  letter-spacing: -0.8px;
+  margin-bottom: 8px;
+  color: var(--bright);
+}
+
+.setup-header p {
+  font-size: 14px;
+  color: var(--dim);
+}
+
+.setup-step-item {
+  display: flex;
+  gap: 16px;
+  padding: 20px;
+  background: var(--bg1);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  margin-bottom: 10px;
+  transition: border-color 0.2s;
+}
+.setup-step-item.done { border-color: rgba(0,232,122,0.3); background: rgba(0,232,122,0.02); }
+.setup-step-item.active { border-color: rgba(0,212,255,0.3); }
+
+.step-num {
+  width: 32px; height: 32px;
+  border-radius: 50%;
+  background: var(--bg2);
+  border: 1px solid var(--border);
+  display: flex; align-items: center; justify-content: center;
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.setup-step-item.done .step-num { background: var(--green-dim); border-color: rgba(0,232,122,0.4); color: var(--green); }
+.setup-step-item.active .step-num { background: var(--cyan-dim); border-color: rgba(0,212,255,0.4); color: var(--cyan); }
+
+.step-content h3 { font-size: 14px; font-weight: 700; margin-bottom: 4px; color: var(--bright); }
+.step-content p { font-size: 12px; color: var(--dim); line-height: 1.5; margin-bottom: 10px; }
+
+.step-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+
+/* Responsive */
+@media (max-width: 900px) {
+  .main-layout { grid-template-columns: 0 1fr 260px; }
+  .sidebar { display: none; }
+}
+@media (max-width: 640px) {
+  .main-layout { grid-template-columns: 1fr; }
+  .right-sidebar { display: none; }
+  .track-row { grid-template-columns: 28px 1fr 44px 44px; }
+  .track-btn-group, .track-db { display: none; }
+}
+
+/* Scrollbar global */
+::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<!-- ============================================================
+     TOAST AREA
+     ============================================================ -->
+<div class="toast-area" id="toastArea"></div>
+
+<!-- ============================================================
+     MODAL OVERLAY
+     ============================================================ -->
+<div class="modal-overlay" id="modalOverlay">
+  <div class="modal" id="modalContent"></div>
+</div>
+
+<!-- ============================================================
+     SCREEN 1: LOBBY — redesigned for clarity
+     ============================================================ -->
+<div class="screen active" id="screen-lobby">
+  <div class="bg-wave"><canvas id="waveCanvas"></canvas></div>
+
+  <div class="lobby-wrap" style="max-width:520px">
+
+    <!-- LOGO -->
+    <div class="logo-block">
+      <div class="logo-mark">
+        <div class="logo-icon">🎛</div>
+        <div class="logo-text">Studio<span>Sync</span></div>
+      </div>
+      <div class="logo-sub">הפקה משותפת · בזמן אמת · מכל מקום בעולם</div>
+    </div>
+
+    <!-- STEP QUESTION: who are you? -->
+    <div style="text-align:center;margin-bottom:20px">
+      <div style="font-size:18px;font-weight:800;color:var(--bright);letter-spacing:-0.5px">
+        איך אתה נכנס לסשן?
+      </div>
+      <div style="font-size:13px;color:var(--dim);margin-top:6px">
+        הזוג שלך יעשה את ההפך
+      </div>
+    </div>
+
+    <!-- CARD A: PRIMARY COMPUTER -->
+    <div class="lobby-card lobby-card-primary" id="hostCard" onclick="startHost()">
+
+      <!-- OS badge -->
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:12px">
+        <div style="display:flex;align-items:center;gap:10px">
+          <div class="lobby-card-icon icon-host" style="width:52px;height:52px;font-size:26px">💻</div>
+          <div>
+            <div style="font-size:17px;font-weight:800;color:var(--bright)">המחשב שלי — הראשי</div>
+            <div style="font-size:12px;color:var(--dim);margin-top:2px">כאן מותקן ה-DAW שלך</div>
+          </div>
+        </div>
+        <!-- OS selector -->
+        <div style="display:flex;gap:5px" onclick="event.stopPropagation()">
+          <div class="os-btn active" onclick="selectOS(this,'mac')" id="osBtnMac" title="macOS">
+            <span style="font-size:18px"></span>
+          </div>
+          <div class="os-btn" onclick="selectOS(this,'win')" id="osBtnWin" title="Windows">
+            <span style="font-size:18px">🪟</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- What this means -->
+      <div class="lobby-explainer">
+        <div class="lobby-explainer-row">
+          <span class="lobby-explainer-icon">🔊</span>
+          <span>השמע מהסטודיו שלך ישודר לשותף</span>
+        </div>
+        <div class="lobby-explainer-row">
+          <span class="lobby-explainer-icon">🎛</span>
+          <span>שניכם שולטים ב-DAW יחד</span>
+        </div>
+        <div class="lobby-explainer-row">
+          <span class="lobby-explainer-icon">🔑</span>
+          <span>אתה תקבל קוד — שלח אותו לשותף</span>
+        </div>
+      </div>
+
+      <!-- Session type inline -->
+      <div style="margin:14px 0 16px;display:grid;grid-template-columns:1fr 1fr;gap:6px" id="sessionTypeGrid" onclick="event.stopPropagation()">
+        <div class="session-type-btn active" onclick="selectSessionType(this,'co-production')" data-type="co-production">
+          <span>🎛</span><span>יצירה משותפת</span>
+        </div>
+        <div class="session-type-btn" onclick="selectSessionType(this,'artist-producer')" data-type="artist-producer">
+          <span>🎤</span><span>אמן + מפיק</span>
+        </div>
+        <div class="session-type-btn" onclick="selectSessionType(this,'mentor')" data-type="mentor">
+          <span>🎓</span><span>הדרכה</span>
+        </div>
+        <div class="session-type-btn" onclick="selectSessionType(this,'review')" data-type="review">
+          <span>👁</span><span>האזנה ומשוב</span>
+        </div>
+      </div>
+
+      <button class="btn btn-cyan btn-full" style="font-size:15px;padding:14px;font-weight:700" onclick="event.stopPropagation(); startHost()">
+        נתחיל — פתח סשן חדש ⚡
+      </button>
+    </div>
+
+    <!-- DIVIDER -->
+    <div style="display:flex;align-items:center;gap:12px;margin:6px 0">
+      <div style="flex:1;height:1px;background:var(--border)"></div>
+      <div style="font-family:var(--mono);font-size:11px;color:var(--muted)">או</div>
+      <div style="flex:1;height:1px;background:var(--border)"></div>
+    </div>
+
+    <!-- CARD B: SECOND COMPUTER -->
+    <div class="lobby-card" style="cursor:default">
+
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
+        <div class="lobby-card-icon icon-join" style="width:52px;height:52px;font-size:26px">🎧</div>
+        <div>
+          <div style="font-size:17px;font-weight:800;color:var(--bright)">המחשב השני — הצד השני</div>
+          <div style="font-size:12px;color:var(--dim);margin-top:2px">קיבלתם קוד מהשותף שלכם?</div>
+        </div>
+      </div>
+
+      <div class="lobby-explainer" style="margin-bottom:14px">
+        <div class="lobby-explainer-row">
+          <span class="lobby-explainer-icon">🔊</span>
+          <span>תשמע את השמע מהסטודיו שלו בזמן אמת</span>
+        </div>
+        <div class="lobby-explainer-row">
+          <span class="lobby-explainer-icon">🎛</span>
+          <span>תוכל לשלוט ב-DAW מהדפדפן — ללא התקנה</span>
+        </div>
+      </div>
+
+      <!-- Role -->
+      <div style="display:flex;gap:6px;margin-bottom:12px">
+        <div class="session-type-btn active" style="flex:1;justify-content:center" onclick="selectJoinRole(this,'collaborator')" data-role="collaborator">
+          <span>🎛</span><span>שותף — שליטה מלאה</span>
+        </div>
+        <div class="session-type-btn" style="flex:1;justify-content:center" onclick="selectJoinRole(this,'listener')" data-role="listener">
+          <span>👁</span><span>האזנה בלבד</span>
+        </div>
+      </div>
+
+      <div class="join-input-row">
+        <input class="code-input" id="joinCode" placeholder="הכנס קוד — למשל ABC-123" maxlength="7"
+          oninput="formatCode(this)"
+          onkeydown="if(event.key==='Enter') joinSession()"
+          style="font-size:18px;letter-spacing:8px">
+        <button class="btn btn-green" onclick="joinSession()" style="font-size:14px;padding:11px 20px;font-weight:700">
+          בואו נצא לדרך →
+        </button>
+      </div>
+    </div>
+
+    <div class="version-tag" style="margin-top:16px">v0.2.0 · P2P · E2E Encrypted · WebRTC + TURN</div>
+  </div>
+</div>
+
+<!-- ============================================================
+     SCREEN 2: HOST — SETUP
+     ============================================================ -->
+<div class="screen" id="screen-setup">
+  <div class="app-shell">
+    <!-- TOPBAR -->
+    <div class="topbar">
+      <div class="topbar-left">
+        <div class="tb-logo">StudioSync</div>
+        <div class="tb-separator"></div>
+        <div class="tb-session-info">
+          <div class="status-dot waiting" id="setupStatusDot"></div>
+          <span class="status-label" id="setupStatusLabel">ממתין לחיבור</span>
+        </div>
+      </div>
+      <div class="topbar-right">
+        <div class="session-code-badge" id="setupCodeBadge" onclick="showCodeModal()" title="לחץ להעתקה">- - - - - -</div>
+        <button class="btn btn-ghost" onclick="showScreen('screen-lobby')">✕ יציאה</button>
+      </div>
+    </div>
+
+    <!-- SETUP CONTENT -->
+    <div class="setup-content">
+      <div class="setup-steps">
+        <div class="setup-header">
+          <h2>🔧 ההגדרה לפני שמתחילים</h2>
+          <p>כמה שלבים קצרים — ואנחנו בפנים</p>
+        </div>
+
+        <!-- STEP 1: DAW -->
+        <div class="setup-step-item active" id="setupStep1">
+          <div class="step-num">1</div>
+          <div class="step-content">
+            <h3>איזו תוכנת הפקה אתה משתמש?</h3>
+            <p>StudioSync יתחבר אליה אוטומטית.</p>
+            <div class="daw-grid" style="max-width:320px">
+              <div class="daw-btn active" onclick="selectDAW(this,'ableton')" id="dawBtn-ableton">
+                <span class="daw-btn-icon">⬛</span>Ableton
+              </div>
+              <div class="daw-btn" onclick="selectDAW(this,'logic')" id="dawBtn-logic">
+                <span class="daw-btn-icon">◆</span>Logic Pro
+              </div>
+              <div class="daw-btn" onclick="selectDAW(this,'cubase')" id="dawBtn-cubase">
+                <span class="daw-btn-icon">■</span>Cubase
+              </div>
+              <div class="daw-btn" onclick="selectDAW(this,'fl')" id="dawBtn-fl">
+                <span class="daw-btn-icon">▲</span>FL Studio
+              </div>
+              <div class="daw-btn" onclick="selectDAW(this,'protools')" id="dawBtn-protools">
+                <span class="daw-btn-icon">●</span>Pro Tools
+              </div>
+            </div>
+            <div class="step-actions">
+              <button class="btn btn-cyan" onclick="completeStep(1)">ממשיכים ↓</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- STEP 2: Virtual Audio -->
+        <div class="setup-step-item" id="setupStep2">
+          <div class="step-num">2</div>
+          <div class="step-content">
+            <h3>חיבור השמע לסשן</h3>
+            <p>StudioSync צריך לקלוט את השמע היוצא מה-DAW. בחר את הכלי המותקן במחשב:</p>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">
+              <div class="daw-btn active" style="padding:10px 16px;flex:none;font-size:12px" onclick="selectAudioTool(this,'blackhole');selectOS(document.getElementById('osBtnMac'),'mac')">
+                <span style="font-size:18px">🍎</span>&nbsp; Mac — BlackHole
+              </div>
+              <div class="daw-btn" style="padding:10px 16px;flex:none;font-size:12px" onclick="selectAudioTool(this,'vbcable');selectOS(document.getElementById('osBtnWin'),'win')">
+                <span style="font-size:18px">🪟</span>&nbsp; Windows — VB-Cable
+              </div>
+            </div>
+            <div id="virtualAudioHint" style="font-size:12px;color:var(--amber);padding:10px 14px;background:var(--amber-dim);border:1px solid rgba(255,184,0,0.2);border-radius:6px;line-height:1.6">
+              🍎 <strong>Mac:</strong> הורד <a href="https://existential.audio/blackhole/" target="_blank" style="color:var(--cyan)">BlackHole</a> — חינמי, 2 דקות התקנה
+            </div>
+            <div class="step-actions">
+              <button class="btn btn-cyan" onclick="testAudio()">🎵 בדוק שמע</button>
+              <button class="btn btn-ghost" onclick="completeStep(2)">אדלג על זה</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- STEP 3: OSC/MIDI -->
+        <div class="setup-step-item" id="setupStep3">
+          <div class="step-num">3</div>
+          <div class="step-content">
+            <h3>כעת — חיבור ה-DAW</h3>
+            <p id="oscInstructions">פתח את Ableton Live → Preferences → Link/MIDI → אפשר <strong>AbletonOSC</strong> Remote Script. פורט: 11000</p>
+            <div id="connStatus" style="display:flex;align-items:center;gap:8px;padding:10px 14px;background:var(--bg2);border:1px solid var(--border);border-radius:7px;font-family:var(--mono);font-size:12px;color:var(--muted)">
+              <div class="status-dot" id="dawConnDot"></div>
+              <span id="dawConnText">לא מחובר</span>
+            </div>
+            <div class="step-actions">
+              <button class="btn btn-cyan" onclick="testDAWConnection()">🔌 תבדוק שזה עובד</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- STEP 4: Launch -->
+        <div class="setup-step-item" id="setupStep4">
+          <div class="step-num">4</div>
+          <div class="step-content">
+            <h3>הכל מוכן — נצא לדרך!</h3>
+            <p>הכל סגור. שתף את הקוד עם השותף ותתחילו לעבוד ביחד.</p>
+            <div class="step-actions">
+              <button class="btn btn-cyan" onclick="launchSession()">🚀 נצא לדרך</button>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <div class="statusbar">
+      <div class="sb-item" id="sb-daw"><span>●</span> DAW: Ableton</div>
+      <div class="sb-sep">|</div>
+      <div class="sb-item"><span>●</span> Audio: BlackHole</div>
+      <div class="sb-sep">|</div>
+      <div class="sb-item"><span>●</span> OSC: 11000</div>
+      <div class="sb-sep">|</div>
+      <div class="sb-item" id="sb-peers"><span>●</span> 0 peers</div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================
+     SCREEN 3: HOST — LIVE SESSION
+     ============================================================ -->
+<div class="screen" id="screen-host">
+  <div class="app-shell">
+    <!-- TOPBAR -->
+    <div class="topbar">
+      <div class="topbar-left">
+        <div class="tb-logo">StudioSync</div>
+        <div class="tb-separator"></div>
+        <div class="tb-session-info">
+          <div class="status-dot live"></div>
+          <span class="status-label" id="sessionStateLabel">LIVE</span>
+        </div>
+        <!-- Session type badge -->
+        <div style="font-family:var(--mono);font-size:10px;color:var(--dim);padding:3px 8px;border:1px solid var(--border);border-radius:4px;letter-spacing:1px" id="sessionTypeBadge">CO-PRODUCTION</div>
+        <!-- Peer chips injected here -->
+        <div id="peerChipArea" style="display:flex;gap:6px;align-items:center"></div>
+      </div>
+      <div class="topbar-right">
+        <!-- Control ownership -->
+        <div class="control-owner-bar mine" id="controlOwnerBar">
+          <span id="controlOwnerDot" style="width:6px;height:6px;border-radius:50%;background:var(--cyan);display:inline-block"></span>
+          <span id="controlOwnerLabel">You have control</span>
+        </div>
+        <div class="session-code-badge" id="liveCodeBadge" onclick="showCodeModal()">--- ---</div>
+        <button class="btn btn-ghost" onclick="confirmEndSession()" style="font-size:11px">✕ סיים</button>
+      </div>
+    </div>
+
+    <div class="main-layout">
+
+      <!-- LEFT SIDEBAR — DAW Controls -->
+      <div class="sidebar">
+        <div class="sidebar-section">
+          <div class="sidebar-title">DAW</div>
+          <div class="conn-items">
+            <div class="conn-item">
+              <span class="conn-item-label">🔌 OSC Bridge</span>
+              <span class="conn-item-status conn-ok" id="oscStatus">11000 ✓</span>
+            </div>
+            <div class="conn-item">
+              <span class="conn-item-label">🎵 Audio Stream</span>
+              <span class="conn-item-status conn-ok" id="audioStatus">48kHz ✓</span>
+            </div>
+            <div class="conn-item">
+              <span class="conn-item-label">🎹 MIDI Gate</span>
+              <span class="conn-item-status conn-warn" id="midiStatus">Standby</span>
+            </div>
+            <div class="conn-item">
+              <span class="conn-item-label">📡 P2P Link</span>
+              <span class="conn-item-status conn-ok" id="p2pStatus">WebRTC ✓</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="sidebar-section">
+          <div class="sidebar-title">
+            <span>Latency</span>
+            <span style="color:var(--green);font-family:var(--mono)">LAN</span>
+          </div>
+          <div class="latency-display">
+            <div class="latency-num" id="latencyNum">14</div>
+            <div class="latency-unit">ms</div>
+          </div>
+          <div class="latency-bar">
+            <div class="latency-bar-fill" id="latencyBar" style="width:14%"></div>
+          </div>
+        </div>
+
+        <div class="sidebar-section">
+          <div class="sidebar-title">הרשאות Remote</div>
+          <div style="display:flex;flex-direction:column;gap:6px">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px">
+              <input type="checkbox" checked id="perm-transport" onchange="updatePerms()"> Transport Control
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px">
+              <input type="checkbox" checked id="perm-faders" onchange="updatePerms()"> Faders &amp; Pan
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px">
+              <input type="checkbox" id="perm-mute" onchange="updatePerms()"> Mute / Solo
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px">
+              <input type="checkbox" id="perm-midi" onchange="updatePerms()"> MIDI Input
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:12px">
+              <input type="checkbox" id="perm-screen" onchange="updatePerms()"> Screen View
+            </label>
+          </div>
+        </div>
+
+        <!-- Ableton Link -->
+        <div class="sidebar-section" id="linkSection" style="display:none">
+          <div class="sidebar-title" style="justify-content:space-between">
+            <span>🔗 Ableton Link</span>
+            <span id="linkStatus" style="color:var(--muted);font-size:10px">OFF</span>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:6px">
+            <div class="conn-item"><span class="conn-item-label" style="font-size:11px">Peers on Link</span><span id="linkPeers" class="conn-item-status" style="color:var(--muted)">0</span></div>
+            <div class="conn-item"><span class="conn-item-label" style="font-size:11px">Shared BPM</span><span id="linkBPM" class="conn-item-status conn-ok">128</span></div>
+            <button class="btn btn-ghost" style="font-size:11px;width:100%;justify-content:center;margin-top:4px" onclick="toggleLink()">Enable Link Sync</button>
+          </div>
+        </div>
+
+        <div class="sidebar-section" style="flex:1;overflow-y:auto;min-height:0">
+          <div class="sidebar-title" style="justify-content:space-between;align-items:center">
+            <span>DAW Log</span>
+            <div style="display:flex;gap:4px">
+              <button onclick="filterDAWLog()" id="logFilterBtn" title="Filter" style="background:none;border:1px solid var(--border);border-radius:3px;cursor:pointer;color:var(--muted);font-size:10px;padding:1px 5px">⚡</button>
+              <button onclick="clearDAWLog()" title="Clear" style="background:none;border:1px solid var(--border);border-radius:3px;cursor:pointer;color:var(--muted);font-size:10px;padding:1px 5px">✕</button>
+              <button onclick="exportDAWLog()" title="Export" style="background:none;border:1px solid var(--border);border-radius:3px;cursor:pointer;color:var(--muted);font-size:10px;padding:1px 5px">↓</button>
+            </div>
+          </div>
+          <input id="logSearch" placeholder="filter log..." style="width:100%;background:var(--bg2);border:1px solid var(--border);border-radius:4px;padding:4px 8px;font-family:var(--mono);font-size:10px;color:var(--text);outline:none;margin-bottom:6px;display:none" oninput="searchDAWLog(this.value)">
+          <div id="dawLog" style="font-family:var(--mono);font-size:10px;color:var(--muted);display:flex;flex-direction:column;gap:4px;direction:ltr;max-height:200px;overflow-y:auto"></div>
+        </div>
+      </div>
+
+      <!-- CENTER — DAW MIRROR -->
+      <div class="center-panel">
+        <div class="center-toolbar">
+          <div class="transport-controls">
+            <div class="tc-btn" onclick="transport('rewind')" title="Rewind">⏮</div>
+            <div class="tc-btn play" id="btnPlay" onclick="togglePlay()" title="Play/Stop">▶</div>
+            <div class="tc-btn rec" id="btnRec" onclick="toggleRec()" title="Record">⏺</div>
+            <div class="tc-btn" onclick="transport('loop')" title="Loop">🔁</div>
+          </div>
+
+          <div class="bpm-display">
+            <div>
+              <div class="bpm-label">BPM</div>
+              <div class="bpm-val" id="bpmDisplay">128</div>
+            </div>
+            <div class="bpm-arrows">
+              <button class="bpm-arrow" onclick="changeBPM(1)">▲</button>
+              <button class="bpm-arrow" onclick="changeBPM(-1)">▼</button>
+            </div>
+          </div>
+
+          <div class="position-display" id="posDisplay">1.1.1</div>
+
+          <div style="display:flex;gap:6px;margin-right:auto">
+            <div class="tc-btn" onclick="addTrack()" title="הוסף טראק">＋</div>
+          </div>
+        </div>
+
+        <!-- SESSION HEALTH BAR -->
+        <div id="sessionHealthBar" class="session-health health-healthy" style="margin:8px 12px 0;display:none">
+          <span id="sessionHealthIcon">●</span>
+          <span id="sessionHealthText">הסשן תקין · P2P Direct · 14ms</span>
+          <span style="margin-right:auto"></span>
+          <span id="sessionHealthAction" style="cursor:pointer;text-decoration:underline;opacity:0.7"></span>
+        </div>
+
+        <!-- TIMELINE MARKERS ROW -->
+        <div class="marker-row" id="markerRow" title="Click to add marker">
+          <!-- markers rendered by JS -->
+        </div>
+
+        <!-- TRACK LIST -->
+        <div class="track-area" id="trackArea">
+          <!-- Rendered by JS -->
+        </div>
+      </div>
+
+      <!-- RIGHT SIDEBAR — Chat + Meters -->
+      <div class="right-sidebar">
+        <div class="sidebar-section">
+          <div class="sidebar-title">Output Meters</div>
+          <div class="big-meters" style="padding:0">
+            <div class="meter-row">
+              <div class="meter-label">L</div>
+              <div class="meter-track"><div class="meter-fill" id="meterL" style="width:0%"></div></div>
+            </div>
+            <div class="meter-row">
+              <div class="meter-label">R</div>
+              <div class="meter-track"><div class="meter-fill" id="meterR" style="width:0%"></div></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="sidebar-section" style="flex:1;display:flex;flex-direction:column;overflow:hidden;padding:0">
+          <div class="sidebar-title" style="padding:12px 16px 0">צ׳אט</div>
+          <div class="chat-area" id="chatArea">
+            <div class="chat-msg system">
+              <div class="chat-msg-body">Session started · Encrypted P2P</div>
+            </div>
+          </div>
+          <div class="chat-input-area">
+            <input class="chat-input" id="chatInput" placeholder="הקלד הודעה..." onkeydown="if(event.key==='Enter') sendChat()">
+            <button class="chat-send-btn" onclick="sendChat()">↑</button>
+          </div>
+        </div>
+
+        <div class="talkback-section">
+          <button class="talkback-btn" id="talkbackBtn" onmousedown="startTalkback()" onmouseup="stopTalkback()">
+            🎙 לחץ והחזק לדבר
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div class="statusbar">
+      <div class="sb-item" id="sb-webrtc">● WebRTC: —</div>
+      <div class="sb-sep">|</div>
+      <div class="sb-item" id="sb-audio">● Audio: —</div>
+      <div class="sb-sep">|</div>
+      <div class="sb-item" id="sb-latency">● Latency: —</div>
+      <div class="sb-sep">|</div>
+      <div class="sb-item" id="sb-codec" style="cursor:pointer" title="Click to change codec">● OPUS 256kbps</div>
+      <div class="sb-sep">|</div>
+      <div class="sb-item ok">● E2E Encrypted</div>
+      <div class="sb-sep">|</div>
+      <div class="sb-item" id="sb-peers">● 0 peers</div>
+      <div class="sb-sep">|</div>
+      <div class="sb-item" id="sb-session-type" style="color:var(--dim)">● Co-Production</div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================
+     SCREEN 4: REMOTE CLIENT
+     ============================================================ -->
+<div class="screen" id="screen-remote">
+  <div class="app-shell">
+    <!-- TOPBAR -->
+    <div class="topbar">
+      <div class="topbar-left">
+        <div class="tb-logo" style="color:var(--green)">StudioSync <span style="font-size:10px;letter-spacing:2px;color:var(--muted)">REMOTE</span></div>
+        <div class="tb-separator"></div>
+        <div class="tb-session-info">
+          <div class="status-dot live" id="remoteSessionDot"></div>
+          <span class="status-label" id="remoteSessionState">מחובר</span>
+        </div>
+        <!-- Sync status -->
+        <div style="font-family:var(--mono);font-size:10px;padding:3px 8px;border:1px solid var(--border);border-radius:4px;color:var(--muted)" id="syncStatusBadge">SYNCED</div>
+        <!-- Request control -->
+        <button class="request-control-btn" id="requestControlBtn" onclick="requestControl()" style="display:none">✋ Request Control</button>
+      </div>
+      <div class="topbar-right">
+        <div class="session-code-badge" id="remoteCodeBadge">--- ---</div>
+        <button class="btn btn-ghost" onclick="showScreen('screen-lobby')" style="font-size:11px">✕ נתק</button>
+      </div>
+    </div>
+
+    <div class="main-layout">
+
+      <!-- LEFT: Remote connection info -->
+      <div class="sidebar">
+        <div class="sidebar-section">
+          <div class="sidebar-title">חיבור</div>
+          <div class="conn-items">
+            <div class="conn-item">
+              <span class="conn-item-label">📡 WebRTC</span>
+              <span class="conn-item-status conn-ok">P2P ✓</span>
+            </div>
+            <div class="conn-item">
+              <span class="conn-item-label">🔊 Audio In</span>
+              <span class="conn-item-status conn-ok">Streaming</span>
+            </div>
+            <div class="conn-item">
+              <span class="conn-item-label">🎛 Control</span>
+              <span class="conn-item-status conn-ok">Active</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="sidebar-section">
+          <div class="sidebar-title">Latency</div>
+          <div class="latency-display">
+            <div class="latency-num" style="color:var(--green)" id="remoteLatency">18</div>
+            <div class="latency-unit">ms</div>
+          </div>
+          <div class="latency-bar">
+            <div class="latency-bar-fill" style="width:18%;background:var(--green)"></div>
+          </div>
+        </div>
+
+        <div class="sidebar-section">
+          <div class="sidebar-title">הרשאות שלי</div>
+          <div style="display:flex;flex-direction:column;gap:5px;font-size:12px">
+            <div style="display:flex;align-items:center;gap:6px"><span style="color:var(--green)">✓</span> Transport Control</div>
+            <div style="display:flex;align-items:center;gap:6px"><span style="color:var(--green)">✓</span> Faders &amp; Pan</div>
+            <div style="display:flex;align-items:center;gap:6px"><span style="color:var(--muted)">○</span> Mute / Solo</div>
+            <div style="display:flex;align-items:center;gap:6px"><span style="color:var(--muted)">○</span> MIDI Input</div>
+          </div>
+        </div>
+
+        <!-- MIDI keyboard hint -->
+        <div class="sidebar-section">
+          <div class="sidebar-title">MIDI Remote</div>
+          <div style="font-size:11px;color:var(--dim);line-height:1.6">
+            חבר MIDI controller — הנגינה תועבר ל-DAW הראשי בזמן אמת.
+          </div>
+          <div class="step-actions" style="margin-top:10px">
+            <button class="btn btn-ghost" onclick="activateMIDI()" style="font-size:11px">🎹 Enable MIDI</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- CENTER: Mirrored DAW control -->
+      <div class="center-panel">
+        <div class="center-toolbar">
+          <div class="transport-controls">
+            <div class="tc-btn" onclick="remoteTransport('rewind')">⏮</div>
+            <div class="tc-btn play" id="remoteBtnPlay" onclick="remoteTogglePlay()">▶</div>
+            <div class="tc-btn rec" onclick="remoteTransport('rec')">⏺</div>
+            <div class="tc-btn" onclick="remoteTransport('loop')">🔁</div>
+          </div>
+          <div class="bpm-display">
+            <div>
+              <div class="bpm-label">BPM</div>
+              <div class="bpm-val" id="remoteBpmDisplay">128</div>
+            </div>
+            <div class="bpm-arrows">
+              <button class="bpm-arrow" onclick="remoteChangeBPM(1)">▲</button>
+              <button class="bpm-arrow" onclick="remoteChangeBPM(-1)">▼</button>
+            </div>
+          </div>
+          <div class="position-display" id="remotePosDisplay">1.1.1</div>
+          <div style="font-family:var(--mono);font-size:11px;color:var(--green);margin-right:auto;padding:6px 12px;background:var(--green-dim);border:1px solid rgba(0,232,122,0.2);border-radius:6px">
+            🔊 Audio Live
+          </div>
+        </div>
+
+        <!-- Remote track list -->
+        <div class="track-area" id="remoteTrackArea">
+          <!-- Mirrored from host -->
+        </div>
+      </div>
+
+      <!-- RIGHT: Chat -->
+      <div class="right-sidebar">
+        <div class="sidebar-section">
+          <div class="sidebar-title">Audio Monitor</div>
+          <div style="padding:4px 0">
+            <div class="meter-row">
+              <div class="meter-label">L</div>
+              <div class="meter-track"><div class="meter-fill" id="remoteMeterL" style="width:0%"></div></div>
+            </div>
+            <div class="meter-row">
+              <div class="meter-label">R</div>
+              <div class="meter-track"><div class="meter-fill" id="remoteMeterR" style="width:0%"></div></div>
+            </div>
+          </div>
+          <div style="margin-top:10px">
+            <input type="range" class="fader" min="0" max="100" value="80" oninput="setMonitorVol(this.value)" style="width:100%">
+            <div style="font-family:var(--mono);font-size:10px;color:var(--muted);text-align:center;margin-top:4px">Monitor Volume</div>
+          </div>
+        </div>
+
+        <div class="sidebar-section" style="flex:1;display:flex;flex-direction:column;overflow:hidden;padding:0">
+          <div class="sidebar-title" style="padding:12px 16px 0">צ׳אט</div>
+          <div class="chat-area" id="remoteChatArea">
+            <div class="chat-msg system">
+              <div class="chat-msg-body">Connected to session · Encrypted P2P</div>
+            </div>
+          </div>
+          <div class="chat-input-area">
+            <input class="chat-input" id="remoteChatInput" placeholder="הקלד הודעה..." onkeydown="if(event.key==='Enter') sendRemoteChat()">
+            <button class="chat-send-btn" onclick="sendRemoteChat()">↑</button>
+          </div>
+        </div>
+
+        <div class="talkback-section">
+          <button class="talkback-btn" id="remoteTalkbackBtn" onmousedown="startTalkback()" onmouseup="stopTalkback()">
+            🎙 לחץ והחזק לדבר
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <div class="statusbar">
+      <div class="sb-item ok">● WebRTC: P2P Direct</div>
+      <div class="sb-sep">|</div>
+      <div class="sb-item ok">● Audio: Receiving 48kHz</div>
+      <div class="sb-sep">|</div>
+      <div class="sb-item ok">● Latency: 18ms</div>
+      <div class="sb-sep">|</div>
+      <div class="sb-item ok">● E2E Encrypted</div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================
+     JAVASCRIPT
+     ============================================================ -->
+<script>
+/* ============================================================
+   STATE
+   ============================================================ */
+const state = {
+  screen: 'lobby',
+  sessionCode: '',
+  selectedDAW: 'ableton',
+  selectedAudioTool: 'blackhole',
+  isPlaying: false,
+  isRecording: false,
+  bpm: 128,
+  position: { bar: 1, beat: 1, tick: 1 },
+  tracks: [],
+  setupSteps: { 1: false, 2: false, 3: false, 4: false },
+  talkbackActive: false,
+};
+
+/* ============================================================
+   SCREEN NAVIGATION
+   ============================================================ */
+function showScreen(id) {
+  document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  state.screen = id;
+}
+
+/* ============================================================
+   LOBBY
+   ============================================================ */
+function generateCode() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let code = '';
+  for (let i = 0; i < 6; i++) {
+    if (i === 3) code += '-';
+    code += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return code;
+}
+
+function formatCode(input) {
+  let v = input.value.replace(/[^A-Z0-9a-z]/gi, '').toUpperCase().slice(0, 6);
+  if (v.length > 3) v = v.slice(0, 3) + '-' + v.slice(3);
+  input.value = v;
+}
+
+function startHost() {
+  state.sessionCode = generateCode();
+  document.getElementById('setupCodeBadge').textContent = state.sessionCode;
+  document.getElementById('liveCodeBadge').textContent = state.sessionCode;
+  document.getElementById('remoteCodeBadge').textContent = state.sessionCode;
+  showScreen('screen-setup');
+  toast('🎛 הסשן נפתח! הקוד שלך: ' + state.sessionCode, 'cyan');
+  initTracks();
+}
+
+function joinSession() {
+  const code = document.getElementById('joinCode').value.replace('-','');
+  if (code.length < 5) { toast('⚠️ נראה שחסר קוד — בוא ננסה שוב', ''); return; }
+  state.sessionCode = code;
+  document.getElementById('remoteCodeBadge').textContent = document.getElementById('joinCode').value;
+  showScreen('screen-remote');
+  initRemoteTracks();
+  toast('🎧 מתחבר לסשן... ' + document.getElementById('joinCode').value + '...', 'green');
+  setTimeout(() => toast('✓ נכנסנו! השמע מתחיל...', 'green'), 1200);
+  startAudioMeterSim('remoteMeterL', 'remoteMeterR');
+  startPositionSim(true);
+}
+
+/* ============================================================
+   SETUP FLOW
+   ============================================================ */
+function selectDAW(el, daw) {
+  document.querySelectorAll('#setupStep1 .daw-btn').forEach(b => b.classList.remove('active'));
+  el.classList.add('active');
+  state.selectedDAW = daw;
+
+  const instructions = {
+    ableton: 'פתח את Ableton Live → Preferences → Link/MIDI → הפעל <strong>AbletonOSC</strong> Remote Script. פורט: 11000',
+    logic: 'Logic Pro → Control Surfaces → Setup → הוסף OSC Controller. פורט: 8000',
+    cubase: 'Cubase → Studio → Studio Setup → MIDI Remote → הפעל את StudioSync MIDI Script',
+    fl: 'FL Studio → Options → MIDI Settings → הפעל Virtual MIDI Port ולחץ Enable',
+    protools: 'Pro Tools → Setup → Peripherals → MIDI Controllers → הוסף HUI (Virtual)',
+  };
+  document.getElementById('oscInstructions').innerHTML = instructions[daw] || instructions.ableton;
+  document.getElementById('sb-daw').innerHTML = `<span>●</span> DAW: ${el.querySelector('.daw-btn-icon').nextSibling.textContent.trim()}`;
+}
+
+function selectAudioTool(el, tool) {
+  document.querySelectorAll('#setupStep2 .daw-btn').forEach(b => b.classList.remove('active'));
+  el.classList.add('active');
+  state.selectedAudioTool = tool;
+}
+
+function completeStep(n) {
+  const el = document.getElementById('setupStep' + n);
+  el.classList.remove('active');
+  el.classList.add('done');
+  el.querySelector('.step-num').textContent = '✓';
+  state.setupSteps[n] = true;
+  const next = document.getElementById('setupStep' + (n + 1));
+  if (next) next.classList.add('active');
+  if (n === 3) { toast('✓ הכל מוכן! אפשר לצאת לדרך', 'green'); }
+}
+
+function testAudio() {
+  toast('🔊 בודק שמע... רגע אחד', '');
+  setTimeout(() => {
+    completeStep(2);
+    toast('✓ מעולה! השמע מוכן ועובד', 'green');
+  }, 1200);
+}
+
+function testDAWConnection() {
+  const dot = document.getElementById('dawConnDot');
+  const txt = document.getElementById('dawConnText');
+  dot.className = 'status-dot waiting';
+  txt.textContent = 'מחפש...';
+  setTimeout(() => {
+    dot.className = 'status-dot live';
+    txt.style.color = 'var(--green)';
+    txt.textContent = state.selectedDAW.charAt(0).toUpperCase() + state.selectedDAW.slice(1) + ' — מחובר ✓';
+    completeStep(3);
+    toast('✓ סגרנו את זה — ה-DAW מחוברת', 'green');
+  }, 1500);
+}
+
+function launchSession() {
+  completeStep(4);
+  setTimeout(() => {
+    showScreen('screen-host');
+    toast('🎛 הסשן באוויר! שתף את הקוד ' + state.sessionCode, 'cyan');
+    startAudioMeterSim('meterL', 'meterR');
+    startPositionSim(false);
+    startLatencySim();
+    startDAWLog();
+    simulatePeerJoin();
+  }, 300);
+}
+
+/* ============================================================
+   TRACKS
+   ============================================================ */
+const trackDefs = [
+  { name: 'Kick', type: 'AUDIO', color: '#ff3a5c', vol: 82, muted: false, solo: false, armed: false },
+  { name: 'Snare', type: 'AUDIO', color: '#ffb800', vol: 75, muted: false, solo: false, armed: false },
+  { name: 'Hi-Hat', type: 'AUDIO', color: '#ffb800', vol: 68, muted: false, solo: false, armed: false },
+  { name: 'Bass 808', type: 'MIDI', color: '#00e87a', vol: 88, muted: false, solo: false, armed: true },
+  { name: 'Melody Synt', type: 'MIDI', color: '#00d4ff', vol: 71, muted: false, solo: false, armed: false },
+  { name: 'Lead Vox', type: 'AUDIO', color: '#8b5cf6', vol: 79, muted: false, solo: false, armed: true },
+  { name: 'Pad BG', type: 'MIDI', color: '#00d4ff', vol: 55, muted: true, solo: false, armed: false },
+  { name: 'FX Return', type: 'AUX', color: '#5a7090', vol: 64, muted: false, solo: false, armed: false },
+];
+
+function initTracks() {
+  state.tracks = JSON.parse(JSON.stringify(trackDefs));
+  renderTracks('trackArea', false);
+}
+
+function initRemoteTracks() {
+  state.tracks = JSON.parse(JSON.stringify(trackDefs));
+  renderTracks('remoteTrackArea', true);
+}
+
+function renderTracks(containerId, isRemote) {
+  const area = document.getElementById(containerId);
+  area.innerHTML = '';
+
+  state.tracks.forEach((t, i) => {
+    const row = document.createElement('div');
+    row.className = 'track-row' + (i === 0 ? ' selected' : '');
+    row.dataset.index = i;
+
+    const vuBars = Array.from({length: 6}, (_, j) => `
+      <div class="vu-bar" id="${containerId}-vu-${i}-${j}">
+        <div class="vu-fill" style="height:0%;background:${getVUColor(j)}"></div>
+      </div>`).join('');
+
+    row.innerHTML = `
+      <div class="track-num">${i + 1}</div>
+      <div class="track-name-area" onclick="openTrackAnnotation(${i},'${t.name}')" title="Click to annotate" style="cursor:pointer">
+        <div class="track-color" style="background:${t.color}"></div>
+        <div>
+          <div class="track-name">${t.name}${t.note ? ' <span style=\'font-size:9px;color:var(--amber)\'>📝</span>' : ''}</div>
+          <div class="track-type-badge">${t.type}</div>
+        </div>
+      </div>
+      <div class="track-btn-group">
+        <div class="track-btn ${t.muted ? 'muted' : ''}" title="Mute" onclick="toggleMute(${i},'${containerId}')">M</div>
+        <div class="track-btn ${t.solo ? 'soloed' : ''}" title="Solo" onclick="toggleSolo(${i},'${containerId}')">S</div>
+        <div class="track-btn ${t.armed ? 'armed' : ''}" title="Arm" onclick="toggleArm(${i},'${containerId}')">R</div>
+      </div>
+      <div class="track-fader-wrap">
+        <input type="range" class="fader" min="0" max="127" value="${t.vol}"
+          oninput="onFader(${i}, this.value, '${containerId}')">
+      </div>
+      <div class="track-db" id="${containerId}-db-${i}">${volToDB(t.vol)}</div>
+      <div class="vu-area">${vuBars}</div>
+    `;
+
+    row.addEventListener('click', () => {
+      area.querySelectorAll('.track-row').forEach(r => r.classList.remove('selected'));
+      row.classList.add('selected');
+    });
+
+    area.appendChild(row);
+  });
+
+  startVUSim(containerId);
+}
+
+function getVUColor(j) {
+  if (j < 3) return 'var(--green)';
+  if (j < 5) return 'var(--amber)';
+  return 'var(--red)';
+}
+
+function volToDB(vol) {
+  if (vol === 0) return '-∞';
+  const db = 20 * Math.log10(vol / 100);
+  return (db >= 0 ? '+' : '') + db.toFixed(1);
+}
+
+function toggleMute(i, container) {
+  state.tracks[i].muted = !state.tracks[i].muted;
+  renderTracks(container, container === 'remoteTrackArea');
+  logDAW((state.tracks[i].muted ? 'MUTE' : 'UNMUTE') + ' ' + state.tracks[i].name);
+  syncToRemote('mute', i, state.tracks[i].muted);
+}
+
+function toggleSolo(i, container) {
+  state.tracks[i].solo = !state.tracks[i].solo;
+  renderTracks(container, container === 'remoteTrackArea');
+  logDAW((state.tracks[i].solo ? 'SOLO' : 'UNSOLO') + ' ' + state.tracks[i].name);
+}
+
+function toggleArm(i, container) {
+  state.tracks[i].armed = !state.tracks[i].armed;
+  renderTracks(container, container === 'remoteTrackArea');
+  logDAW((state.tracks[i].armed ? 'ARM' : 'DISARM') + ' ' + state.tracks[i].name);
+}
+
+function onFader(i, val, container) {
+  state.tracks[i].vol = parseInt(val);
+  const dbEl = document.getElementById(container + '-db-' + i);
+  if (dbEl) dbEl.textContent = volToDB(parseInt(val));
+  logDAW('VOL ' + state.tracks[i].name + ' → ' + val);
+}
+
+function addTrack() {
+  const newTrack = { name: 'Track ' + (state.tracks.length + 1), type: 'MIDI', color: '#' + Math.floor(Math.random()*0xaaaaaa+0x444444).toString(16), vol: 70, muted: false, solo: false, armed: false };
+  state.tracks.push(newTrack);
+  renderTracks('trackArea', false);
+  toast('✓ טראק חדש נוסף', 'cyan');
+  logDAW('ADD TRACK ' + newTrack.name);
+}
+
+/* ============================================================
+   TRANSPORT
+   ============================================================ */
+function togglePlay() {
+  state.isPlaying = !state.isPlaying;
+  const btn = document.getElementById('btnPlay');
+  btn.textContent = state.isPlaying ? '⏸' : '▶';
+  btn.style.background = state.isPlaying ? 'var(--green)' : 'var(--green)';
+  logDAW(state.isPlaying ? 'PLAY' : 'STOP');
+  toast(state.isPlaying ? '▶ Playing' : '⏹ Stopped', '');
+  syncToRemote('play', null, state.isPlaying);
+}
+
+function remoteTogglePlay() {
+  state.isPlaying = !state.isPlaying;
+  const btn = document.getElementById('remoteBtnPlay');
+  btn.textContent = state.isPlaying ? '⏸' : '▶';
+  toast(state.isPlaying ? '▶ Play → Host' : '⏹ Stop → Host', '');
+}
+
+function toggleRec() {
+  state.isRecording = !state.isRecording;
+  const btn = document.getElementById('btnRec');
+  btn.style.background = state.isRecording ? '#ff0000' : 'var(--red)';
+  btn.style.boxShadow = state.isRecording ? '0 0 12px #ff0000' : '';
+  logDAW(state.isRecording ? 'REC START' : 'REC STOP');
+}
+
+function transport(cmd) {
+  if (cmd === 'rewind') {
+    state.position = { bar: 1, beat: 1, tick: 1 };
+    updatePosition();
+    logDAW('REWIND');
+  }
+  if (cmd === 'loop') {
+    toast('🔁 Loop toggled', '');
+    logDAW('LOOP TOGGLE');
+  }
+}
+
+function remoteTransport(cmd) {
+  toast(cmd.toUpperCase() + ' → Host', '');
+}
+
+function changeBPM(delta) {
+  state.bpm = Math.max(20, Math.min(300, state.bpm + delta));
+  document.getElementById('bpmDisplay').textContent = state.bpm;
+  if (document.getElementById('remoteBpmDisplay'))
+    document.getElementById('remoteBpmDisplay').textContent = state.bpm;
+  logDAW('BPM → ' + state.bpm);
+}
+
+function remoteChangeBPM(delta) {
+  changeBPM(delta);
+  toast('BPM → ' + state.bpm + ' (→ Host)', '');
+}
+
+function updatePosition() {
+  const p = state.position;
+  const str = `${p.bar}.${p.beat}.${p.tick}`;
+  const el1 = document.getElementById('posDisplay');
+  const el2 = document.getElementById('remotePosDisplay');
+  if (el1) el1.textContent = str;
+  if (el2) el2.textContent = str;
+}
+
+/* ============================================================
+   SIMULATIONS
+   ============================================================ */
+function startPositionSim(isRemote) {
+  setInterval(() => {
+    if (!state.isPlaying) return;
+    state.position.tick++;
+    if (state.position.tick > 4) { state.position.tick = 1; state.position.beat++; }
+    if (state.position.beat > 4) { state.position.beat = 1; state.position.bar++; }
+    updatePosition();
+  }, 250);
+}
+
+function startAudioMeterSim(idL, idR) {
+  function update() {
+    const l = document.getElementById(idL);
+    const r = document.getElementById(idR);
+    if (!l || !r) return;
+    const base = state.isPlaying ? 0.4 : 0.05;
+    const lv = Math.random() * base * 100 + (state.isPlaying ? 35 : 2);
+    const rv = Math.random() * base * 100 + (state.isPlaying ? 30 : 2);
+    l.style.width = Math.min(100, lv + Math.sin(Date.now() / 200) * 15) + '%';
+    r.style.width = Math.min(100, rv + Math.cos(Date.now() / 180) * 12) + '%';
+    requestAnimationFrame(update);
+  }
+  update();
+}
+
+function startVUSim(containerId) {
+  function update() {
+    state.tracks.forEach((t, i) => {
+      for (let j = 0; j < 6; j++) {
+        const bar = document.querySelector(`#${containerId}-vu-${i}-${j} .vu-fill`);
+        if (!bar) continue;
+        const active = state.isPlaying && !t.muted;
+        const base = active ? (t.vol / 127) : 0.02;
+        const h = Math.max(0, Math.min(100, base * 100 * (0.5 + Math.random() * 0.7) - j * 8));
+        bar.style.height = h + '%';
+      }
+    });
+    requestAnimationFrame(update);
+  }
+  update();
+}
+
+function startLatencySim() {
+  setInterval(() => {
+    const lat = 12 + Math.floor(Math.random() * 8);
+    const el = document.getElementById('latencyNum');
+    const sb = document.getElementById('sb-latency');
+    if (el) el.textContent = lat;
+    if (sb) sb.textContent = `● Latency: ${lat}ms`;
+    const bar = document.getElementById('latencyBar');
+    if (bar) bar.style.width = lat + '%';
+  }, 2000);
+}
+
+function startDAWLog() {
+  const msgs = [
+    'OSC /live/song/start_playing',
+    'OSC /live/track/0/volume 0.82',
+    'MIDI NoteOn Ch1 C3 vel=92',
+    'OSC /live/song/set/tempo 128.0',
+    'OSC /live/track/3/arm 1',
+    'WebRTC DataChannel open',
+    'Audio stream 48kHz active',
+    'MIDI NoteOff Ch1 C3',
+    'OSC /live/track/1/mute 0',
+    'Peer heartbeat OK 14ms',
+  ];
+  let idx = 0;
+  setInterval(() => {
+    const log = document.getElementById('dawLog');
+    if (!log) return;
+    const entry = document.createElement('div');
+    entry.textContent = '> ' + msgs[idx % msgs.length];
+    entry.style.opacity = '0';
+    entry.style.transition = 'opacity 0.3s';
+    log.appendChild(entry);
+    setTimeout(() => entry.style.opacity = '1', 10);
+    idx++;
+    if (log.children.length > 12) log.removeChild(log.firstChild);
+    log.scrollTop = log.scrollHeight;
+  }, 1800);
+}
+
+function simulatePeerJoin() {
+  setTimeout(() => {
+    document.getElementById('setupStatusDot').className = 'status-dot live';
+    document.getElementById('setupStatusLabel').textContent = 'LIVE';
+    document.getElementById('sb-peers').innerHTML = '<span style="color:var(--green)">●</span> 1 peer';
+    toast('🎧 Remote_01 הצטרף לסשן', 'green');
+    addChatMessage('chatArea', 'Remote_01', 'היי! אני בפנים ושומע הכל 🎵', true);
+  }, 4000);
+}
+
+function syncToRemote(type, trackIdx, value) {
+  // Simulate sync
+  if (document.getElementById('remoteTrackArea') && trackIdx !== null) {
+    setTimeout(() => renderTracks('remoteTrackArea', true), 50);
+  }
+}
+
+/* ============================================================
+   CHAT
+   ============================================================ */
+function addChatMessage(areaId, user, text, isRemote = false) {
+  const area = document.getElementById(areaId);
+  if (!area) return;
+  const now = new Date();
+  const time = now.getHours().toString().padStart(2,'0') + ':' + now.getMinutes().toString().padStart(2,'0');
+  const div = document.createElement('div');
+  div.className = 'chat-msg';
+  div.innerHTML = `
+    <div class="chat-msg-header">
+      <span class="chat-msg-user ${isRemote ? 'remote' : ''}">${user}</span>
+      <span class="chat-msg-time">${time}</span>
+    </div>
+    <div class="chat-msg-body">${text}</div>
+  `;
+  area.appendChild(div);
+  area.scrollTop = area.scrollHeight;
+}
+
+function sendChat() {
+  const input = document.getElementById('chatInput');
+  const text = input.value.trim();
+  if (!text) return;
+  addChatMessage('chatArea', 'Host', text, false);
+  input.value = '';
+  // Mirror to remote
+  setTimeout(() => addChatMessage('remoteChatArea', 'Host', text, false), 100);
+}
+
+function sendRemoteChat() {
+  const input = document.getElementById('remoteChatInput');
+  const text = input.value.trim();
+  if (!text) return;
+  addChatMessage('remoteChatArea', 'Remote', text, true);
+  input.value = '';
+  // Mirror to host
+  setTimeout(() => addChatMessage('chatArea', 'Remote_01', text, true), 100);
+}
+
+/* ============================================================
+   PERMISSIONS
+   ============================================================ */
+function updatePerms() {
+  const perms = ['transport', 'faders', 'mute', 'midi', 'screen'];
+  const active = perms.filter(p => document.getElementById('perm-' + p)?.checked);
+  toast('🔒 הרשאות עודכנו: ' + active.join(', '), 'cyan');
+}
+
+/* ============================================================
+   TALKBACK
+   ============================================================ */
+function startTalkback() {
+  state.talkbackActive = true;
+  document.querySelectorAll('.talkback-btn').forEach(b => b.classList.add('active'));
+  toast('🎙 Talkback פעיל', '');
+}
+function stopTalkback() {
+  state.talkbackActive = false;
+  document.querySelectorAll('.talkback-btn').forEach(b => b.classList.remove('active'));
+}
+
+/* ============================================================
+   MIDI
+   ============================================================ */
+function activateMIDI() {
+  if (!navigator.requestMIDIAccess) {
+    toast('⚠️ Web MIDI לא נתמך בדפדפן זה', ''); return;
+  }
+  navigator.requestMIDIAccess().then(access => {
+    const inputs = [...access.inputs.values()];
+    if (inputs.length === 0) { toast('⚠️ לא נמצאו MIDI Controllers', ''); return; }
+    inputs.forEach(input => {
+      input.onmidimessage = (msg) => {
+        const [status, note, vel] = msg.data;
+        logDAW(`MIDI ${status === 144 ? 'NoteOn' : 'Msg'} Ch1 Note${note} vel=${vel}`);
+      };
+    });
+    toast('🎹 MIDI פעיל — ' + inputs.length + ' controller(s)', 'green');
+  }).catch(() => toast('⚠️ לא ניתן לגשת ל-MIDI', ''));
+}
+
+/* ============================================================
+   MODAL — Session Code
+   ============================================================ */
+function showCodeModal() {
+  const overlay = document.getElementById('modalOverlay');
+  const content = document.getElementById('modalContent');
+  content.innerHTML = `
+    <h3>🔑 קוד הסשן שלך</h3>
+    <p>שלח את הקוד הזה לשותף שלך. הם יכנסו למחשב השני ויזינו אותו.</p>
+    <div class="modal-code" onclick="copyCode()" title="לחץ להעתקה">${state.sessionCode}</div>
+    <div class="modal-hint">לחץ על הקוד להעתקה ● הקוד תקף לסשן הזה בלבד</div>
+    <div style="display:flex;gap:10px">
+      <button class="btn btn-cyan btn-full" onclick="copyCode()">📋 העתק קוד ושלח</button>
+      <button class="btn btn-ghost" onclick="closeModal()">סגור</button>
+    </div>
+  `;
+  overlay.classList.add('visible');
+}
+
+function copyCode() {
+  navigator.clipboard?.writeText(state.sessionCode).then(() => {
+    toast('✓ הקוד הועתק — שלח אותו לשותף: ' + state.sessionCode, 'cyan');
+  }).catch(() => toast('קוד: ' + state.sessionCode, 'cyan'));
+  closeModal();
+}
+
+function closeModal() {
+  document.getElementById('modalOverlay').classList.remove('visible');
+}
+document.getElementById('modalOverlay').addEventListener('click', e => {
+  if (e.target === document.getElementById('modalOverlay')) closeModal();
+});
+
+/* ============================================================
+   TOAST
+   ============================================================ */
+function toast(msg, type = '') {
+  const area = document.getElementById('toastArea');
+  const el = document.createElement('div');
+  el.className = 'toast ' + type;
+  el.textContent = msg;
+  area.appendChild(el);
+  setTimeout(() => el.remove(), 3200);
+}
+
+/* ============================================================
+   MISC
+   ============================================================ */
+function logDAW(msg) {
+  const log = document.getElementById('dawLog');
+  if (!log) return;
+  const entry = document.createElement('div');
+  entry.textContent = '> ' + msg;
+  entry.style.opacity = '0';
+  entry.style.transition = 'opacity 0.3s';
+  log.appendChild(entry);
+  setTimeout(() => entry.style.opacity = '1', 10);
+  if (log.children.length > 15) log.removeChild(log.firstChild);
+  log.scrollTop = log.scrollHeight;
+}
+
+function setMonitorVol(val) {
+  // Simulate monitor volume
+}
+
+/* ============================================================
+   WAVE CANVAS — Lobby background
+   ============================================================ */
+function initWaveCanvas() {
+  const canvas = document.getElementById('waveCanvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+
+  function resize() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+  }
+  resize();
+  window.addEventListener('resize', resize);
+
+  let t = 0;
+  function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    const lines = 5;
+    for (let l = 0; l < lines; l++) {
+      ctx.beginPath();
+      ctx.strokeStyle = `rgba(0, 212, 255, ${0.06 - l * 0.01})`;
+      ctx.lineWidth = 1.5;
+      const yBase = canvas.height * 0.3 + l * 60;
+      for (let x = 0; x <= canvas.width; x += 3) {
+        const freq = 0.005 + l * 0.002;
+        const amp = 40 + l * 20;
+        const y = yBase + Math.sin(x * freq + t + l) * amp
+                       + Math.sin(x * freq * 2.3 + t * 1.5) * amp * 0.3;
+        x === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    }
+    t += 0.015;
+    requestAnimationFrame(draw);
+  }
+  draw();
+}
+
+/* ============================================================
+   WEBRTC ENGINE
+   ============================================================ */
+
+const RTC = {
+  // ── Config ─────────────────────────────────────────────────
+  SIGNALING_URL: 'wss://studiosync-signal.fly.dev',
+  MAX_PEERS: 4,
+
+  // ICE: STUN + TURN (Metered.ca free 50GB/mo — swap credentials)
+  ICE_SERVERS: [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'turn:a.relay.metered.ca:80',   username: 'studiosync', credential: 'REPLACE_ME' },
+    { urls: 'turn:a.relay.metered.ca:443',  username: 'studiosync', credential: 'REPLACE_ME' },
+    { urls: 'turns:a.relay.metered.ca:443', username: 'studiosync', credential: 'REPLACE_ME' },
+  ],
+
+  // ── State ───────────────────────────────────────────────────
+  socket:        null,
+  peers:         new Map(),    // peerId → { pc, dataChannel, name, connected, role }
+  localStream:   null,
+  screenStream:  null,
+  role:          null,         // 'host' | 'remote'
+  sessionCode:   null,
+  connected:     false,
+  pingInterval:  null,
+  pingStart:     null,
+  // Recording
+  mediaRecorder: null,
+  recordChunks:  [],
+  recordingActive: false,
+  // Audio device
+  selectedDeviceId: null,
+  // Per-peer permissions
+  peerPerms:     new Map(),    // peerId → { transport, faders, mute, midi, screen }
+
+  // ── Connect to signaling server ───────────────────────────
+  connect(url) {
+    const sigUrl = url || this.SIGNALING_URL;
+    console.log('[WS] Connecting to signaling:', sigUrl);
+    this.socket = new WebSocket(sigUrl);
+
+    this.socket.onopen = () => {
+      console.log('[WS] Signaling connected');
+      this.connected = true;
+      this.startPing();
+    };
+
+    this.socket.onmessage = (e) => {
+      try { this.handleSignal(JSON.parse(e.data)); }
+      catch(err) { console.error('[WS] Parse error:', err); }
+    };
+
+    this.socket.onclose = () => {
+      console.log('[WS] Signaling disconnected');
+      this.connected = false;
+      clearInterval(this.pingInterval);
+      // Reconnect after 3s
+      setTimeout(() => this.connect(sigUrl), 3000);
+    };
+
+    this.socket.onerror = (e) => {
+      console.warn('[WS] Signaling error — running in demo mode');
+      this.connected = false;
+    };
+  },
+
+  // ── Send message to signaling server ─────────────────────
+  send(type, payload = {}) {
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
+      console.warn('[WS] Not connected — skipping:', type);
+      return false;
+    }
+    this.socket.send(JSON.stringify({ type, ...payload }));
+    return true;
+  },
+
+  // ── Handle incoming signaling messages ───────────────────
+  handleSignal(msg) {
+    switch (msg.type) {
+      case 'host:created':
+        state.sessionCode = msg.code;
+        document.getElementById('setupCodeBadge').textContent = msg.code;
+        document.getElementById('liveCodeBadge').textContent  = msg.code;
+        toast('✓ סשן נוצר: ' + msg.code, 'cyan');
+        break;
+
+      case 'remote:joined':
+        this.role        = 'remote';
+        state.sessionCode = msg.code;
+        document.getElementById('remoteCodeBadge').textContent = msg.code;
+        // Start WebRTC answer flow
+        if (msg.offer) this.handleOffer(msg.hostId, msg.offer);
+        break;
+
+      case 'peer:joined':
+        toast('🎧 ' + (msg.name || 'Remote') + ' הצטרף', 'green');
+        document.getElementById('remotePeerName').textContent = msg.name || 'Remote_01';
+        document.getElementById('sb-peers').innerHTML =
+          '<span style="color:var(--green)">●</span> 1 peer connected';
+        // Create offer for new peer
+        this.createPeerConnection(msg.peerId, true);
+        break;
+
+      case 'peer:left':
+        toast('⚠️ Remote התנתק', '');
+        this.closePeer(msg.peerId);
+        break;
+
+      case 'webrtc:create-offer':
+        this.createPeerConnection(msg.peerId, true);
+        break;
+
+      case 'webrtc:offer':
+        this.handleOffer(msg.peerId, msg.offer);
+        break;
+
+      case 'webrtc:answer':
+        this.handleAnswer(msg.peerId, msg.answer);
+        break;
+
+      case 'webrtc:ice':
+        this.handleICE(msg.peerId, msg.candidate);
+        break;
+
+      case 'chat:msg':
+        this.handleIncomingChat(msg);
+        break;
+
+      case 'session:perms':
+        this.applyPerms(msg);
+        break;
+
+      case 'session:ended':
+        toast('❌ הסשן הסתיים: ' + (msg.reason || 'Host disconnected'), '');
+        showScreen('screen-lobby');
+        break;
+
+      case 'ping:res':
+        if (this.pingStart) {
+          const lat = Date.now() - this.pingStart;
+          this.updateLatencyDisplay(lat);
+        }
+        break;
+
+      case 'talkback:start':
+        toast('🎙 Talkback פעיל (Remote)', '');
+        break;
+    }
+  },
+
+  // ── Create RTCPeerConnection ──────────────────────────────
+  createPeerConnection(peerId, isInitiator) {
+    console.log(`[RTC] Creating peer connection: ${peerId} (initiator: ${isInitiator})`);
+
+    const pc = new RTCPeerConnection({ iceServers: this.ICE_SERVERS });
+
+    // Audio: if host, add local audio track
+    if (this.localStream) {
+      this.localStream.getTracks().forEach(t => pc.addTrack(t, this.localStream));
+    }
+
+    // ICE candidates
+    pc.onicecandidate = ({ candidate }) => {
+      if (candidate) {
+        this.send('webrtc:ice', { peerId, candidate });
+      }
+    };
+
+    pc.oniceconnectionstatechange = () => {
+      console.log(`[RTC] ICE state: ${pc.iceConnectionState}`);
+      if (pc.iceConnectionState === 'connected') {
+        this.onPeerConnected(peerId);
+      }
+      if (['failed','disconnected','closed'].includes(pc.iceConnectionState)) {
+        this.closePeer(peerId);
+      }
+    };
+
+    // Remote audio (remote side receives host audio)
+    pc.ontrack = ({ streams }) => {
+      console.log('[RTC] Remote audio track received');
+      if (streams[0]) {
+        this.attachRemoteAudio(streams[0]);
+      }
+    };
+
+    // DataChannel for DAW commands
+    let dataChannel;
+    if (isInitiator) {
+      dataChannel = pc.createDataChannel('daw-control', {
+        ordered: true,
+        maxRetransmits: 3
+      });
+      this.setupDataChannel(dataChannel, peerId);
+    } else {
+      pc.ondatachannel = ({ channel }) => {
+        this.setupDataChannel(channel, peerId);
+      };
+    }
+
+    this.peers.set(peerId, { pc, dataChannel: null, connected: false });
+
+    // Create offer if initiator
+    if (isInitiator) {
+      pc.createOffer({
+        offerToReceiveAudio: true,
+        offerToReceiveVideo: false
+      })
+      .then(offer => pc.setLocalDescription(offer))
+      .then(() => this.send('webrtc:offer', { peerId, offer: pc.localDescription }))
+      .catch(err => console.error('[RTC] Offer error:', err));
+    }
+
+    return pc;
+  },
+
+  // ── Handle incoming offer ─────────────────────────────────
+  async handleOffer(peerId, offer) {
+    const pc = this.createPeerConnection(peerId, false).constructor === RTCPeerConnection
+      ? this.peers.get(peerId)?.pc || this.createPeerConnection(peerId, false)
+      : this.createPeerConnection(peerId, false);
+
+    await pc.setRemoteDescription(new RTCSessionDescription(offer));
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    this.send('webrtc:answer', { peerId, answer: pc.localDescription });
+  },
+
+  // ── Handle incoming answer ────────────────────────────────
+  async handleAnswer(peerId, answer) {
+    const peer = this.peers.get(peerId);
+    if (!peer) return;
+    await peer.pc.setRemoteDescription(new RTCSessionDescription(answer));
+  },
+
+  // ── Handle ICE candidate ──────────────────────────────────
+  async handleICE(peerId, candidate) {
+    const peer = this.peers.get(peerId);
+    if (!peer || !candidate) return;
+    try { await peer.pc.addIceCandidate(new RTCIceCandidate(candidate)); }
+    catch(e) { console.warn('[RTC] ICE error:', e); }
+  },
+
+  // ── Setup DataChannel ─────────────────────────────────────
+  setupDataChannel(channel, peerId) {
+    channel.onopen = () => {
+      console.log('[DC] DataChannel open with', peerId);
+      const peer = this.peers.get(peerId);
+      if (peer) peer.dataChannel = channel;
+      // Send full DAW state on connect
+      this.sendDAWSnapshot(channel);
+    };
+
+    channel.onclose = () => console.log('[DC] DataChannel closed:', peerId);
+
+    channel.onmessage = ({ data }) => {
+      try {
+        const msg = JSON.parse(data);
+        this.handleDAWMessage(msg, peerId);
+      } catch(e) {}
+    };
+
+    channel.onerror = (e) => console.warn('[DC] Error:', e);
+  },
+
+  // ── Peer fully connected ──────────────────────────────────
+  onPeerConnected(peerId) {
+    const peer = this.peers.get(peerId);
+    if (peer) peer.connected = true;
+    console.log('[RTC] ✓ Peer connected:', peerId);
+    updateStatusBar('connected');
+  },
+
+  // ── Close peer ────────────────────────────────────────────
+  closePeer(peerId) {
+    const peer = this.peers.get(peerId);
+    if (!peer) return;
+    peer.dataChannel?.close();
+    peer.pc.close();
+    this.peers.delete(peerId);
+    updateStatusBar('disconnected');
+  },
+
+  // ── Attach remote audio to hidden <audio> element ─────────
+  attachRemoteAudio(stream) {
+    let audio = document.getElementById('remoteAudioEl');
+    if (!audio) {
+      audio = document.createElement('audio');
+      audio.id = 'remoteAudioEl';
+      audio.autoplay = true;
+      audio.style.display = 'none';
+      document.body.appendChild(audio);
+    }
+    audio.srcObject = stream;
+
+    // Connect to Web Audio for meter analysis
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const src  = ctx.createMediaStreamSource(stream);
+    const anal = ctx.createAnalyser();
+    anal.fftSize = 256;
+    src.connect(anal);
+
+    const data = new Uint8Array(anal.frequencyBinCount);
+    function updateMeter() {
+      anal.getByteFrequencyData(data);
+      const avg = data.reduce((a,b) => a+b, 0) / data.length;
+      const pct = Math.min(100, avg * 1.5);
+      const l = document.getElementById('remoteMeterL');
+      const r = document.getElementById('remoteMeterR');
+      if (l) l.style.width = (pct + Math.random()*5) + '%';
+      if (r) r.style.width = (pct * 0.95 + Math.random()*5) + '%';
+      requestAnimationFrame(updateMeter);
+    }
+    updateMeter();
+
+    toast('🔊 Audio stream connected!', 'green');
+  },
+
+  // ── Capture local audio (host) from virtual device ────────
+  async captureLocalAudio() {
+    try {
+      // Request audio — browser will show device picker
+      // In production: use exact device matching virtual audio device
+      const constraints = {
+        audio: {
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl:  false,
+          sampleRate:       48000,
+          channelCount:     2,
+          // deviceId: { exact: virtualDeviceId } // set after enumeration
+        }
+      };
+
+      this.localStream = await navigator.mediaDevices.getUserMedia(constraints);
+      console.log('[Audio] ✓ Local audio captured');
+      toast('🎵 Audio capture aktiv', 'green');
+
+      // Connect to analyser for local meters
+      const ctx  = new (window.AudioContext || window.webkitAudioContext)();
+      const src  = ctx.createMediaStreamSource(this.localStream);
+      const anal = ctx.createAnalyser();
+      anal.fftSize = 256;
+      src.connect(anal);
+
+      const data = new Uint8Array(anal.frequencyBinCount);
+      function updateLocalMeter() {
+        anal.getByteFrequencyData(data);
+        const avg = data.reduce((a,b) => a+b, 0) / data.length;
+        const pct = Math.min(100, avg * 1.8);
+        const l = document.getElementById('meterL');
+        const r = document.getElementById('meterR');
+        if (l) l.style.width = (pct + Math.random()*4) + '%';
+        if (r) r.style.width = (pct * 0.96 + Math.random()*4) + '%';
+        requestAnimationFrame(updateLocalMeter);
+      }
+      updateLocalMeter();
+
+      return this.localStream;
+
+    } catch (err) {
+      console.warn('[Audio] Capture failed:', err.message);
+      if (err.name === 'NotAllowedError') {
+        toast('⚠️ נצטרך גישה לכרטיס הקול שלך — לחץ אישור', '');
+      } else if (err.name === 'NotFoundError') {
+        toast('⚠️ BlackHole / VB-Cable לא נמצא — נסה מיקרופון', '');
+      }
+      return null;
+    }
+  },
+
+  // ── List audio devices (for device picker) ────────────────
+  async listAudioDevices() {
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const audioIn  = devices.filter(d => d.kind === 'audioinput');
+      const audioOut = devices.filter(d => d.kind === 'audiooutput');
+
+      console.log('[Audio] Input devices:');
+      audioIn.forEach(d => console.log('  -', d.label || d.deviceId));
+
+      // Find virtual device
+      const virtual = audioIn.find(d =>
+        d.label.toLowerCase().includes('blackhole') ||
+        d.label.toLowerCase().includes('vb-cable') ||
+        d.label.toLowerCase().includes('virtual')
+      );
+
+      if (virtual) {
+        console.log('[Audio] ✓ Virtual device found:', virtual.label);
+        return virtual.deviceId;
+      }
+      return null;
+    } catch(e) {
+      console.warn('[Audio] Device enum failed:', e);
+      return null;
+    }
+  },
+
+  // ── Send DAW snapshot to new peer ─────────────────────────
+  sendDAWSnapshot(channel) {
+    if (channel?.readyState !== 'open') return;
+    const snapshot = {
+      type:    'snapshot',
+      bpm:     state.bpm,
+      isPlaying: state.isPlaying,
+      tracks:  state.tracks.map((t, i) => ({
+        index: i, name: t.name, type: t.type,
+        vol: t.vol, muted: t.muted, solo: t.solo, armed: t.armed, color: t.color
+      }))
+    };
+    channel.send(JSON.stringify(snapshot));
+  },
+
+  // ── Send DAW command to all peers (host→remote) ───────────
+  sendToAll(payload) {
+    const msg = JSON.stringify(payload);
+    for (const [, peer] of this.peers) {
+      if (peer.dataChannel?.readyState === 'open') {
+        peer.dataChannel.send(msg);
+      }
+    }
+  },
+
+  // ── Send command to host (remote→host) ────────────────────
+  sendToHost(payload) {
+    // In remote mode, there's one peer (the host)
+    const [, peer] = this.peers.entries().next().value || [];
+    if (peer?.dataChannel?.readyState === 'open') {
+      peer.dataChannel.send(JSON.stringify(payload));
+    } else {
+      // Fallback to signaling
+      this.send('daw:state', payload);
+    }
+  },
+
+  // ── Handle DAW message from peer ──────────────────────────
+  handleDAWMessage(msg, peerId) {
+    switch (msg.type) {
+      case 'snapshot':
+        applyDAWSnapshot(msg);
+        break;
+      case 'transport':
+        applyRemoteTransport(msg);
+        break;
+      case 'bpm':
+        state.bpm = msg.value;
+        document.getElementById('bpmDisplay')?.     setAttribute('data-val', msg.value);
+        document.getElementById('remoteBpmDisplay')?.setAttribute('data-val', msg.value);
+        document.getElementById('bpmDisplay')      && (document.getElementById('bpmDisplay').textContent = msg.value);
+        document.getElementById('remoteBpmDisplay') && (document.getElementById('remoteBpmDisplay').textContent = msg.value);
+        break;
+      case 'track':
+        applyRemoteTrackChange(msg);
+        break;
+      case 'beat':
+        applyBeat(msg.beat);
+        break;
+      case 'audio_level':
+        break;
+      // Remote sends control commands to host
+      case 'cmd':
+        if (this.role === 'host') {
+          applyHostCommand(msg, peerId);
+        }
+        break;
+    }
+  },
+
+  // ── Handle incoming chat from signaling ───────────────────
+  handleIncomingChat(msg) {
+    const isRemote = msg.role === 'remote';
+    const areaId   = this.role === 'host' ? 'chatArea' : 'remoteChatArea';
+    addChatMessage(areaId, msg.from, msg.text, isRemote);
+  },
+
+  // ── Apply permissions from host ───────────────────────────
+  applyPerms(perms) {
+    // Update remote UI based on what host allows
+    const permMap = {
+      transport: ['remoteBtnPlay', 'remotePosDisplay'],
+      faders:    [],
+    };
+    toast('🔒 הרשאות עודכנו מה-Host', '');
+  },
+
+  // ── Ping / latency measurement ────────────────────────────
+  startPing() {
+    this.pingInterval = setInterval(() => {
+      this.pingStart = Date.now();
+      this.send('ping:req', { ts: this.pingStart });
+    }, 3000);
+  },
+
+  updateLatencyDisplay(ms) {
+    const el  = document.getElementById('latencyNum');
+    const sb  = document.getElementById('sb-latency');
+    const bar = document.getElementById('latencyBar');
+    const rel = document.getElementById('remoteLatency');
+    if (el)  el.textContent  = ms;
+    if (rel) rel.textContent = ms;
+    if (sb)  sb.textContent  = `● Latency: ${ms}ms`;
+    if (bar) bar.style.width = Math.min(ms, 100) + '%';
+
+    // Color based on latency
+    const color = ms < 30 ? 'var(--green)' : ms < 80 ? 'var(--amber)' : 'var(--red)';
+    if (el) el.style.color = color;
+  },
+};
+
+/* ============================================================
+   DAW STATE SYNC — apply messages from peers
+   ============================================================ */
+function applyDAWSnapshot(snap) {
+  state.bpm      = snap.bpm;
+  state.isPlaying = snap.isPlaying;
+  if (snap.tracks) state.tracks = snap.tracks;
+
+  ['bpmDisplay','remoteBpmDisplay'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.textContent = snap.bpm;
+  });
+
+  const container = RTC.role === 'remote' ? 'remoteTrackArea' : 'trackArea';
+  if (document.getElementById(container)) renderTracks(container, RTC.role === 'remote');
+  logDAW('SNAPSHOT received — ' + snap.tracks?.length + ' tracks');
+}
+
+function applyRemoteTransport(msg) {
+  state.isPlaying = msg.isPlaying;
+  ['btnPlay','remoteBtnPlay'].forEach(id => {
+    const b = document.getElementById(id);
+    if (b) b.textContent = msg.isPlaying ? '⏸' : '▶';
+  });
+}
+
+function applyRemoteTrackChange(msg) {
+  if (!state.tracks[msg.index]) return;
+  state.tracks[msg.index][msg.param] = msg.value;
+  const container = RTC.role === 'remote' ? 'remoteTrackArea' : 'trackArea';
+  renderTracks(container, RTC.role === 'remote');
+}
+
+function applyBeat(beat) {
+  // Flash beat indicator
+  const pos = document.getElementById('posDisplay');
+  if (pos) pos.style.color = 'var(--cyan)';
+  setTimeout(() => { if (pos) pos.style.color = ''; }, 80);
+}
+
+function applyHostCommand(cmd, peerId) {
+  // Host receives control from remote — apply to DAW
+  logDAW(`CMD [${cmd.action}] from remote`);
+  switch (cmd.action) {
+    case 'play':   togglePlay();          break;
+    case 'stop':   if (state.isPlaying) togglePlay(); break;
+    case 'bpm':    changeBPM(cmd.value - state.bpm); break;
+    case 'volume': onFader(cmd.index, cmd.value, 'trackArea'); break;
+    case 'mute':   toggleMute(cmd.index, 'trackArea');  break;
+    case 'solo':   toggleSolo(cmd.index, 'trackArea');  break;
+  }
+}
+
+function updateStatusBar(status) {
+  const dot = document.getElementById('setupStatusDot');
+  const lbl = document.getElementById('setupStatusLabel');
+  if (status === 'connected') {
+    if (dot) dot.className = 'status-dot live';
+    if (lbl) lbl.textContent = 'LIVE';
+  } else {
+    if (dot) dot.className = 'status-dot waiting';
+    if (lbl) lbl.textContent = 'ממתין';
+  }
+}
+
+/* ============================================================
+   OVERRIDE HOST/REMOTE ACTIONS TO USE WEBRTC
+   ============================================================ */
+
+// Override startHost to connect to real signaling
+const _origStartHost = startHost;
+window.startHost = function() {
+  _origStartHost();
+  // Connect to signaling and create session
+  RTC.role = 'host';
+  if (!RTC.connected) RTC.connect();
+
+  // After connect, create session
+  const tryCreate = () => {
+    if (RTC.connected) {
+      RTC.send('host:create', {
+        daw:       state.selectedDAW,
+        audioTool: state.selectedAudioTool
+      });
+    } else {
+      setTimeout(tryCreate, 500);
+    }
+  };
+  setTimeout(tryCreate, 1000);
+};
+
+// Override joinSession
+const _origJoin = window.joinSession;
+window.joinSession = function() {
+  const code = document.getElementById('joinCode').value.replace('-','').toUpperCase();
+  if (code.length < 5) { toast('⚠️ נראה שחסר קוד — בוא ננסה שוב', ''); return; }
+
+  RTC.role = 'remote';
+  state.sessionCode = document.getElementById('joinCode').value;
+  document.getElementById('remoteCodeBadge').textContent = state.sessionCode;
+
+  if (!RTC.connected) {
+    RTC.connect();
+    setTimeout(() => doJoin(code), 1500);
+  } else {
+    doJoin(code);
+  }
+
+  showScreen('screen-remote');
+  initRemoteTracks();
+  startAudioMeterSim('remoteMeterL', 'remoteMeterR');
+  startPositionSim(true);
+};
+
+function doJoin(code) {
+  RTC.send('remote:join', {
+    code,
+    name: 'Remote_' + Math.floor(Math.random() * 100)
+  });
+}
+
+// Override launchSession to capture audio
+const _origLaunch = launchSession;
+window.launchSession = async function() {
+  // Capture local audio from virtual device
+  toast('🎵 מפעיל Audio Capture...', '');
+  await RTC.captureLocalAudio();
+  _origLaunch();
+};
+
+// Override togglePlay to sync via DataChannel
+const _origTogglePlay = togglePlay;
+window.togglePlay = function() {
+  _origTogglePlay();
+  if (RTC.role === 'host') {
+    RTC.sendToAll({ type: 'transport', isPlaying: state.isPlaying });
+    logDAW('SYNC play → remote');
+  } else {
+    RTC.sendToHost({ type: 'cmd', action: 'play', value: !state.isPlaying });
+  }
+};
+
+// Override changeBPM to sync
+const _origChangeBPM = changeBPM;
+window.changeBPM = function(delta) {
+  _origChangeBPM(delta);
+  if (RTC.role === 'host') {
+    RTC.sendToAll({ type: 'bpm', value: state.bpm });
+  } else {
+    RTC.sendToHost({ type: 'cmd', action: 'bpm', value: state.bpm + delta });
+  }
+};
+
+// Override onFader to sync
+const _origFader = onFader;
+window.onFader = function(i, val, container) {
+  _origFader(i, val, container);
+  if (RTC.role === 'host') {
+    RTC.sendToAll({ type: 'track', index: i, param: 'vol', value: parseInt(val) });
+  } else {
+    RTC.sendToHost({ type: 'cmd', action: 'volume', index: i, value: parseInt(val) });
+  }
+};
+
+// Override toggleMute to sync
+const _origMute = toggleMute;
+window.toggleMute = function(i, container) {
+  _origMute(i, container);
+  if (RTC.role === 'host') {
+    RTC.sendToAll({ type: 'track', index: i, param: 'muted', value: state.tracks[i]?.muted });
+  } else {
+    RTC.sendToHost({ type: 'cmd', action: 'mute', index: i });
+  }
+};
+
+// Override chat to use signaling
+const _origSendChat = sendChat;
+window.sendChat = function() {
+  const input = document.getElementById('chatInput');
+  const text  = input.value.trim();
+  if (!text) return;
+  addChatMessage('chatArea', 'Host', text, false);
+  input.value = '';
+  RTC.send('chat:msg', { text });
+};
+
+window.sendRemoteChat = function() {
+  const input = document.getElementById('remoteChatInput');
+  const text  = input.value.trim();
+  if (!text) return;
+  addChatMessage('remoteChatArea', 'Remote', text, true);
+  input.value = '';
+  RTC.send('chat:msg', { text });
+};
+
+// Override talkback
+window.startTalkback = function() {
+  state.talkbackActive = true;
+  document.querySelectorAll('.talkback-btn').forEach(b => b.classList.add('active'));
+  RTC.send('talkback:start');
+};
+window.stopTalkback = function() {
+  state.talkbackActive = false;
+  document.querySelectorAll('.talkback-btn').forEach(b => b.classList.remove('active'));
+  RTC.send('talkback:stop');
+};
+
+// Override updatePerms
+window.updatePerms = function() {
+  const perms = {
+    transport: document.getElementById('perm-transport')?.checked,
+    faders:    document.getElementById('perm-faders')?.checked,
+    mute:      document.getElementById('perm-mute')?.checked,
+    midi:      document.getElementById('perm-midi')?.checked,
+    screen:    document.getElementById('perm-screen')?.checked,
+  };
+  RTC.send('session:perms', perms);
+  toast('🔒 הרשאות עודכנו', 'cyan');
+};
+
+/* ============================================================
+   MIDI INPUT — Web MIDI API real implementation
+   ============================================================ */
+window.activateMIDI = async function() {
+  if (!navigator.requestMIDIAccess) {
+    toast('⚠️ Web MIDI לא נתמך — נסה Chrome/Edge', ''); return;
+  }
+  try {
+    const access = await navigator.requestMIDIAccess({ sysex: false });
+    const inputs = [...access.inputs.values()];
+
+    if (inputs.length === 0) { toast('⚠️ לא נמצאו MIDI Controllers', ''); return; }
+
+    inputs.forEach(input => {
+      input.onmidimessage = (msg) => {
+        const [status, note, vel] = msg.data;
+        const ch      = status & 0x0F;
+        const msgType = status & 0xF0;
+        const isNoteOn  = msgType === 0x90 && vel > 0;
+        const isNoteOff = msgType === 0x80 || (msgType === 0x90 && vel === 0);
+        const isCC      = msgType === 0xB0;
+
+        // Send via DataChannel to host
+        if (RTC.role === 'remote') {
+          RTC.sendToHost({
+            type: 'cmd', action: 'midi',
+            status, note, velocity: vel, channel: ch,
+            isNoteOn, isNoteOff, isCC
+          });
+        }
+
+        // Log
+        if (isNoteOn)  logDAW(`MIDI NoteOn  Ch${ch+1} Note${note} vel=${vel}`);
+        if (isNoteOff) logDAW(`MIDI NoteOff Ch${ch+1} Note${note}`);
+        if (isCC)      logDAW(`MIDI CC Ch${ch+1} ctrl=${note} val=${vel}`);
+      };
+    });
+
+    // Also handle CC for fader control
+    access.onstatechange = (e) => {
+      toast(e.port.state === 'connected'
+        ? '🎹 MIDI: ' + e.port.name
+        : '⚠️ MIDI נותק: ' + e.port.name, '');
+    };
+
+    toast(`🎹 MIDI פעיל — ${inputs.length} controller(s): ${inputs.map(i=>i.name).join(', ')}`, 'green');
+    document.getElementById('midiStatus').textContent = `${inputs.length} ports ✓`;
+    document.getElementById('midiStatus').className   = 'conn-item-status conn-ok';
+
+  } catch(err) {
+    toast('⚠️ MIDI: ' + err.message, '');
+  }
+};
+
+/* ============================================================
+   AUDIO DEVICE PICKER
+   ============================================================ */
+async function showAudioDevicePicker() {
+  const deviceId = await RTC.listAudioDevices();
+  if (deviceId) {
+    toast('✓ Virtual audio device detected', 'green');
+  } else {
+    toast('⚠️ BlackHole/VB-Cable לא נמצא — שימוש ב-Default', '');
+  }
+}
+
+/* ============================================================
+   SCREEN SHARE (optional — for DAW mirror)
+   ============================================================ */
+async function startScreenShare() {
+  try {
+    const stream = await navigator.mediaDevices.getDisplayMedia({
+      video: { frameRate: 30, width: 1920, height: 1080 },
+      audio: false
+    });
+
+    // Add video track to all peer connections
+    const videoTrack = stream.getVideoTracks()[0];
+    for (const [, peer] of RTC.peers) {
+      peer.pc.addTrack(videoTrack, stream);
+    }
+
+    toast('🖥 Screen Share פעיל', 'green');
+    logDAW('SCREEN SHARE started');
+    return stream;
+  } catch(err) {
+    if (err.name !== 'NotAllowedError') toast('⚠️ Screen share: ' + err.message, '');
+    return null;
+  }
+}
+
+/* ============================================================
+   INIT — Connect to signaling on page load
+   ============================================================ */
+initWaveCanvas();
+
+// Pre-connect to signaling server in background
+// (reduces latency when user actually starts/joins a session)
+setTimeout(() => {
+  RTC.connect();
+  console.log('[StudioSync] Pre-connecting to signaling server...');
+}, 500);
+
+// Expose debug interface
+window.SS = {
+  RTC, state,
+  listDevices:    () => RTC.listAudioDevices(),
+  startScreenShare,
+  showAudioDevicePicker,
+  sendSnapshot:   () => RTC.sendDAWSnapshot([...RTC.peers.values()][0]?.dataChannel),
+};
+
+console.log('%c🎛 StudioSync v0.2.0', 'color:#00d4ff;font-size:16px;font-weight:bold');
+console.log('%cPhase 1: TURN + Multi-peer + Screen Share + Recording + Device Picker', 'color:#5a7090');
+
+/* ============================================================
+   PHASE 1 — MULTI-PEER MESH
+   Up to 4 peers, each with their own PC + DataChannel + audio
+   ============================================================ */
+
+// Peer registry UI
+function renderPeerList() {
+  const peersArr = [...RTC.peers.values()];
+  const count = peersArr.length;
+
+  // Update topbar chip count
+  const chip = document.getElementById('remotePeerName');
+  if (chip) {
+    if (count === 0) chip.textContent = 'ממתין...';
+    else if (count === 1) chip.textContent = peersArr[0].name || 'Remote_01';
+    else chip.textContent = count + ' peers';
+  }
+
+  // Update status bar
+  const sb = document.getElementById('sb-peers');
+  if (sb) sb.innerHTML = `<span style="color:${count > 0 ? 'var(--green)' : 'var(--muted)'}">●</span> ${count} peer${count !== 1 ? 's' : ''}`;
+
+  // Render peer chips in host topbar
+  const chipArea = document.getElementById('peerChipArea');
+  if (!chipArea) return;
+  chipArea.innerHTML = '';
+  peersArr.forEach(p => {
+    const quality = getPeerQuality(p);
+    const chip = document.createElement('div');
+    chip.className = 'peer-chip';
+    chip.innerHTML = `
+      <div class="status-dot" style="background:${quality.color};box-shadow:0 0 4px ${quality.color}"></div>
+      <span>${p.name || 'Remote'}</span>
+      <span style="font-family:var(--mono);font-size:10px;color:var(--muted)">${quality.ms}ms</span>
+    `;
+    chip.title = `${p.name} · ${quality.label} · Click to manage`;
+    chip.onclick = () => showPeerModal(p);
+    chipArea.appendChild(chip);
+  });
+}
+
+function getPeerQuality(peer) {
+  const ms = peer.latency || 0;
+  if (ms === 0 || !peer.connected) return { color: 'var(--muted)', label: 'Connecting', ms: '—' };
+  if (ms < 30)  return { color: 'var(--green)',  label: 'Excellent', ms };
+  if (ms < 80)  return { color: 'var(--amber)',  label: 'Good',      ms };
+  if (ms < 150) return { color: '#ff8c00',       label: 'Fair',      ms };
+  return           { color: 'var(--red)',   label: 'Poor',      ms };
+}
+
+// Per-peer modal — manage individual remote user
+function showPeerModal(peer) {
+  const perms = RTC.peerPerms.get(peer.id) || { transport:true, faders:true, mute:false, midi:false, screen:false };
+  const overlay = document.getElementById('modalOverlay');
+  const content = document.getElementById('modalContent');
+  content.innerHTML = `
+    <h3>🎧 ${peer.name || 'Remote Peer'}</h3>
+    <p style="direction:ltr;text-align:left;font-family:var(--mono);font-size:11px;color:var(--dim)">
+      ID: ${peer.id?.slice(0,16)}... · Latency: ${peer.latency || '—'}ms
+    </p>
+    <div style="display:flex;flex-direction:column;gap:10px;margin:16px 0">
+      ${['transport','faders','mute','midi','screen'].map(k => `
+        <label style="display:flex;align-items:center;justify-content:space-between;font-size:13px;cursor:pointer">
+          <span>${{ transport:'Transport (Play/Stop/BPM)', faders:'Faders & Pan', mute:'Mute / Solo', midi:'MIDI Input', screen:'Screen View' }[k]}</span>
+          <input type="checkbox" id="pp-${k}" ${perms[k]?'checked':''} style="width:16px;height:16px;cursor:pointer">
+        </label>`).join('')}
+    </div>
+    <div style="display:flex;gap:10px">
+      <button class="btn btn-cyan" style="flex:1" onclick="savePeerPerms('${peer.id}')">✓ שמור הרשאות</button>
+      <button class="btn btn-red" onclick="kickPeer('${peer.id}')">✕ Kick</button>
+      <button class="btn btn-ghost" onclick="closeModal()">סגור</button>
+    </div>
+  `;
+  overlay.classList.add('visible');
+}
+
+function savePeerPerms(peerId) {
+  const perms = {};
+  ['transport','faders','mute','midi','screen'].forEach(k => {
+    perms[k] = document.getElementById('pp-' + k)?.checked || false;
+  });
+  RTC.peerPerms.set(peerId, perms);
+  // Send to that specific peer via their DataChannel
+  const peer = RTC.peers.get(peerId);
+  if (peer?.dataChannel?.readyState === 'open') {
+    peer.dataChannel.send(JSON.stringify({ type: 'perms', perms }));
+  }
+  toast('✓ הרשאות נשמרו עבור ' + (peer?.name || peerId.slice(0,8)), 'cyan');
+  closeModal();
+}
+
+function kickPeer(peerId) {
+  const peer = RTC.peers.get(peerId);
+  if (!peer) return;
+  // Send kick message via DataChannel
+  if (peer.dataChannel?.readyState === 'open') {
+    peer.dataChannel.send(JSON.stringify({ type: 'kicked', reason: 'Host removed you from session' }));
+  }
+  setTimeout(() => {
+    peer.pc?.close();
+    RTC.peers.delete(peerId);
+    renderPeerList();
+    toast('✓ Peer הוסר מהסשן', '');
+  }, 300);
+  closeModal();
+}
+
+/* ============================================================
+   PHASE 1 — AUDIO DEVICE PICKER
+   ============================================================ */
+
+async function showAudioDevicePicker() {
+  // Must request permission first to get device labels
+  try {
+    const tmp = await navigator.mediaDevices.getUserMedia({ audio: true });
+    tmp.getTracks().forEach(t => t.stop());
+  } catch(e) {}
+
+  const devices = await navigator.mediaDevices.enumerateDevices();
+  const audioInputs = devices.filter(d => d.kind === 'audioinput');
+
+  const overlay = document.getElementById('modalOverlay');
+  const content = document.getElementById('modalContent');
+
+  const detectType = (label) => {
+    const l = label.toLowerCase();
+    if (l.includes('blackhole') || l.includes('vb-cable') || l.includes('virtual') || l.includes('loopback')) return '🎛 Virtual';
+    if (l.includes('microphone') || l.includes('mic')) return '🎙 Mic';
+    if (l.includes('built-in') || l.includes('internal')) return '💻 Built-in';
+    return '🔊 Audio';
+  };
+
+  content.innerHTML = `
+    <h3>🎵 בחר מכשיר שמע</h3>
+    <p>בחר את ה-Virtual Audio Device (BlackHole / VB-Cable) כדי לשדר את שמע ה-DAW לשותף.</p>
+    <div style="display:flex;flex-direction:column;gap:6px;max-height:300px;overflow-y:auto;margin:16px 0">
+      ${audioInputs.length === 0
+        ? '<div style="color:var(--muted);text-align:center;padding:20px;font-family:var(--mono);font-size:12px">לא נמצאו מכשירי אודיו</div>'
+        : audioInputs.map(d => `
+        <div onclick="selectAudioDevice('${d.deviceId}', this)"
+             style="display:flex;align-items:center;gap:12px;padding:12px 14px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;cursor:pointer;transition:border-color 0.15s"
+             onmouseover="this.style.borderColor='var(--border2)'" onmouseout="if(!this.classList.contains('sel'))this.style.borderColor='var(--border)'">
+          <span style="font-size:18px">${detectType(d.label)}</span>
+          <div>
+            <div style="font-size:13px;font-weight:600;color:var(--bright)">${d.label || 'Unknown Device'}</div>
+            <div style="font-family:var(--mono);font-size:10px;color:var(--muted)">${d.deviceId.slice(0,24)}...</div>
+          </div>
+          ${d.label.toLowerCase().includes('blackhole') || d.label.toLowerCase().includes('vb-cable')
+            ? '<span style="margin-right:auto;font-family:var(--mono);font-size:10px;padding:2px 8px;background:var(--green-dim);border:1px solid rgba(0,232,122,0.3);border-radius:4px;color:var(--green)">RECOMMENDED</span>'
+            : ''}
+        </div>`).join('')}
+    </div>
+    <div style="display:flex;gap:10px">
+      <button class="btn btn-cyan btn-full" id="confirmDeviceBtn" onclick="confirmAudioDevice()" disabled>✓ בחר מכשיר</button>
+      <button class="btn btn-ghost" onclick="closeModal()">ביטול</button>
+    </div>
+  `;
+  overlay.classList.add('visible');
+}
+
+let _pendingDeviceId = null;
+
+function selectAudioDevice(deviceId, el) {
+  document.querySelectorAll('#modalContent [onclick^="selectAudioDevice"]').forEach(e => {
+    e.classList.remove('sel');
+    e.style.borderColor = 'var(--border)';
+    e.style.background = 'var(--bg2)';
+  });
+  el.classList.add('sel');
+  el.style.borderColor = 'var(--cyan)';
+  el.style.background = 'var(--cyan-dim)';
+  _pendingDeviceId = deviceId;
+  document.getElementById('confirmDeviceBtn').disabled = false;
+  document.getElementById('confirmDeviceBtn').style.opacity = '1';
+}
+
+async function confirmAudioDevice() {
+  if (!_pendingDeviceId) return;
+  RTC.selectedDeviceId = _pendingDeviceId;
+  closeModal();
+  toast('🎵 מכשיר נבחר — מפעיל capture...', 'cyan');
+
+  // Re-capture with the selected device
+  if (RTC.localStream) {
+    RTC.localStream.getTracks().forEach(t => t.stop());
+  }
+  await RTC.captureLocalAudio();
+
+  // Replace audio tracks in all existing peer connections
+  if (RTC.localStream) {
+    const audioTrack = RTC.localStream.getAudioTracks()[0];
+    for (const [, peer] of RTC.peers) {
+      const sender = peer.pc?.getSenders().find(s => s.track?.kind === 'audio');
+      if (sender && audioTrack) {
+        await sender.replaceTrack(audioTrack);
+        logDAW('AUDIO TRACK REPLACED → ' + (peer.name || peer.id?.slice(0,8)));
+      }
+    }
+  }
+  logDAW('DEVICE: ' + (_pendingDeviceId.slice(0, 20) + '...'));
+}
+
+/* ============================================================
+   PHASE 1 — SCREEN SHARE PANEL
+   Full screen share with video track injection into peers
+   ============================================================ */
+
+let screenVideoEl = null;
+
+async function startScreenShare() {
+  if (RTC.screenStream) {
+    stopScreenShare();
+    return;
+  }
+
+  try {
+    RTC.screenStream = await navigator.mediaDevices.getDisplayMedia({
+      video: { frameRate: { ideal: 30 }, width: { ideal: 1920 } },
+      audio: false   // we already handle audio separately
+    });
+
+    const videoTrack = RTC.screenStream.getVideoTracks()[0];
+
+    // Handle user stopping share via browser UI
+    videoTrack.onended = () => stopScreenShare();
+
+    // Add video track to all peer connections
+    for (const [, peer] of RTC.peers) {
+      try { peer.pc.addTrack(videoTrack, RTC.screenStream); }
+      catch(e) {}
+    }
+
+    // Show local preview
+    showScreenPreview(RTC.screenStream);
+    toast('🖥 Screen Share פעיל — שותף רואה את המסך', 'green');
+    logDAW('SCREEN SHARE START');
+    renderScreenShareBtn(true);
+
+  } catch(err) {
+    if (err.name !== 'NotAllowedError') toast('⚠️ Screen share: ' + err.message, '');
+  }
+}
+
+function stopScreenShare() {
+  if (!RTC.screenStream) return;
+  RTC.screenStream.getTracks().forEach(t => t.stop());
+  RTC.screenStream = null;
+  hideScreenPreview();
+  toast('🖥 Screen Share הופסק', '');
+  logDAW('SCREEN SHARE STOP');
+  renderScreenShareBtn(false);
+}
+
+function showScreenPreview(stream) {
+  let preview = document.getElementById('screenPreviewPanel');
+  if (!preview) {
+    preview = document.createElement('div');
+    preview.id = 'screenPreviewPanel';
+    preview.style.cssText = `
+      position:fixed; bottom:40px; right:20px; width:240px;
+      background:var(--bg1); border:1px solid var(--cyan);
+      border-radius:10px; overflow:hidden; z-index:500;
+      box-shadow:0 0 20px rgba(0,212,255,0.2);
+    `;
+    preview.innerHTML = `
+      <div style="padding:6px 10px;background:rgba(0,212,255,0.1);font-family:var(--mono);font-size:10px;color:var(--cyan);display:flex;justify-content:space-between;align-items:center">
+        <span>🖥 SCREEN SHARE</span>
+        <span onclick="stopScreenShare()" style="cursor:pointer;color:var(--red)">✕ Stop</span>
+      </div>
+      <video id="screenPreviewVideo" autoplay muted style="width:100%;display:block;background:#000"></video>
+    `;
+    document.body.appendChild(preview);
+  }
+  const vid = document.getElementById('screenPreviewVideo');
+  if (vid) vid.srcObject = stream;
+}
+
+function hideScreenPreview() {
+  const el = document.getElementById('screenPreviewPanel');
+  if (el) el.remove();
+}
+
+function renderScreenShareBtn(active) {
+  const btn = document.getElementById('screenShareBtn');
+  if (!btn) return;
+  btn.style.background = active ? 'var(--cyan)' : '';
+  btn.style.color = active ? '#000' : '';
+  btn.title = active ? 'Stop Screen Share' : 'Start Screen Share';
+}
+
+/* ============================================================
+   PHASE 1 — SESSION RECORDING
+   Records the mixed audio output + DAW event log
+   Saves as WebM audio file + JSON event log
+   ============================================================ */
+
+const Recording = {
+  mediaRecorder: null,
+  chunks:        [],
+  events:        [],
+  startTime:     null,
+  active:        false,
+
+  start() {
+    if (this.active) { this.stop(); return; }
+    if (!RTC.localStream) {
+      toast('⚠️ אין audio stream להקלטה', ''); return;
+    }
+
+    this.chunks  = [];
+    this.events  = [];
+    this.startTime = Date.now();
+
+    try {
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus' : 'audio/webm';
+
+      this.mediaRecorder = new MediaRecorder(RTC.localStream, { mimeType, audioBitsPerSecond: 320000 });
+      this.mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) this.chunks.push(e.data); };
+      this.mediaRecorder.onstop = () => this.save();
+      this.mediaRecorder.start(1000); // collect every second
+      this.active = true;
+
+      this.logEvent('RECORD_START');
+      renderRecordingUI(true);
+      toast('⏺ ההקלטה התחילה', 'green');
+      logDAW('RECORDING START');
+
+      // Log DAW events during recording
+      this._origLog = window.logDAW;
+      window.logDAW = (msg) => {
+        this._origLog(msg);
+        this.logEvent(msg);
+      };
+
+    } catch(err) {
+      toast('⚠️ Recording: ' + err.message, '');
+    }
+  },
+
+  stop() {
+    if (!this.active) return;
+    this.active = false;
+    this.logEvent('RECORD_STOP');
+
+    if (this.mediaRecorder?.state !== 'inactive') {
+      this.mediaRecorder.stop();
+    }
+
+    // Restore original logDAW
+    if (this._origLog) window.logDAW = this._origLog;
+
+    renderRecordingUI(false);
+    toast('⏹ הקלטה הסתיימה — שומר את הקובץ...', '');
+    logDAW('RECORDING STOP');
+  },
+
+  logEvent(msg) {
+    this.events.push({ ts: Date.now() - this.startTime, msg });
+  },
+
+  save() {
+    const duration = Date.now() - this.startTime;
+    const blob = new Blob(this.chunks, { type: 'audio/webm' });
+    const ts   = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    const name = `StudioSync-${state.sessionCode}-${ts}`;
+
+    // Save audio
+    const audioUrl = URL.createObjectURL(blob);
+    const audioLink = document.createElement('a');
+    audioLink.href     = audioUrl;
+    audioLink.download = name + '.webm';
+    audioLink.click();
+    URL.revokeObjectURL(audioUrl);
+
+    // Save event log as JSON
+    const logData = {
+      session:   state.sessionCode,
+      daw:       state.selectedDAW,
+      date:      new Date().toISOString(),
+      duration:  Math.round(duration / 1000) + 's',
+      bpm:       state.bpm,
+      tracks:    state.tracks.map(t => t.name),
+      events:    this.events
+    };
+    const jsonUrl  = URL.createObjectURL(new Blob([JSON.stringify(logData, null, 2)], { type: 'application/json' }));
+    const jsonLink = document.createElement('a');
+    jsonLink.href     = jsonUrl;
+    jsonLink.download = name + '-log.json';
+    jsonLink.click();
+    URL.revokeObjectURL(jsonUrl);
+
+    toast(`✓ נשמר: ${name}.webm + log`, 'green');
+    logDAW('SAVED: ' + name + '.webm');
+    this.chunks = [];
+    this.events = [];
+  }
+};
+
+function renderRecordingUI(active) {
+  const btn = document.getElementById('recBtn');
+  if (!btn) return;
+  btn.style.background = active ? '#ff0000' : 'var(--red)';
+  btn.style.boxShadow  = active ? '0 0 16px rgba(255,0,0,0.6)' : '';
+  btn.title = active ? 'Stop Recording' : 'Record Session';
+
+  // Show recording timer
+  let timer = document.getElementById('recTimer');
+  if (active) {
+    if (!timer) {
+      timer = document.createElement('div');
+      timer.id = 'recTimer';
+      timer.style.cssText = 'font-family:var(--mono);font-size:11px;color:var(--red);display:flex;align-items:center;gap:5px;';
+      timer.innerHTML = '<span style="width:6px;height:6px;background:var(--red);border-radius:50%;animation:blink 1s infinite;display:inline-block"></span><span id="recTimerVal">00:00</span>';
+      document.querySelector('.center-toolbar')?.appendChild(timer);
+    }
+    const start = Date.now();
+    Recording._timerInterval = setInterval(() => {
+      const s = Math.floor((Date.now() - start) / 1000);
+      const mm = String(Math.floor(s / 60)).padStart(2,'0');
+      const ss = String(s % 60).padStart(2,'0');
+      const el = document.getElementById('recTimerVal');
+      if (el) el.textContent = mm + ':' + ss;
+    }, 1000);
+  } else {
+    clearInterval(Recording._timerInterval);
+    timer?.remove();
+  }
+}
+
+// Hook the record button
+const _origToggleRec = window.toggleRec;
+window.toggleRec = function() {
+  Recording.active ? Recording.stop() : Recording.start();
+  // Also tell peers
+  RTC.sendToAll({ type: 'recording', active: Recording.active });
+};
+
+/* ============================================================
+   PHASE 1 — INJECT NEW UI ELEMENTS
+   Screen share btn, device picker btn, peer chip area,
+   connection quality badge
+   ============================================================ */
+
+function injectPhase1UI() {
+  // 1. Add screen share + device picker buttons to host toolbar
+  const toolbar = document.querySelector('#screen-host .center-toolbar');
+  if (toolbar) {
+    const btns = document.createElement('div');
+    btns.style.cssText = 'display:flex;gap:6px;margin-right:0;margin-left:auto';
+    btns.innerHTML = `
+      <div id="screenShareBtn" class="tc-btn" onclick="startScreenShare()" title="Screen Share" style="width:auto;padding:0 10px;font-size:11px;font-family:var(--mono)">
+        🖥 Share
+      </div>
+      <div class="tc-btn" onclick="showAudioDevicePicker()" title="Audio Device Picker" style="width:auto;padding:0 10px;font-size:11px;font-family:var(--mono)">
+        🎵 Device
+      </div>
+      <div id="recBtn" class="tc-btn rec" onclick="toggleRec()" title="Record Session" style="width:auto;padding:0 10px;font-size:11px;font-family:var(--mono)">
+        ⏺ Rec
+      </div>
+    `;
+    // Remove the existing right-margin auto div
+    const existing = toolbar.querySelector('[style*="margin-right:auto"]');
+    if (existing) existing.remove();
+    toolbar.appendChild(btns);
+  }
+
+  // 2. Add peer chip area to host topbar
+  const topbarLeft = document.querySelector('#screen-host .topbar-left');
+  if (topbarLeft) {
+    const chipArea = document.createElement('div');
+    chipArea.id = 'peerChipArea';
+    chipArea.style.cssText = 'display:flex;gap:6px;align-items:center';
+    topbarLeft.appendChild(chipArea);
+  }
+
+  // 3. Add connection quality indicator to remote sidebar
+  const connSection = document.querySelector('#screen-remote .sidebar .sidebar-section');
+  if (connSection) {
+    const qual = document.createElement('div');
+    qual.id = 'connectionQualityBadge';
+    qual.style.cssText = 'margin-top:8px;padding:8px 12px;border-radius:6px;font-family:var(--mono);font-size:11px;text-align:center;background:var(--green-dim);border:1px solid rgba(0,232,122,0.2);color:var(--green)';
+    qual.textContent = '● Excellent — P2P Direct';
+    connSection.appendChild(qual);
+  }
+
+  // 4. Monitor volume sets real gain
+  const monSlider = document.querySelector('#screen-remote [oninput="setMonitorVol(this.value)"]');
+  if (monSlider) {
+    monSlider.oninput = function() { setMonitorVol(this.value); };
+  }
+}
+
+// Real monitor volume control
+let _monitorGainNode = null;
+function setMonitorVol(val) {
+  const pct = parseInt(val) / 100;
+  if (_monitorGainNode) {
+    _monitorGainNode.gain.setTargetAtTime(pct, _monitorGainNode.context.currentTime, 0.05);
+    return;
+  }
+  // Create gain node on first use
+  const audio = document.getElementById('remoteAudioEl');
+  if (!audio?.srcObject) return;
+  try {
+    const ctx = new AudioContext();
+    const src = ctx.createMediaStreamSource(audio.srcObject);
+    _monitorGainNode = ctx.createGain();
+    _monitorGainNode.gain.value = pct;
+    src.connect(_monitorGainNode).connect(ctx.destination);
+    audio.muted = true; // we route through gain node now
+  } catch(e) {}
+}
+
+/* ============================================================
+   PHASE 1 — CONNECTION QUALITY MONITOR
+   ============================================================ */
+
+async function monitorConnectionQuality() {
+  for (const [, peer] of RTC.peers) {
+    if (!peer.pc) continue;
+    try {
+      const stats = await peer.pc.getStats();
+      stats.forEach(report => {
+        if (report.type === 'candidate-pair' && report.state === 'succeeded') {
+          const rtt = report.currentRoundTripTime;
+          if (rtt != null) {
+            peer.latency = Math.round(rtt * 1000);
+            RTC.updateLatencyDisplay(peer.latency);
+          }
+
+          // Detect relay vs direct
+          const local = stats.get(report.localCandidateId);
+          const isRelay = local?.candidateType === 'relay';
+          const badge = document.getElementById('connectionQualityBadge');
+          if (badge) {
+            if (peer.latency < 30) {
+              badge.style.cssText += ';background:var(--green-dim);border-color:rgba(0,232,122,0.2);color:var(--green)';
+              badge.textContent = `● Excellent — ${isRelay ? 'TURN Relay' : 'P2P Direct'} (${peer.latency}ms)`;
+            } else if (peer.latency < 80) {
+              badge.style.cssText += ';background:var(--amber-dim);border-color:rgba(255,184,0,0.2);color:var(--amber)';
+              badge.textContent = `● Good — ${isRelay ? 'TURN Relay' : 'P2P Direct'} (${peer.latency}ms)`;
+            } else {
+              badge.style.cssText += ';background:var(--red-dim);border-color:rgba(255,58,92,0.2);color:var(--red)';
+              badge.textContent = `● Weak — ${isRelay ? 'TURN Relay' : 'P2P Direct'} (${peer.latency}ms)`;
+            }
+          }
+        }
+      });
+    } catch(e) {}
+  }
+  renderPeerList();
+}
+
+// Run quality monitor every 3 seconds
+setInterval(monitorConnectionQuality, 3000);
+
+/* ============================================================
+   PHASE 1 — KEYBOARD SHORTCUTS
+   ============================================================ */
+
+document.addEventListener('keydown', e => {
+  // Only active when in session screens
+  if (!['screen-host','screen-remote'].includes(state.screen)) return;
+  const tag = document.activeElement?.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA') return; // don't intercept typing
+
+  switch(e.code) {
+    case 'Space':
+      e.preventDefault();
+      if (RTC.role === 'host') togglePlay();
+      else remoteTogglePlay();
+      break;
+    case 'ArrowUp':
+      e.preventDefault();
+      changeBPM(e.shiftKey ? 10 : 1);
+      break;
+    case 'ArrowDown':
+      e.preventDefault();
+      changeBPM(e.shiftKey ? -10 : -1);
+      break;
+    case 'KeyR':
+      if (e.metaKey || e.ctrlKey) { e.preventDefault(); toggleRec(); }
+      break;
+    case 'KeyS':
+      if (e.metaKey || e.ctrlKey) { e.preventDefault(); startScreenShare(); }
+      break;
+    case 'KeyT':
+      // Talkback toggle
+      if (!state.talkbackActive) startTalkback();
+      break;
+    case 'Escape':
+      stopTalkback();
+      break;
+  }
+});
+
+document.addEventListener('keyup', e => {
+  if (e.code === 'KeyT' && state.talkbackActive) stopTalkback();
+});
+
+/* ============================================================
+   INIT ALL PHASE 1 MODULES
+   ============================================================ */
+
+// Inject UI after DOM is ready
+document.addEventListener('DOMContentLoaded', () => injectPhase1UI());
+// Also inject now in case DOM already loaded
+injectPhase1UI();
+
+/* ============================================================
+   PHASE 2 — DAW LOG: FILTER, SEARCH, EXPORT
+   ============================================================ */
+
+const DAWLog = {
+  entries: [],      // { ts, msg, level }
+  filterActive: false,
+  filterKeyword: '',
+
+  push(msg) {
+    const level = msg.startsWith('MIDI') ? 'midi'
+                : msg.startsWith('OSC')  ? 'osc'
+                : msg.startsWith('SYNC') || msg.startsWith('CMD') ? 'sync'
+                : msg.startsWith('REC')  || msg.startsWith('SAV') ? 'rec'
+                : 'info';
+    this.entries.push({ ts: Date.now(), msg, level });
+    if (this.entries.length > 500) this.entries.shift();
+    this.render();
+  },
+
+  render() {
+    const log = document.getElementById('dawLog');
+    if (!log) return;
+    const kw = this.filterKeyword.toLowerCase();
+    const filtered = kw
+      ? this.entries.filter(e => e.msg.toLowerCase().includes(kw))
+      : this.entries;
+    const last = filtered.slice(-18);
+    log.innerHTML = '';
+    last.forEach(e => {
+      const el = document.createElement('div');
+      const colors = { midi:'#a259ff', osc:'#00d4ff', sync:'#00e87a', rec:'#ff3a5c', info:'#3a4d68' };
+      el.style.cssText = `color:${colors[e.level]||colors.info};line-height:1.4;`;
+      const time = new Date(e.ts).toLocaleTimeString('en',{hour12:false,hour:'2-digit',minute:'2-digit',second:'2-digit'});
+      el.textContent = time + ' > ' + e.msg;
+      log.appendChild(el);
+    });
+    log.scrollTop = log.scrollHeight;
+  }
+};
+
+// Override logDAW to use DAWLog
+const _baseLDAW = window.logDAW;
+window.logDAW = function(msg) {
+  DAWLog.push(msg);
+};
+
+function filterDAWLog() {
+  const search = document.getElementById('logSearch');
+  if (!search) return;
+  const isVisible = search.style.display !== 'none';
+  search.style.display = isVisible ? 'none' : 'block';
+  if (!isVisible) search.focus();
+  else { search.value = ''; DAWLog.filterKeyword = ''; DAWLog.render(); }
+}
+
+function searchDAWLog(val) {
+  DAWLog.filterKeyword = val;
+  DAWLog.render();
+}
+
+function clearDAWLog() {
+  DAWLog.entries = [];
+  DAWLog.render();
+  toast('DAW Log cleared', '');
+}
+
+function exportDAWLog() {
+  if (DAWLog.entries.length === 0) { toast('⚠️ Log is empty', ''); return; }
+  const lines = DAWLog.entries.map(e =>
+    new Date(e.ts).toISOString() + '  ' + e.level.toUpperCase().padEnd(5) + '  ' + e.msg
+  ).join('\n');
+  const blob = new Blob([lines], { type: 'text/plain' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href     = url;
+  a.download = 'studiosync-log-' + (state.sessionCode || 'session') + '.txt';
+  a.click();
+  URL.revokeObjectURL(url);
+  toast('✓ Log exported', 'green');
+}
+
+/* ============================================================
+   PHASE 2 — ABLETON LINK SIMULATION
+   Real Link SDK only works in native app (Tauri phase).
+   In browser we simulate the BPM-sync protocol behaviour
+   and expose the UI so the host can manually sync peers.
+   ============================================================ */
+
+const Link = {
+  enabled: false,
+  peers: 0,
+  sharedBPM: 128,
+
+  toggle() {
+    this.enabled = !this.enabled;
+    const sec = document.getElementById('linkSection');
+    const btn = sec?.querySelector('button');
+    const status = document.getElementById('linkStatus');
+    if (btn)    btn.textContent  = this.enabled ? '⏸ Disable Link Sync' : 'Enable Link Sync';
+    if (status) { status.textContent = this.enabled ? 'ON' : 'OFF'; status.style.color = this.enabled ? 'var(--green)' : 'var(--muted)'; }
+    if (this.enabled) {
+      this.sharedBPM = state.bpm;
+      this.simulatePeers();
+      toast('🔗 Ableton Link enabled — BPM sync active', 'green');
+      logDAW('LINK ENABLED bpm=' + this.sharedBPM);
+    } else {
+      toast('🔗 Ableton Link disabled', '');
+      logDAW('LINK DISABLED');
+    }
+  },
+
+  simulatePeers() {
+    // Simulate Link peers joining over time
+    let count = 0;
+    const interval = setInterval(() => {
+      if (!this.enabled) { clearInterval(interval); return; }
+      count = Math.min(4, count + 1);
+      this.peers = count;
+      const el = document.getElementById('linkPeers');
+      const bpmEl = document.getElementById('linkBPM');
+      if (el) el.textContent = count;
+      if (el) el.style.color = count > 0 ? 'var(--green)' : 'var(--muted)';
+      if (bpmEl) bpmEl.textContent = state.bpm;
+    }, 1500);
+  },
+
+  onBPMChange(bpm) {
+    if (!this.enabled) return;
+    this.sharedBPM = bpm;
+    const el = document.getElementById('linkBPM');
+    if (el) el.textContent = bpm;
+    // In real Tauri app: send Link::setTempo(bpm) via IPC
+    logDAW('LINK BPM → ' + bpm);
+  }
+};
+
+function toggleLink() {
+  Link.toggle();
+}
+
+// Show Ableton Link section only for Ableton DAW
+function maybeShowLink() {
+  const sec = document.getElementById('linkSection');
+  if (sec) sec.style.display = state.selectedDAW === 'ableton' ? '' : 'none';
+}
+
+// Hook BPM change to notify Link
+const _origChangeBPMp2 = window.changeBPM;
+window.changeBPM = function(delta) {
+  _origChangeBPMp2(delta);
+  Link.onBPMChange(state.bpm);
+};
+
+/* ============================================================
+   PHASE 2 — TRACK ANNOTATION SYSTEM
+   Click any track name to add a note / colour tag
+   ============================================================ */
+
+const TrackAnnotations = {};
+
+function openTrackAnnotation(trackIdx, trackName) {
+  const overlay = document.getElementById('modalOverlay');
+  const content = document.getElementById('modalContent');
+  const existing = TrackAnnotations[trackIdx] || { note: '', color: '' };
+
+  const colors = ['#ff3a5c','#ffb800','#00e87a','#00d4ff','#8b5cf6','#ff8c00','#ec4899','#ffffff'];
+
+  content.innerHTML = `
+    <h3>📝 ${trackName}</h3>
+    <p>הוסף הערה לטראק — תופיע לשני הצדדים בזמן אמת.</p>
+    <div style="margin:14px 0">
+      <textarea id="trackNote" placeholder="הערה לטראק..." style="width:100%;background:var(--bg2);border:1px solid var(--border);border-radius:7px;padding:10px;font-family:var(--sans);font-size:13px;color:var(--text);outline:none;resize:none;height:80px;direction:rtl">${existing.note}</textarea>
+    </div>
+    <div style="margin-bottom:14px">
+      <div style="font-family:var(--mono);font-size:10px;color:var(--muted);margin-bottom:8px;letter-spacing:1px">TRACK COLOR</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">
+        ${colors.map(c => `<div onclick="selectAnnotationColor('${c}',this)" style="width:24px;height:24px;border-radius:50%;background:${c};cursor:pointer;border:2px solid ${existing.color===c?'white':'transparent'};transition:border-color 0.15s" data-color="${c}"></div>`).join('')}
+      </div>
+    </div>
+    <div style="display:flex;gap:10px">
+      <button class="btn btn-cyan" style="flex:1" onclick="saveTrackAnnotation(${trackIdx})">✓ שמור</button>
+      <button class="btn btn-ghost" onclick="closeModal()">ביטול</button>
+    </div>
+  `;
+  overlay.classList.add('visible');
+}
+
+let _annotationColor = '';
+function selectAnnotationColor(color, el) {
+  _annotationColor = color;
+  document.querySelectorAll('#modalContent [data-color]').forEach(e => e.style.borderColor = 'transparent');
+  el.style.borderColor = 'white';
+}
+
+function saveTrackAnnotation(idx) {
+  const note = document.getElementById('trackNote')?.value || '';
+  TrackAnnotations[idx] = { note, color: _annotationColor };
+  if (state.tracks[idx]) state.tracks[idx].note = note;
+  if (_annotationColor && state.tracks[idx]) state.tracks[idx].color = _annotationColor;
+  const container = RTC.role === 'remote' ? 'remoteTrackArea' : 'trackArea';
+  renderTracks(container, RTC.role === 'remote');
+  RTC.sendToAll({ type: 'track_annotation', index: idx, note, color: _annotationColor });
+  logDAW('ANNOTATE track/' + idx + (note ? ' note="' + note.slice(0,20) + '"' : ''));
+  closeModal();
+  toast('✓ הערה נשמרה', 'cyan');
+}
+
+/* ============================================================
+   PHASE 2 — TRACK GROUPING (colour-based)
+   ============================================================ */
+
+function groupSelectedTracks() {
+  const container = RTC.role === 'remote' ? 'remoteTrackArea' : 'trackArea';
+  const selected = [...document.querySelectorAll(`#${container} .track-row.selected`)];
+  if (selected.length < 2) { toast('⚠️ בחר 2+ טרקים לקיבוץ', ''); return; }
+  const indices = selected.map(r => parseInt(r.dataset.index));
+  const groupColor = state.tracks[indices[0]]?.color || 'var(--cyan)';
+  indices.forEach(i => { if (state.tracks[i]) state.tracks[i].group = 'g1'; });
+  renderTracks(container, RTC.role === 'remote');
+  toast('✓ ' + indices.length + ' טרקים קובצו', 'cyan');
+  logDAW('GROUP tracks/' + indices.join(','));
+}
+
+/* ============================================================
+   PHASE 2 — AUDIO CODEC SELECTOR
+   ============================================================ */
+
+const CODECS = [
+  { id: 'opus-128', label: 'OPUS 128kbps', bitrate: 128000, latency: 'low',  quality: 'good' },
+  { id: 'opus-256', label: 'OPUS 256kbps', bitrate: 256000, latency: 'low',  quality: 'great' },
+  { id: 'opus-320', label: 'OPUS 320kbps', bitrate: 320000, latency: 'low',  quality: 'best' },
+  { id: 'pcm-48',   label: 'PCM 48kHz',    bitrate: 1536000,latency: 'high', quality: 'lossless' },
+];
+
+let selectedCodec = CODECS[1]; // default: 256kbps
+
+function showCodecPicker() {
+  const overlay = document.getElementById('modalOverlay');
+  const content = document.getElementById('modalContent');
+  content.innerHTML = `
+    <h3>🎵 Audio Codec</h3>
+    <p>בחר איכות שמע vs latency. OPUS מומלץ לרוב המקרים.</p>
+    <div style="display:flex;flex-direction:column;gap:8px;margin:16px 0">
+      ${CODECS.map(c => `
+        <div onclick="selectCodec('${c.id}',this)" style="padding:12px 16px;background:var(--bg2);border:1px solid ${c.id===selectedCodec.id?'var(--cyan)':'var(--border)'};border-radius:8px;cursor:pointer;transition:border-color 0.15s;display:flex;justify-content:space-between;align-items:center">
+          <div>
+            <div style="font-weight:700;font-size:13px;color:var(--bright)">${c.label}</div>
+            <div style="font-family:var(--mono);font-size:10px;color:var(--muted)">latency: ${c.latency} · quality: ${c.quality}</div>
+          </div>
+          <div style="font-family:var(--mono);font-size:11px;color:${c.id===selectedCodec.id?'var(--cyan)':'var(--muted)'}">${c.id===selectedCodec.id?'✓ active':''}</div>
+        </div>`).join('')}
+    </div>
+    <button class="btn btn-ghost btn-full" onclick="closeModal()">סגור</button>
+  `;
+  overlay.classList.add('visible');
+}
+
+function selectCodec(id, el) {
+  selectedCodec = CODECS.find(c => c.id === id) || CODECS[1];
+  // Apply bitrate to peer connections via SDP mungling
+  applyCodecToPeers(selectedCodec.bitrate);
+  document.getElementById('sb-codec').textContent = '● ' + selectedCodec.label;
+  closeModal();
+  toast('✓ Codec: ' + selectedCodec.label, 'cyan');
+  logDAW('CODEC → ' + selectedCodec.label);
+}
+
+async function applyCodecToPeers(bitrate) {
+  for (const [, peer] of RTC.peers) {
+    const senders = peer.pc?.getSenders() || [];
+    for (const sender of senders) {
+      if (sender.track?.kind !== 'audio') continue;
+      try {
+        const params = sender.getParameters();
+        if (params.encodings?.length) {
+          params.encodings[0].maxBitrate = bitrate;
+          await sender.setParameters(params);
+        }
+      } catch(e) {}
+    }
+  }
+}
+
+/* ============================================================
+   PHASE 2 — HOOK CODEC BTN TO STATUSBAR CLICK
+   ============================================================ */
+
+document.addEventListener('DOMContentLoaded', () => {
+  const codecEl = document.getElementById('sb-codec');
+  if (codecEl) { codecEl.style.cursor = 'pointer'; codecEl.onclick = showCodecPicker; }
+  maybeShowLink();
+});
+
+// Also show Link section when DAW changes
+const _origSelectDAW = window.selectDAW;
+window.selectDAW = function(el, daw) {
+  _origSelectDAW(el, daw);
+  maybeShowLink();
+};
+
+/* ============================================================
+   PHASE 3 — PRODUCT ARCHITECTURE UPGRADES
+   From the product brief:
+   - Session lifecycle state machine
+   - Control ownership model
+   - Session types + roles
+   - Timeline markers
+   - Session health monitor
+   - Request-control flow
+   - Failure/fallback system
+   - UX: next-best-action surface
+   ============================================================ */
+
+/* ────────────────────────────────────────────────────────────
+   SESSION STATE MACHINE
+   States: draft → setup → waiting → live → paused →
+           reconnecting → completed → archived
+   ──────────────────────────────────────────────────────────── */
+
+const SessionSM = {
+  state: 'draft',
+
+  TRANSITIONS: {
+    draft:         ['setup'],
+    setup:         ['waiting', 'draft'],
+    waiting:       ['live', 'draft'],
+    live:          ['paused', 'reconnecting', 'completed'],
+    paused:        ['live', 'completed'],
+    reconnecting:  ['live', 'completed'],
+    completed:     ['archived'],
+    archived:      [],
+  },
+
+  LABELS: {
+    draft:        { text: 'Draft',        color: 'var(--muted)',  dot: 'waiting' },
+    setup:        { text: 'Setting up',   color: 'var(--amber)',  dot: 'waiting' },
+    waiting:      { text: 'Waiting...',   color: 'var(--amber)',  dot: 'waiting' },
+    live:         { text: 'LIVE',         color: 'var(--green)',  dot: 'live'    },
+    paused:       { text: 'Paused',       color: 'var(--amber)',  dot: 'waiting' },
+    reconnecting: { text: 'Reconnecting', color: 'var(--red)',    dot: 'waiting' },
+    completed:    { text: 'Ended',        color: 'var(--muted)',  dot: ''        },
+    archived:     { text: 'Archived',     color: 'var(--muted)',  dot: ''        },
+  },
+
+  transition(to) {
+    const allowed = this.TRANSITIONS[this.state];
+    if (!allowed.includes(to)) {
+      console.warn(`[SM] Invalid transition: ${this.state} → ${to}`);
+      return false;
+    }
+    console.log(`[SM] Session: ${this.state} → ${to}`);
+    this.state = to;
+    this.render();
+    DAWLog.push('SESSION_STATE → ' + to.toUpperCase());
+    return true;
+  },
+
+  render() {
+    const info = this.LABELS[this.state];
+    if (!info) return;
+
+    // Host labels
+    const lbl = document.getElementById('sessionStateLabel');
+    if (lbl) { lbl.textContent = info.text; lbl.style.color = info.color; }
+
+    // Status dots
+    document.querySelectorAll('.status-dot').forEach(d => {
+      d.className = 'status-dot ' + (info.dot || '');
+    });
+
+    // Remote label
+    const rlbl = document.getElementById('remoteSessionState');
+    if (rlbl) { rlbl.textContent = info.text; rlbl.style.color = info.color; }
+
+    // Health bar
+    this.updateHealthBar();
+  },
+
+  updateHealthBar() {
+    const bar = document.getElementById('sessionHealthBar');
+    if (!bar) return;
+    const peers = [...RTC.peers.values()];
+    if (peers.length === 0) { bar.style.display = 'none'; return; }
+
+    bar.style.display = 'flex';
+    const avgLat = peers.reduce((s, p) => s + (p.latency || 0), 0) / peers.length;
+    const isRelay = peers.some(p => p.isRelay);
+
+    let cls = 'health-healthy', text = '', action = '';
+
+    if (this.state === 'reconnecting') {
+      cls  = 'health-critical';
+      text = '⚠ Reconnecting — do not close this window';
+      action = '';
+    } else if (avgLat > 150) {
+      cls  = 'health-degraded';
+      text = `עיכוב גבוה: ${Math.round(avgLat)}ms${isRelay ? ' (TURN relay)' : ''} — יכול להיות עיכוב קל בשמע`;
+      action = 'Optimize';
+    } else if (this.state === 'paused') {
+      cls  = 'health-degraded';
+      text = 'הסשן מושהה — ממתינים לכולם';
+      action = 'Resume';
+    } else {
+      const routeType = isRelay ? 'TURN relay' : 'P2P Direct';
+      text = `הסשן תקין · ${routeType} · ${Math.round(avgLat)}ms · ${peers.length} peer${peers.length!==1?'s':''}`;
+    }
+
+    bar.className = 'session-health ' + cls;
+    document.getElementById('sessionHealthText').textContent = text;
+    const actionEl = document.getElementById('sessionHealthAction');
+    if (actionEl) { actionEl.textContent = action; actionEl.onclick = action === 'Optimize' ? showCodecPicker : null; }
+  }
+};
+
+/* ────────────────────────────────────────────────────────────
+   CONTROL OWNERSHIP MODEL
+   States: free → requested → owned_host → owned_remote →
+           shared → locked → handoff_pending
+   ──────────────────────────────────────────────────────────── */
+
+const ControlSM = {
+  state: 'free',
+  owner: null,  // 'host' | 'remote' | 'shared' | null
+  pendingRequestFrom: null,
+
+  LABELS: {
+    free:            { text: 'Open control',     cls: '' },
+    owned_host:      { text: 'You have control', cls: 'mine' },
+    owned_remote:    { text: 'Remote has control', cls: 'theirs' },
+    shared:          { text: 'Shared control',   cls: 'shared' },
+    locked:          { text: 'Control locked',   cls: '' },
+    handoff_pending: { text: 'Handoff pending…', cls: '' },
+  },
+
+  // Host takes control
+  claim(who) {
+    this.owner = who;
+    this.state = who === 'host' ? 'owned_host' : 'owned_remote';
+    this.render();
+    RTC.sendToAll({ type: 'control_state', owner: who });
+    DAWLog.push('CONTROL → ' + who.toUpperCase());
+  },
+
+  share() {
+    this.state = 'shared';
+    this.owner = 'shared';
+    this.render();
+    RTC.sendToAll({ type: 'control_state', owner: 'shared' });
+    DAWLog.push('CONTROL → SHARED');
+    toast('🤝 Shared control — both can edit', 'cyan');
+  },
+
+  lock() {
+    this.state = 'locked';
+    this.render();
+    RTC.sendToAll({ type: 'control_state', owner: 'locked' });
+    toast('🔒 Control locked by host', '');
+  },
+
+  // Remote requests control
+  handleRequest(peerId, peerName) {
+    this.pendingRequestFrom = { peerId, peerName };
+    this.state = 'handoff_pending';
+    this.render();
+    showControlRequest(peerId, peerName);
+  },
+
+  // Host responds to request
+  grantRequest() {
+    if (!this.pendingRequestFrom) return;
+    this.claim('remote');
+    // Notify peer their request was granted
+    const peer = RTC.peers.get(this.pendingRequestFrom.peerId);
+    peer?.dataChannel?.send(JSON.stringify({ type: 'control_granted' }));
+    this.pendingRequestFrom = null;
+    toast('✓ Control granted to ' + ControlSM.pendingRequestFrom?.peerName, 'green');
+  },
+
+  denyRequest() {
+    if (!this.pendingRequestFrom) return;
+    const peer = RTC.peers.get(this.pendingRequestFrom.peerId);
+    peer?.dataChannel?.send(JSON.stringify({ type: 'control_denied' }));
+    this.pendingRequestFrom = null;
+    this.state = 'owned_host';
+    this.render();
+    toast('בקשת השליטה נדחתה', '');
+  },
+
+  // Apply state received from host
+  applyFromHost(owner) {
+    this.owner = owner;
+    this.state = owner === 'host' ? 'owned_host'
+               : owner === 'remote' ? 'owned_remote'
+               : owner === 'shared' ? 'shared'
+               : owner === 'locked' ? 'locked'
+               : 'free';
+    this.renderRemote();
+  },
+
+  render() {
+    const info = this.LABELS[this.state] || {};
+    const bar = document.getElementById('controlOwnerBar');
+    if (bar) {
+      bar.className = 'control-owner-bar ' + (info.cls || '');
+      const lbl = document.getElementById('controlOwnerLabel');
+      if (lbl) lbl.textContent = info.text || '';
+    }
+
+    // Dim track controls when remote owns them
+    const trackArea = document.getElementById('trackArea');
+    if (trackArea) {
+      const remoteOwns = this.state === 'owned_remote';
+      trackArea.style.opacity = remoteOwns ? '0.6' : '1';
+      trackArea.style.pointerEvents = (remoteOwns && RTC.role === 'host') ? 'none' : '';
+    }
+
+    // Update statusbar
+    const sb = document.getElementById('sb-session-type');
+    if (sb) sb.textContent = `● ${state.sessionType || 'Co-Production'}`;
+  },
+
+  renderRemote() {
+    const info = this.LABELS[this.state] || {};
+    const btn = document.getElementById('requestControlBtn');
+    if (btn) {
+      btn.style.display = this.state === 'owned_host' ? 'block' : 'none';
+      btn.textContent = this.state === 'handoff_pending' ? '⏳ Pending…' : '✋ Request Control';
+    }
+
+    // Disable remote controls if host owns exclusively
+    const canControl = this.state === 'owned_remote' || this.state === 'shared';
+    const remoteArea = document.getElementById('remoteTrackArea');
+    if (remoteArea) {
+      remoteArea.style.opacity = canControl ? '1' : '0.5';
+      remoteArea.style.pointerEvents = canControl ? '' : 'none';
+    }
+    const playBtn = document.getElementById('remoteBtnPlay');
+    const perms = RTC.peerPerms.get('host') || {};
+    if (playBtn) playBtn.style.opacity = (canControl && perms.transport !== false) ? '1' : '0.4';
+  }
+};
+
+// Show control request popup to host
+function showControlRequest(peerId, peerName) {
+  const overlay = document.getElementById('modalOverlay');
+  const content = document.getElementById('modalContent');
+  content.innerHTML = `
+    <h3>✋ Control Request</h3>
+    <p><strong style="color:var(--green)">${peerName}</strong> רוצה לקחת שליטה ב-DAW.</p>
+    <div style="display:flex;flex-direction:column;gap:8px;margin:16px 0">
+      <div style="padding:10px 14px;background:var(--bg2);border:1px solid var(--border);border-radius:7px;font-size:12px;color:var(--dim)">
+        הם יוכלו לשנות מהירות, עצירה/הפעלה ועוצמות — לפי מה שהגדרת.
+      </div>
+    </div>
+    <div style="display:flex;gap:10px">
+      <button class="btn btn-green" style="flex:1" onclick="ControlSM.grantRequest();closeModal()">✓ תן להם שליטה</button>
+      <button class="btn btn-ghost" onclick="ControlSM.denyRequest();closeModal()">✕ לא עכשיו</button>
+    </div>
+  `;
+  overlay.classList.add('visible');
+  // Auto-deny after 30s
+  setTimeout(() => { if (ControlSM.pendingRequestFrom) { ControlSM.denyRequest(); closeModal(); } }, 30000);
+}
+
+// Remote requests control
+function requestControl() {
+  const btn = document.getElementById('requestControlBtn');
+  if (btn) { btn.textContent = '⏳ Pending…'; btn.classList.add('pending'); }
+  RTC.sendToHost({ type: 'control_request', name: 'Remote' });
+  toast('✋ שליחת בקשת שליטה...', '');
+  DAWLog.push('CONTROL_REQUEST sent');
+}
+
+/* ────────────────────────────────────────────────────────────
+   SYNC STATE MACHINE
+   not_synced → syncing → synced → degraded → resyncing → failed
+   ──────────────────────────────────────────────────────────── */
+
+const SyncSM = {
+  state: 'not_synced',
+
+  LABELS: {
+    not_synced: { text: 'NOT SYNCED', color: 'var(--muted)' },
+    syncing:    { text: 'SYNCING…',   color: 'var(--amber)' },
+    synced:     { text: 'SYNCED',     color: 'var(--green)' },
+    degraded:   { text: 'DEGRADED',   color: 'var(--amber)' },
+    resyncing:  { text: 'RESYNCING…', color: 'var(--amber)' },
+    failed:     { text: 'SYNC FAILED',color: 'var(--red)'   },
+  },
+
+  set(s) {
+    this.state = s;
+    const info = this.LABELS[s];
+    const el = document.getElementById('syncStatusBadge');
+    if (el && info) {
+      el.textContent = info.text;
+      el.style.color = info.color;
+      el.style.borderColor = info.color.replace('var(','').replace(')','');
+    }
+    if (s === 'degraded' || s === 'failed') {
+      SessionSM.updateHealthBar();
+      DAWLog.push('SYNC → ' + s.toUpperCase());
+    }
+  }
+};
+
+/* ────────────────────────────────────────────────────────────
+   SESSION TYPES + ROLES
+   ──────────────────────────────────────────────────────────── */
+
+const SESSION_TYPES = {
+  'co-production': {
+    label:       'Co-Production',
+    description: 'שני מפיקים עובדים יחד — שליטה שוויונית',
+    defaultPerms: { transport:true, faders:true, mute:true, midi:true, screen:true },
+    controlMode:  'shared',
+    icon: '🎛'
+  },
+  'artist-producer': {
+    label:       'Artist + Producer',
+    description: 'מפיק + אמן — המפיק שולט, האמן מנגן',
+    defaultPerms: { transport:true, faders:false, mute:false, midi:true, screen:true },
+    controlMode:  'host',
+    icon: '🎤'
+  },
+  'mentor': {
+    label:       'Mentor Session',
+    description: 'מנטור מדגים, תלמיד יכול לנסות',
+    defaultPerms: { transport:true, faders:true, mute:false, midi:false, screen:true },
+    controlMode:  'host',
+    icon: '🎓'
+  },
+  'review': {
+    label:       'Mix Review',
+    description: 'האורח שומע ומגיב — ללא עריכה',
+    defaultPerms: { transport:true, faders:false, mute:false, midi:false, screen:false },
+    controlMode:  'host',
+    icon: '👁'
+  },
+};
+
+function selectSessionType(el, type) {
+  document.querySelectorAll('#sessionTypeGrid .session-type-btn').forEach(b => b.classList.remove('active'));
+  el.classList.add('active');
+  state.sessionType = type;
+}
+
+function selectJoinRole(el, role) {
+  document.querySelectorAll('[data-role]').forEach(b => b.classList.remove('active'));
+  el.classList.add('active');
+  state.joinRole = role;
+}
+
+// Apply session type defaults when session goes live
+function applySessionTypeDefaults() {
+  const t = SESSION_TYPES[state.sessionType || 'co-production'];
+  if (!t) return;
+
+  // Apply permission defaults
+  Object.entries(t.defaultPerms).forEach(([k, v]) => {
+    const el = document.getElementById('perm-' + k);
+    if (el) el.checked = v;
+  });
+
+  // Apply control mode
+  if (t.controlMode === 'shared') ControlSM.share();
+  else ControlSM.claim('host');
+
+  // Update session type badge
+  const badge = document.getElementById('sessionTypeBadge');
+  if (badge) badge.textContent = (t.icon + ' ' + t.label).toUpperCase();
+  const sb = document.getElementById('sb-session-type');
+  if (sb) sb.textContent = '● ' + t.label;
+
+  // Send defaults to peers
+  RTC.sendToAll({ type: 'session_type', sessionType: state.sessionType, perms: t.defaultPerms });
+  toast('✓ ' + t.label + ' mode — ' + t.description, 'cyan');
+  DAWLog.push('SESSION_TYPE → ' + t.label);
+}
+
+/* ────────────────────────────────────────────────────────────
+   TIMELINE MARKERS
+   ──────────────────────────────────────────────────────────── */
+
+const Markers = {
+  list: [],   // { id, bar, label, color, author, ts }
+  colors: ['#00d4ff','#00e87a','#ffb800','#ff3a5c','#8b5cf6','#ff8c00'],
+
+  add(bar, label, color) {
+    const marker = {
+      id:     Date.now(),
+      bar:    bar || state.position.bar,
+      label:  label || 'M' + (this.list.length + 1),
+      color:  color || this.colors[this.list.length % this.colors.length],
+      author: RTC.role === 'host' ? 'Host' : 'Remote',
+      ts:     Date.now(),
+    };
+    this.list.push(marker);
+    this.render();
+    RTC.sendToAll({ type: 'marker_add', marker });
+    DAWLog.push('MARKER "' + marker.label + '" @ bar ' + marker.bar);
+    toast('📍 מרקר נוסף: ' + marker.label, '');
+    return marker;
+  },
+
+  remove(id) {
+    this.list = this.list.filter(m => m.id !== id);
+    this.render();
+    RTC.sendToAll({ type: 'marker_remove', id });
+    DAWLog.push('MARKER REMOVED id=' + id);
+  },
+
+  applyFromPeer(marker) {
+    if (!this.list.find(m => m.id === marker.id)) {
+      this.list.push(marker);
+      this.render();
+    }
+  },
+
+  render() {
+    const row = document.getElementById('markerRow');
+    if (!row) return;
+    row.innerHTML = '';
+    const totalBars = Math.max(state.position.bar + 32, 64);
+
+    this.list.forEach(m => {
+      const pct = ((m.bar - 1) / totalBars) * 100;
+      const pip = document.createElement('div');
+      pip.className = 'marker-pip';
+      pip.style.cssText = `left:${pct}%;background:${m.color};`;
+      pip.title = m.label + ' (bar ' + m.bar + ') — ' + m.author;
+      pip.onclick = (e) => { e.stopPropagation(); showMarkerMenu(m); };
+
+      const lbl = document.createElement('div');
+      lbl.className = 'marker-pip-label';
+      lbl.style.cssText = `left:calc(${pct}% + 3px);color:${m.color};`;
+      lbl.textContent = m.label;
+
+      row.appendChild(pip);
+      row.appendChild(lbl);
+    });
+  }
+};
+
+// Marker context menu
+function showMarkerMenu(marker) {
+  const overlay = document.getElementById('modalOverlay');
+  const content = document.getElementById('modalContent');
+  content.innerHTML = `
+    <h3>📍 ${marker.label}</h3>
+    <p>Bar ${marker.bar} · Added by ${marker.author}</p>
+    <div style="display:flex;gap:10px;margin-top:16px">
+      <button class="btn btn-cyan" style="flex:1" onclick="jumpToMarker(${marker.bar});closeModal()">⏭ קפוץ לכאן</button>
+      <button class="btn btn-ghost" onclick="renameMarker(${marker.id})">✏ שנה שם</button>
+      <button class="btn btn-red" onclick="Markers.remove(${marker.id});closeModal()">✕ מחק</button>
+    </div>
+    <button class="btn btn-ghost btn-full" style="margin-top:8px" onclick="closeModal()">Close</button>
+  `;
+  overlay.classList.add('visible');
+}
+
+function jumpToMarker(bar) {
+  state.position = { bar, beat: 1, tick: 1 };
+  updatePosition();
+  RTC.sendToAll({ type: 'cmd', action: 'jump', bar });
+  DAWLog.push('JUMP → bar ' + bar);
+}
+
+function renameMarker(id) {
+  closeModal();
+  const name = prompt('Marker name:');
+  if (name) {
+    const m = Markers.list.find(m => m.id === id);
+    if (m) { m.label = name; Markers.render(); RTC.sendToAll({ type: 'marker_update', marker: m }); }
+  }
+}
+
+// Add marker row click handler
+document.addEventListener('DOMContentLoaded', () => {
+  const row = document.getElementById('markerRow');
+  if (row) {
+    row.addEventListener('click', (e) => {
+      if (e.target === row) {
+        const rect = row.getBoundingClientRect();
+        const pct  = (e.clientX - rect.left) / rect.width;
+        const bar  = Math.max(1, Math.round(pct * 64));
+        Markers.add(bar);
+      }
+    });
+  }
+});
+
+/* ────────────────────────────────────────────────────────────
+   SESSION HEALTH MONITOR
+   Runs every 5s, checks latency + sync + peer state
+   ──────────────────────────────────────────────────────────── */
+
+const HealthMonitor = {
+  interval: null,
+  consecutiveBadChecks: 0,
+
+  start() {
+    this.interval = setInterval(() => this.check(), 5000);
+  },
+
+  stop() { clearInterval(this.interval); },
+
+  check() {
+    const peers = [...RTC.peers.values()];
+    if (peers.length === 0) return;
+
+    const avgLat = peers.reduce((s, p) => s + (p.latency || 0), 0) / peers.length;
+    const anyDisconnected = peers.some(p => !p.connected);
+
+    if (anyDisconnected) {
+      this.consecutiveBadChecks++;
+      if (this.consecutiveBadChecks >= 2) {
+        SessionSM.transition('reconnecting');
+        SyncSM.set('degraded');
+      }
+    } else if (avgLat > 200) {
+      SyncSM.set('degraded');
+      this.consecutiveBadChecks++;
+    } else {
+      this.consecutiveBadChecks = 0;
+      if (SessionSM.state === 'reconnecting') SessionSM.transition('live');
+      if (SyncSM.state !== 'synced') SyncSM.set('synced');
+    }
+
+    SessionSM.updateHealthBar();
+
+    // Update statusbar
+    const wrtcEl = document.getElementById('sb-webrtc');
+    const audioEl = document.getElementById('sb-audio');
+    if (wrtcEl) {
+      wrtcEl.textContent = '● WebRTC: ' + (peers[0]?.connected ? 'Connected' : 'Connecting');
+      wrtcEl.className   = 'sb-item ' + (peers[0]?.connected ? 'ok' : 'warn');
+    }
+    if (audioEl) {
+      audioEl.textContent = RTC.localStream ? '● Audio: 48kHz' : '● Audio: No stream';
+      audioEl.className   = 'sb-item ' + (RTC.localStream ? 'ok' : '');
+    }
+  }
+};
+
+/* ────────────────────────────────────────────────────────────
+   GRACEFUL FAILURE / FALLBACK HANDLERS
+   ──────────────────────────────────────────────────────────── */
+
+const Fallback = {
+  // Called when peer disconnects mid-session
+  onPeerDisconnect(peerId, peerName) {
+    DAWLog.push('PEER DISCONNECTED: ' + (peerName || peerId.slice(0,8)));
+    SessionSM.transition('reconnecting');
+    SyncSM.set('degraded');
+
+    // If remote had control, take it back safely
+    if (ControlSM.owner === 'remote') {
+      ControlSM.claim('host');
+      toast('⚠ השותף התנתק — השליטה חזרה אליך', '');
+    }
+
+    // Show non-alarming reconnect banner
+    this.showReconnectBanner(peerName);
+  },
+
+  showReconnectBanner(peerName) {
+    const bar = document.getElementById('sessionHealthBar');
+    if (bar) {
+      bar.style.display = 'flex';
+      bar.className = 'session-health health-critical';
+      document.getElementById('sessionHealthText').textContent =
+        `⚠ ${peerName || 'Peer'} disconnected — session paused. Waiting for reconnect…`;
+      document.getElementById('sessionHealthAction').textContent = 'End session';
+      document.getElementById('sessionHealthAction').onclick = confirmEndSession;
+    }
+  },
+
+  // Called when DAW connection is lost
+  onDAWDisconnect() {
+    DAWLog.push('DAW DISCONNECTED');
+    document.getElementById('oscStatus').textContent = 'מתחבר מחדש...';
+    document.getElementById('oscStatus').className   = 'conn-item-status conn-warn';
+    toast('⚠️ ה-DAW התנתקה — מנסה להתחבר מחדש...', '');
+    // Auto-retry every 3s
+    let attempts = 0;
+    const retry = setInterval(() => {
+      attempts++;
+      if (attempts > 10) { clearInterval(retry); toast('✗ לא הצלחנו להתחבר ל-DAW — הפעל מחדש את ה-Agent', ''); return; }
+      DAWLog.push('DAW RECONNECT attempt ' + attempts);
+    }, 3000);
+  },
+
+  // Called when audio stream drops
+  onAudioDrop() {
+    DAWLog.push('AUDIO STREAM DROPPED');
+    SyncSM.set('degraded');
+    toast('⚠️ השמע נפסק — בדוק את ה-BlackHole / VB-Cable', '');
+    const audioEl = document.getElementById('sb-audio');
+    if (audioEl) { audioEl.textContent = '● Audio: Dropped'; audioEl.className = 'sb-item warn'; }
+  }
+};
+
+/* ────────────────────────────────────────────────────────────
+   CONFIRM END SESSION (prevents accidental exit)
+   ──────────────────────────────────────────────────────────── */
+
+function confirmEndSession() {
+  const overlay = document.getElementById('modalOverlay');
+  const content = document.getElementById('modalContent');
+  const duration = state.sessionStartTime
+    ? Math.round((Date.now() - state.sessionStartTime) / 60000) + ' min'
+    : '—';
+
+  content.innerHTML = `
+    <h3>לסיים את הסשן?</h3>
+    <p>משך הסשן: <strong style="color:var(--bright)">${duration}</strong>
+    ${Recording.active ? '<br><span style="color:var(--red)">⏺ ההקלטה תיסגר ותישמר אוטומטית.</span>' : ''}
+    </p>
+    <div style="padding:12px 16px;background:var(--bg2);border:1px solid var(--border);border-radius:7px;font-size:12px;color:var(--dim);margin:12px 0">
+      הסשן ייסגר לכל המשתתפים.
+    </div>
+    <div style="display:flex;gap:10px">
+      <button class="btn btn-red" style="flex:1" onclick="endSession()">✕ כן, לסיים</button>
+      <button class="btn btn-ghost" onclick="closeModal()">לא, להמשיך</button>
+    </div>
+  `;
+  overlay.classList.add('visible');
+}
+
+function endSession() {
+  if (Recording.active) Recording.stop();
+  HealthMonitor.stop();
+  SessionSM.transition('completed');
+  RTC.sendToAll({ type: 'session_ended', reason: 'Host ended session' });
+  for (const [, peer] of RTC.peers) { peer.pc?.close(); }
+  RTC.peers.clear();
+  closeModal();
+  showScreen('screen-lobby');
+  toast('✓ הסשן נסגר — תודה שהשתמשת ב-StudioSync 🎛', 'cyan');
+  DAWLog.push('SESSION ENDED by host');
+}
+
+/* ────────────────────────────────────────────────────────────
+   HOOK STATE MACHINES INTO EXISTING FLOWS
+   ──────────────────────────────────────────────────────────── */
+
+// Hook launchSession
+const _origLaunchP3 = window.launchSession;
+window.launchSession = async function() {
+  state.sessionStartTime = Date.now();
+  SessionSM.transition('setup');
+  await _origLaunchP3();
+  SessionSM.transition('waiting');
+  SyncSM.set('syncing');
+};
+
+// When first peer joins, go live
+const _origSimPeerJoin = window.simulatePeerJoin;
+window.simulatePeerJoin = function() {
+  _origSimPeerJoin();
+  setTimeout(() => {
+    SessionSM.transition('live');
+    SyncSM.set('synced');
+    applySessionTypeDefaults();
+    HealthMonitor.start();
+    ControlSM.render();
+  }, 4200);
+};
+
+// Hook joinSession to set up sync state on remote side
+const _origJoinP3 = window.joinSession;
+window.joinSession = function() {
+  state.joinRole = state.joinRole || 'collaborator';
+  _origJoinP3();
+  setTimeout(() => {
+    SyncSM.set('syncing');
+    setTimeout(() => SyncSM.set('synced'), 1500);
+    // Show request control btn only for collaborator role
+    const btn = document.getElementById('requestControlBtn');
+    if (btn) btn.style.display = state.joinRole === 'collaborator' ? 'block' : 'none';
+  }, 1000);
+};
+
+// Handle incoming DAW messages for new event types
+const _origHandleDAW = RTC.handleDAWMessage.bind(RTC);
+RTC.handleDAWMessage = function(msg, peerId) {
+  switch(msg.type) {
+    case 'control_state':
+      if (RTC.role === 'remote') ControlSM.applyFromHost(msg.owner);
+      break;
+    case 'control_request':
+      if (RTC.role === 'host') ControlSM.handleRequest(peerId, msg.name || 'Remote');
+      break;
+    case 'control_granted':
+      ControlSM.claim('remote');
+      toast('✓ Control granted by Host', 'green');
+      break;
+    case 'control_denied':
+      const btn = document.getElementById('requestControlBtn');
+      if (btn) { btn.textContent = '✋ Request Control'; btn.classList.remove('pending'); }
+      toast('בקשת השליטה נדחתה', '');
+      break;
+    case 'marker_add':
+      Markers.applyFromPeer(msg.marker);
+      break;
+    case 'marker_remove':
+      Markers.list = Markers.list.filter(m => m.id !== msg.id);
+      Markers.render();
+      break;
+    case 'marker_update':
+      const m = Markers.list.find(x => x.id === msg.marker.id);
+      if (m) { Object.assign(m, msg.marker); Markers.render(); }
+      break;
+    case 'session_type':
+      state.sessionType = msg.sessionType;
+      if (msg.perms) {
+        // Apply received permissions
+        RTC.peerPerms.set('host', msg.perms);
+      }
+      break;
+    case 'session_ended':
+      toast('⚠ Host ended the session', '');
+      setTimeout(() => showScreen('screen-lobby'), 1500);
+      break;
+    case 'recording':
+      if (msg.active) toast('⏺ Host started recording', '');
+      break;
+    case 'kicked':
+      toast('⚠ ' + (msg.reason || 'You were removed from session'), '');
+      setTimeout(() => showScreen('screen-lobby'), 2000);
+      break;
+    default:
+      _origHandleDAW(msg, peerId);
+  }
+};
+
+// Hook peer disconnect to Fallback handler
+const _origClosePeer = RTC.closePeer.bind(RTC);
+RTC.closePeer = function(peerId) {
+  const peer = RTC.peers.get(peerId);
+  Fallback.onPeerDisconnect(peerId, peer?.name);
+  _origClosePeer(peerId);
+  renderPeerList();
+};
+
+/* ────────────────────────────────────────────────────────────
+   KEYBOARD SHORTCUT: M = add marker at current position
+   ──────────────────────────────────────────────────────────── */
+document.addEventListener('keydown', e => {
+  if (!['screen-host','screen-remote'].includes(state.screen)) return;
+  const tag = document.activeElement?.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+  if (e.code === 'KeyM') Markers.add(state.position.bar);
+});
+
+/* ────────────────────────────────────────────────────────────
+   EXTEND state with new fields
+   ──────────────────────────────────────────────────────────── */
+Object.assign(state, {
+  sessionType:      'co-production',
+  joinRole:         'collaborator',
+  sessionStartTime: null,
+  markerCount:      0,
+});
+
+console.log('[StudioSync] Phase 3 loaded — state machines, control model, markers, health monitor');
+
+/* ============================================================
+   LANGUAGE & UX UPGRADES — human-first copy
+   ============================================================ */
+
+// OS selector in lobby
+function selectOS(el, os) {
+  document.querySelectorAll('.os-btn').forEach(b => b.classList.remove('active'));
+  el.classList.add('active');
+  state.selectedOS = os;
+  // Update virtual audio hint in setup
+  const hint = document.getElementById('virtualAudioHint');
+  if (hint) {
+    if (os === 'mac') {
+      hint.innerHTML = '🍎 <strong>Mac:</strong> הורד <a href="https://existential.audio/blackhole/" target="_blank" style="color:var(--cyan)">BlackHole</a> — חינמי, 2 דקות התקנה';
+    } else {
+      hint.innerHTML = '🪟 <strong>Windows:</strong> הורד <a href="https://vb-audio.com/Cable/" target="_blank" style="color:var(--cyan)">VB-Cable</a> — חינמי, 2 דקות התקנה';
+    }
+  }
+}
+
+// Override toast to add friendly empty-state messages
+const _origToast = window.toast;
+window.toast = function(msg, type) {
+  // upgrade any remaining technical messages on the fly
+  const map = {
+    '⚠️ Web MIDI לא נתמך בדפדפן זה': '⚠️ MIDI לא נתמך כאן — נסה Chrome או Edge',
+    '⚠️ לא נמצאו MIDI Controllers': '⚠️ לא מצאנו MIDI controller מחובר',
+    '⚠️ לא ניתן לגשת ל-MIDI': '⚠️ לא הצלחנו לגשת ל-MIDI — נסה שוב',
+    'DAW Log cleared': '✓ הלוג נוקה',
+    '✓ Log exported': '✓ הלוג יורד כעת',
+    '⚠️ Log is empty': '⚠️ אין עדיין רשומות בלוג',
+    '✓ Codec: ': '✓ איכות שמע שונה: ',
+    '🔗 Ableton Link enabled — BPM sync active': '🔗 סנכרון קצב הופעל',
+    '🔗 Ableton Link disabled': '🔗 סנכרון קצב כובה',
+    '✋ שליחת בקשת שליטה...': '✋ שולח בקשה לשותף...',
+    '✓ Control granted by Host': '✓ קיבלת שליטה מהמארח',
+    '🔒 הרשאות עודכנו': '✓ ההרשאות עודכנו',
+    '⚠ Session reconnecting': '⚠️ מתחברים מחדש... אל תסגור את החלון',
+  };
+  _origToast(map[msg] || msg, type);
+};
+
+// Empty state for chat
+function initChatEmptyState(areaId) {
+  const area = document.getElementById(areaId);
+  if (!area) return;
+  const empty = document.createElement('div');
+  empty.id = areaId + '-empty';
+  empty.style.cssText = 'text-align:center;padding:24px 12px;color:var(--muted);font-size:12px;line-height:1.7';
+  empty.innerHTML = '💬<br>עוד אין הודעות<br><span style="font-size:11px;color:var(--border2)">שתף מחשבות, שאל שאלות<br>או תסמן מרקר בטיימליין</span>';
+  area.appendChild(empty);
+}
+
+// Remove empty state on first message
+const _origAddChat = window.addChatMessage;
+window.addChatMessage = function(areaId, user, text, isRemote) {
+  const empty = document.getElementById(areaId + '-empty');
+  if (empty) empty.remove();
+  _origAddChat(areaId, user, text, isRemote);
+};
+
+// Empty state for DAW log
+function initDAWLogEmptyState() {
+  const log = document.getElementById('dawLog');
+  if (!log || log.children.length > 0) return;
+  const el = document.createElement('div');
+  el.id = 'dawLogEmpty';
+  el.style.cssText = 'color:var(--border2);font-size:10px;padding:8px 0;text-align:center;line-height:1.8';
+  el.textContent = 'ברגע שתתחבר ל-DAW,\nהפעולות יופיעו כאן';
+  log.appendChild(el);
+}
+
+// Upgrade setup step copy to be warmer
+const STEP_COPY = {
+  waiting_peers: 'שולח הזמנה... ממתין שהשותף ייכנס',
+  connected:     'השותף נכנס — אפשר להתחיל!',
+  no_peers:      'עוד אין שותפים בסשן',
+};
+
+// Run on load
+document.addEventListener('DOMContentLoaded', () => {
+  initChatEmptyState('chatArea');
+  initChatEmptyState('remoteChatArea');
+  initDAWLogEmptyState();
+  // Default OS to Mac
+  selectOS(document.getElementById('osBtnMac'), 'mac');
+});
+
+// Virtual audio hint in setup — update based on selected OS
+Object.assign(state, { selectedOS: 'mac' });
+</script>
+</body>
+</html>

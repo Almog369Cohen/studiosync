@@ -1,0 +1,1059 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>StudioSync — שיתוף פעולה בזמן אמת</title>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Noto+Sans+Hebrew:wght@300;400;600;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #080c10;
+    --surface: #0e1419;
+    --surface2: #141c24;
+    --accent: #00e5ff;
+    --accent2: #ff3d71;
+    --accent3: #a259ff;
+    --green: #00ff88;
+    --yellow: #ffe600;
+    --text: #e8edf2;
+    --muted: #5a6a7a;
+    --border: #1e2d3d;
+    --glow: 0 0 20px rgba(0,229,255,0.3);
+    --glow2: 0 0 20px rgba(255,61,113,0.3);
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Noto Sans Hebrew', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    overflow-x: hidden;
+  }
+
+  /* Animated background grid */
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(0,229,255,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(0,229,255,0.03) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* Glowing orbs */
+  .orb {
+    position: fixed;
+    border-radius: 50%;
+    filter: blur(80px);
+    opacity: 0.12;
+    pointer-events: none;
+    z-index: 0;
+    animation: float 8s ease-in-out infinite;
+  }
+  .orb1 { width: 500px; height: 500px; background: var(--accent); top: -100px; right: -100px; }
+  .orb2 { width: 400px; height: 400px; background: var(--accent3); bottom: 100px; left: -100px; animation-delay: -4s; }
+  .orb3 { width: 300px; height: 300px; background: var(--accent2); top: 50%; left: 50%; animation-delay: -2s; }
+
+  @keyframes float {
+    0%, 100% { transform: translate(0,0) scale(1); }
+    33% { transform: translate(30px, -30px) scale(1.05); }
+    66% { transform: translate(-20px, 20px) scale(0.95); }
+  }
+
+  /* ===== HEADER ===== */
+  header {
+    position: relative;
+    z-index: 10;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 24px 48px;
+    border-bottom: 1px solid var(--border);
+    background: rgba(8,12,16,0.8);
+    backdrop-filter: blur(20px);
+  }
+
+  .logo {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-family: 'Space Mono', monospace;
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: -1px;
+    color: var(--accent);
+    text-shadow: var(--glow);
+  }
+
+  .logo-icon {
+    width: 40px; height: 40px;
+    background: linear-gradient(135deg, var(--accent), var(--accent3));
+    border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 18px;
+  }
+
+  .logo span { color: var(--text); }
+
+  .header-badges {
+    display: flex;
+    gap: 8px;
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+  }
+
+  .badge {
+    padding: 4px 10px;
+    border-radius: 4px;
+    border: 1px solid;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+  }
+  .badge-live { border-color: var(--green); color: var(--green); }
+  .badge-beta { border-color: var(--yellow); color: var(--yellow); }
+
+  .live-dot {
+    display: inline-block;
+    width: 6px; height: 6px;
+    background: var(--green);
+    border-radius: 50%;
+    margin-left: 6px;
+    animation: pulse 1.5s ease-in-out infinite;
+  }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(0,255,136,0.4); }
+    50% { opacity: 0.7; box-shadow: 0 0 0 6px rgba(0,255,136,0); }
+  }
+
+  /* ===== HERO ===== */
+  .hero {
+    position: relative;
+    z-index: 1;
+    text-align: center;
+    padding: 80px 48px 60px;
+  }
+
+  .hero-label {
+    display: inline-block;
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: var(--accent);
+    padding: 6px 16px;
+    border: 1px solid rgba(0,229,255,0.3);
+    border-radius: 2px;
+    margin-bottom: 28px;
+    background: rgba(0,229,255,0.05);
+  }
+
+  .hero h1 {
+    font-size: clamp(36px, 5vw, 72px);
+    font-weight: 800;
+    line-height: 1.1;
+    margin-bottom: 20px;
+    letter-spacing: -2px;
+  }
+
+  .hero h1 .line1 { color: var(--text); }
+  .hero h1 .line2 {
+    background: linear-gradient(90deg, var(--accent), var(--accent3), var(--accent2));
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+
+  .hero p {
+    font-size: 18px;
+    color: var(--muted);
+    max-width: 600px;
+    margin: 0 auto 40px;
+    line-height: 1.7;
+    font-weight: 300;
+  }
+
+  .hero-ctas {
+    display: flex;
+    gap: 16px;
+    justify-content: center;
+    flex-wrap: wrap;
+  }
+
+  .btn-primary {
+    padding: 14px 32px;
+    background: var(--accent);
+    color: var(--bg);
+    font-family: 'Space Mono', monospace;
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.2s;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    box-shadow: 0 0 30px rgba(0,229,255,0.4);
+  }
+
+  .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 0 50px rgba(0,229,255,0.6); }
+
+  .btn-secondary {
+    padding: 14px 32px;
+    background: transparent;
+    color: var(--text);
+    font-family: 'Space Mono', monospace;
+    font-size: 13px;
+    letter-spacing: 1px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.2s;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .btn-secondary:hover { border-color: var(--muted); background: var(--surface); }
+
+  /* ===== DAW COMPATIBILITY ===== */
+  .daw-strip {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 12px;
+    padding: 20px 48px 60px;
+    flex-wrap: wrap;
+  }
+
+  .daw-label {
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 2px;
+    color: var(--muted);
+    text-transform: uppercase;
+    margin-left: 8px;
+  }
+
+  .daw-pill {
+    padding: 8px 20px;
+    border: 1px solid var(--border);
+    border-radius: 100px;
+    font-size: 13px;
+    font-weight: 600;
+    background: var(--surface);
+    transition: all 0.2s;
+    cursor: default;
+  }
+
+  .daw-pill:hover { border-color: var(--accent); color: var(--accent); transform: translateY(-2px); }
+  .daw-ableton { border-color: rgba(255,230,0,0.3); color: #ffe600; }
+  .daw-logic { border-color: rgba(0,229,255,0.3); color: var(--accent); }
+  .daw-cubase { border-color: rgba(162,89,255,0.3); color: var(--accent3); }
+  .daw-fl { border-color: rgba(255,140,0,0.3); color: #ff8c00; }
+  .daw-protools { border-color: rgba(0,255,136,0.3); color: var(--green); }
+
+  /* ===== ARCHITECTURE DIAGRAM ===== */
+  .section {
+    position: relative;
+    z-index: 1;
+    padding: 60px 48px;
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+
+  .section-header {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    margin-bottom: 40px;
+    gap: 20px;
+    flex-wrap: wrap;
+  }
+
+  .section-label {
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: var(--accent3);
+    margin-bottom: 8px;
+  }
+
+  .section h2 {
+    font-size: clamp(24px, 3vw, 40px);
+    font-weight: 800;
+    letter-spacing: -1px;
+    line-height: 1.2;
+  }
+
+  /* Architecture boxes */
+  .arch-diagram {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    gap: 0;
+    align-items: center;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 40px;
+    overflow: hidden;
+  }
+
+  .machine-box {
+    border: 1px solid;
+    border-radius: 12px;
+    padding: 28px;
+    position: relative;
+  }
+
+  .machine-primary {
+    border-color: rgba(0,229,255,0.4);
+    background: rgba(0,229,255,0.04);
+  }
+
+  .machine-secondary {
+    border-color: rgba(162,89,255,0.4);
+    background: rgba(162,89,255,0.04);
+  }
+
+  .machine-tag {
+    position: absolute;
+    top: -12px;
+    right: 20px;
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    padding: 3px 10px;
+    border-radius: 3px;
+    border: 1px solid;
+  }
+
+  .machine-primary .machine-tag { border-color: var(--accent); color: var(--accent); background: var(--bg); }
+  .machine-secondary .machine-tag { border-color: var(--accent3); color: var(--accent3); background: var(--bg); }
+
+  .machine-box h3 {
+    font-size: 16px;
+    font-weight: 700;
+    margin-bottom: 16px;
+    margin-top: 8px;
+  }
+
+  .machine-list {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .machine-list li {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+    color: var(--muted);
+  }
+
+  .dot-feature {
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .primary-dot { background: var(--accent); }
+  .secondary-dot { background: var(--accent3); }
+
+  /* Connection arrows */
+  .connection-column {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+    padding: 0 24px;
+  }
+
+  .conn-label {
+    font-family: 'Space Mono', monospace;
+    font-size: 9px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--muted);
+    text-align: center;
+    white-space: nowrap;
+  }
+
+  .conn-arrow {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    width: 100%;
+  }
+
+  .conn-line {
+    flex: 1;
+    height: 1px;
+    background: linear-gradient(90deg, var(--accent), var(--accent3));
+    position: relative;
+  }
+
+  .conn-line::before, .conn-line::after {
+    content: '';
+    position: absolute;
+    top: -3px;
+    width: 6px; height: 6px;
+    border-top: 1px solid var(--accent);
+    border-right: 1px solid var(--accent);
+  }
+
+  .conn-line::before { right: -1px; transform: rotate(45deg); }
+
+  .conn-pill {
+    padding: 5px 12px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 100px;
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    color: var(--muted);
+    white-space: nowrap;
+    text-align: center;
+  }
+
+  /* ===== FEATURES GRID ===== */
+  .features-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 1px;
+    background: var(--border);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    overflow: hidden;
+  }
+
+  .feature-card {
+    background: var(--surface);
+    padding: 36px 32px;
+    transition: background 0.2s;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .feature-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+    opacity: 0;
+    transition: opacity 0.3s;
+  }
+
+  .feature-card:hover { background: var(--surface2); }
+  .feature-card:hover::before { opacity: 1; }
+
+  .fc-1::before { background: linear-gradient(90deg, var(--accent), transparent); }
+  .fc-2::before { background: linear-gradient(90deg, var(--accent3), transparent); }
+  .fc-3::before { background: linear-gradient(90deg, var(--accent2), transparent); }
+  .fc-4::before { background: linear-gradient(90deg, var(--green), transparent); }
+  .fc-5::before { background: linear-gradient(90deg, var(--yellow), transparent); }
+  .fc-6::before { background: linear-gradient(90deg, var(--accent), var(--accent3)); }
+
+  .feature-icon {
+    font-size: 28px;
+    margin-bottom: 20px;
+    display: block;
+  }
+
+  .feature-card h3 {
+    font-size: 17px;
+    font-weight: 700;
+    margin-bottom: 10px;
+    letter-spacing: -0.3px;
+  }
+
+  .feature-card p {
+    font-size: 14px;
+    color: var(--muted);
+    line-height: 1.6;
+  }
+
+  .feature-tech {
+    margin-top: 16px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .tech-tag {
+    font-family: 'Space Mono', monospace;
+    font-size: 10px;
+    padding: 3px 8px;
+    border-radius: 3px;
+    background: rgba(255,255,255,0.05);
+    color: var(--muted);
+    border: 1px solid var(--border);
+    letter-spacing: 0.5px;
+  }
+
+  /* ===== HOW IT WORKS STEPS ===== */
+  .steps-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 24px;
+    counter-reset: steps;
+  }
+
+  .step-card {
+    counter-increment: steps;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 28px 24px;
+    position: relative;
+  }
+
+  .step-number {
+    font-family: 'Space Mono', monospace;
+    font-size: 48px;
+    font-weight: 700;
+    color: var(--border);
+    line-height: 1;
+    margin-bottom: 16px;
+    display: block;
+  }
+
+  .step-card h3 {
+    font-size: 15px;
+    font-weight: 700;
+    margin-bottom: 8px;
+  }
+
+  .step-card p {
+    font-size: 13px;
+    color: var(--muted);
+    line-height: 1.6;
+  }
+
+  /* ===== TECH STACK ===== */
+  .tech-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 16px;
+  }
+
+  .tech-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px;
+    transition: all 0.2s;
+  }
+
+  .tech-card:hover { border-color: var(--accent); transform: translateY(-3px); }
+
+  .tech-card-label {
+    font-family: 'Space Mono', monospace;
+    font-size: 9px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 8px;
+  }
+
+  .tech-card-name {
+    font-size: 15px;
+    font-weight: 700;
+    margin-bottom: 4px;
+  }
+
+  .tech-card-desc {
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  /* ===== AUDIO VISUAL ===== */
+  .audio-meter {
+    display: flex;
+    align-items: flex-end;
+    gap: 3px;
+    height: 40px;
+    margin-bottom: 8px;
+  }
+
+  .bar {
+    width: 4px;
+    background: linear-gradient(to top, var(--green), var(--yellow), var(--accent2));
+    border-radius: 2px;
+    animation: meter 1.2s ease-in-out infinite;
+  }
+
+  @keyframes meter {
+    0%, 100% { height: 20%; }
+    50% { height: var(--h); }
+  }
+
+  /* ===== LATENCY BADGE ===== */
+  .stats-row {
+    display: flex;
+    gap: 24px;
+    flex-wrap: wrap;
+    margin-top: 40px;
+  }
+
+  .stat-box {
+    flex: 1;
+    min-width: 160px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px 24px;
+  }
+
+  .stat-value {
+    font-family: 'Space Mono', monospace;
+    font-size: 32px;
+    font-weight: 700;
+    color: var(--accent);
+    line-height: 1;
+    margin-bottom: 4px;
+  }
+
+  .stat-label {
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  /* ===== CTA SECTION ===== */
+  .cta-section {
+    position: relative;
+    z-index: 1;
+    margin: 40px 48px 80px;
+    background: linear-gradient(135deg, rgba(0,229,255,0.08), rgba(162,89,255,0.08));
+    border: 1px solid rgba(0,229,255,0.2);
+    border-radius: 20px;
+    padding: 60px;
+    text-align: center;
+    overflow: hidden;
+  }
+
+  .cta-section::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(circle at 50% 50%, rgba(0,229,255,0.05), transparent 70%);
+  }
+
+  .cta-section h2 {
+    font-size: clamp(24px, 3vw, 44px);
+    font-weight: 800;
+    letter-spacing: -1px;
+    margin-bottom: 16px;
+    position: relative;
+  }
+
+  .cta-section p {
+    color: var(--muted);
+    font-size: 16px;
+    margin-bottom: 32px;
+    position: relative;
+  }
+
+  /* ===== FOOTER ===== */
+  footer {
+    position: relative;
+    z-index: 1;
+    border-top: 1px solid var(--border);
+    padding: 24px 48px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 16px;
+  }
+
+  footer p {
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    color: var(--muted);
+  }
+
+  .footer-links {
+    display: flex;
+    gap: 24px;
+  }
+
+  .footer-links a {
+    font-family: 'Space Mono', monospace;
+    font-size: 11px;
+    color: var(--muted);
+    text-decoration: none;
+    letter-spacing: 1px;
+    transition: color 0.2s;
+  }
+
+  .footer-links a:hover { color: var(--accent); }
+
+  /* ===== ANIMATIONS ===== */
+  @keyframes slideUp {
+    from { opacity: 0; transform: translateY(30px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .animate-in {
+    animation: slideUp 0.6s ease forwards;
+  }
+
+  .delay-1 { animation-delay: 0.1s; opacity: 0; }
+  .delay-2 { animation-delay: 0.2s; opacity: 0; }
+  .delay-3 { animation-delay: 0.3s; opacity: 0; }
+  .delay-4 { animation-delay: 0.4s; opacity: 0; }
+
+  /* ===== RESPONSIVE ===== */
+  @media (max-width: 768px) {
+    header { padding: 16px 24px; }
+    .hero { padding: 50px 24px 40px; }
+    .section { padding: 40px 24px; }
+    .arch-diagram { grid-template-columns: 1fr; }
+    .connection-column { flex-direction: row; padding: 16px 0; }
+    .cta-section { margin: 20px 24px 60px; padding: 40px 24px; }
+    footer { padding: 20px 24px; flex-direction: column; text-align: center; }
+    .daw-strip { padding: 16px 24px 40px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="orb orb1"></div>
+<div class="orb orb2"></div>
+<div class="orb orb3"></div>
+
+<!-- HEADER -->
+<header>
+  <div class="logo">
+    <div class="logo-icon">🎛</div>
+    Studio<span>Sync</span>
+  </div>
+  <div class="header-badges">
+    <span class="badge badge-live"><span class="live-dot"></span>LIVE</span>
+    <span class="badge badge-beta">BETA</span>
+  </div>
+</header>
+
+<!-- HERO -->
+<div class="hero animate-in">
+  <div class="hero-label">🎧 שיתוף פעולה מוזיקלי · Remote DAW Control</div>
+  <h1>
+    <div class="line1">שני סטודיו,</div>
+    <div class="line2">פרויקט אחד.</div>
+  </h1>
+  <p>מפיקים ואמנים עובדים יחד על אותו פרויקט DAW בזמן אמת — שמע מלא, שליטה מלאה, מכל מקום בעולם.</p>
+  <div class="hero-ctas">
+    <a href="#" class="btn-primary">🚀 התחל עכשיו</a>
+    <a href="#how" class="btn-secondary">👀 איך זה עובד</a>
+  </div>
+</div>
+
+<!-- DAW COMPATIBILITY -->
+<div class="daw-strip">
+  <span class="daw-label">תאימות מלאה:</span>
+  <span class="daw-pill daw-ableton">⬛ Ableton Live</span>
+  <span class="daw-pill daw-logic">◆ Logic Pro</span>
+  <span class="daw-pill daw-cubase">■ Cubase</span>
+  <span class="daw-pill daw-fl">▲ FL Studio</span>
+  <span class="daw-pill daw-protools">● Pro Tools</span>
+</div>
+
+<!-- ARCHITECTURE DIAGRAM -->
+<div class="section">
+  <div class="section-header">
+    <div>
+      <div class="section-label">ארכיטקטורה</div>
+      <h2>איך זה עובד טכנית</h2>
+    </div>
+  </div>
+
+  <div class="arch-diagram">
+
+    <!-- PRIMARY MACHINE -->
+    <div class="machine-box machine-primary">
+      <div class="machine-tag">מחשב ראשי</div>
+      <h3>🖥 Producer A — הסטודיו</h3>
+      <ul class="machine-list">
+        <li><span class="dot-feature primary-dot"></span>DAW פועלת עליו (Ableton/Logic/...)</li>
+        <li><span class="dot-feature primary-dot"></span>כרטיס קול פיזי (Audio Interface)</li>
+        <li><span class="dot-feature primary-dot"></span>MIDI Controllers מחוברים</li>
+        <li><span class="dot-feature primary-dot"></span>StudioSync Host Agent מותקן</li>
+        <li><span class="dot-feature primary-dot"></span>Virtual Audio Cable (BlackHole/VB)</li>
+        <li><span class="dot-feature primary-dot"></span>סשן אבטחה מוצפן AES-256</li>
+      </ul>
+      <div class="audio-meter" style="margin-top:20px">
+        <div class="bar" style="--h:80%"></div><div class="bar" style="--h:60%"></div>
+        <div class="bar" style="--h:90%"></div><div class="bar" style="--h:45%"></div>
+        <div class="bar" style="--h:70%"></div><div class="bar" style="--h:55%"></div>
+        <div class="bar" style="--h:85%"></div><div class="bar" style="--h:40%"></div>
+        <div class="bar" style="--h:95%"></div><div class="bar" style="--h:65%"></div>
+      </div>
+    </div>
+
+    <!-- CONNECTION -->
+    <div class="connection-column">
+      <div class="conn-pill">🌐 WebRTC</div>
+      <div class="conn-pill">🔒 E2E Encrypted</div>
+      <div class="conn-pill">⚡ &lt;20ms</div>
+      <div class="conn-pill">🎵 OPUS Audio</div>
+      <div class="conn-pill">🎛 OSC/MIDI</div>
+    </div>
+
+    <!-- SECONDARY MACHINE -->
+    <div class="machine-box machine-secondary">
+      <div class="machine-tag">מחשב שני</div>
+      <h3>💻 Producer B — Remote</h3>
+      <ul class="machine-list">
+        <li><span class="dot-feature secondary-dot"></span>מקבל שמע מלא בזמן אמת</li>
+        <li><span class="dot-feature secondary-dot"></span>עורך טרקים, פרמטרים, FX</li>
+        <li><span class="dot-feature secondary-dot"></span>DAW UI משוקפת או עצמאית</li>
+        <li><span class="dot-feature secondary-dot"></span>MIDI Input מועבר לסטודיו</li>
+        <li><span class="dot-feature secondary-dot"></span>Chat + Cursor Sharing</li>
+        <li><span class="dot-feature secondary-dot"></span>ללא צורך ב-DAW מותקנת</li>
+      </ul>
+      <div class="audio-meter" style="margin-top:20px">
+        <div class="bar" style="--h:70%"></div><div class="bar" style="--h:85%"></div>
+        <div class="bar" style="--h:50%"></div><div class="bar" style="--h:90%"></div>
+        <div class="bar" style="--h:65%"></div><div class="bar" style="--h:75%"></div>
+        <div class="bar" style="--h:40%"></div><div class="bar" style="--h:88%"></div>
+        <div class="bar" style="--h:55%"></div><div class="bar" style="--h:72%"></div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Stats -->
+  <div class="stats-row">
+    <div class="stat-box">
+      <div class="stat-value">&lt;20ms</div>
+      <div class="stat-label">לייטנסי שמע (LAN)</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-value" style="color:var(--accent3)">&lt;80ms</div>
+      <div class="stat-label">לייטנסי שמע (WAN)</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-value" style="color:var(--green)">48kHz</div>
+      <div class="stat-label">איכות שמע מקסימלית</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-value" style="color:var(--accent2)">256bit</div>
+      <div class="stat-label">הצפנת AES</div>
+    </div>
+    <div class="stat-box">
+      <div class="stat-value" style="color:var(--yellow)">∞</div>
+      <div class="stat-label">מספר טרקים</div>
+    </div>
+  </div>
+</div>
+
+<!-- FEATURES -->
+<div class="section" id="features">
+  <div class="section-header">
+    <div>
+      <div class="section-label">פיצ׳רים</div>
+      <h2>כל מה שסטודיו שיתופי צריך</h2>
+    </div>
+  </div>
+
+  <div class="features-grid">
+    <div class="feature-card fc-1">
+      <span class="feature-icon">🔊</span>
+      <h3>שידור שמע מלא</h3>
+      <p>המחשב השני שומע את כל הפלט של כרטיס הקול בזמן אמת — ביט, בס, ווקאל, הכל. כאילו יושב בסטודיו.</p>
+      <div class="feature-tech">
+        <span class="tech-tag">BlackHole</span>
+        <span class="tech-tag">WebRTC</span>
+        <span class="tech-tag">OPUS Codec</span>
+      </div>
+    </div>
+    <div class="feature-card fc-2">
+      <span class="feature-icon">🎛</span>
+      <h3>שליטה מלאה ב-DAW</h3>
+      <p>שינוי פרמטרים, הזזת טרקים, ניהול FX ואוטומציה — הכל מסונכרן בין שני המחשבים באמצעות OSC ו-MIDI over IP.</p>
+      <div class="feature-tech">
+        <span class="tech-tag">OSC Protocol</span>
+        <span class="tech-tag">MIDI over IP</span>
+        <span class="tech-tag">DAW API</span>
+      </div>
+    </div>
+    <div class="feature-card fc-3">
+      <span class="feature-icon">🖥</span>
+      <h3>שיקוף מסך חכם</h3>
+      <p>הצגת ה-DAW בדפדפן ללא הורדה. Remote control מלא של הממשק הגרפי עם סנכרון קרסור בזמן אמת.</p>
+      <div class="feature-tech">
+        <span class="tech-tag">Screen Capture API</span>
+        <span class="tech-tag">WebRTC Data</span>
+        <span class="tech-tag">Cursor Sync</span>
+      </div>
+    </div>
+    <div class="feature-card fc-4">
+      <span class="feature-icon">🎹</span>
+      <h3>MIDI Remote</h3>
+      <p>נגן MIDI על המחשב השני — הנגינה מועברת ישירות ל-DAW הראשי. המקלדת של הריחוק הופכת לאינסטרומנט.</p>
+      <div class="feature-tech">
+        <span class="tech-tag">Web MIDI API</span>
+        <span class="tech-tag">RTP-MIDI</span>
+        <span class="tech-tag">Virtual Instrument</span>
+      </div>
+    </div>
+    <div class="feature-card fc-5">
+      <span class="feature-icon">💬</span>
+      <h3>תקשורת בסטודיו</h3>
+      <p>צ׳אט, תגובות על טרקים, ציור ישיר על ה-DAW, Talkback ווקאל — כל כלי התיאום שסטודיו צריך.</p>
+      <div class="feature-tech">
+        <span class="tech-tag">WebSocket</span>
+        <span class="tech-tag">Canvas API</span>
+        <span class="tech-tag">WebRTC Audio</span>
+      </div>
+    </div>
+    <div class="feature-card fc-6">
+      <span class="feature-icon">🔒</span>
+      <h3>אבטחה מלאה</h3>
+      <p>כל הסשן מוצפן End-to-End. הסשן קיים רק בין שני המחשבים — אין שרת ביניים שמאזין למוזיקה שלך.</p>
+      <div class="feature-tech">
+        <span class="tech-tag">E2E Encryption</span>
+        <span class="tech-tag">DTLS-SRTP</span>
+        <span class="tech-tag">P2P Signaling</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- HOW IT WORKS -->
+<div class="section" id="how">
+  <div class="section-header">
+    <div>
+      <div class="section-label">שלבי הגדרה</div>
+      <h2>מוכן ב-4 צעדים</h2>
+    </div>
+  </div>
+
+  <div class="steps-grid">
+    <div class="step-card">
+      <span class="step-number">01</span>
+      <h3>התקן StudioSync Host</h3>
+      <p>הורד את ה-Agent הקטן למחשב הראשי. הוא מתממשק עם הDAW ועם כרטיס הקול שלך דרך Virtual Audio Cable.</p>
+    </div>
+    <div class="step-card">
+      <span class="step-number">02</span>
+      <h3>צור חדר סשן</h3>
+      <p>לחץ "New Session" וקבל קוד חדר ייחודי. שלח את הקוד לשותף — הוא מצטרף דרך הדפדפן, ללא התקנה.</p>
+    </div>
+    <div class="step-card">
+      <span class="step-number">03</span>
+      <h3>בחר DAW ופרמטרים</h3>
+      <p>הגדר אילו טרקים ואיזה שמע לשתף. שלוט מה השותף יכול לשנות ומה נשאר נעול אצלך.</p>
+    </div>
+    <div class="step-card">
+      <span class="step-number">04</span>
+      <h3>עבדו יחד</h3>
+      <p>שניכם שומעים את אותו מיקס, רואים את אותם טרקים, ויכולים לערוך בזמן אמת. בדיוק כמו בסטודיו.</p>
+    </div>
+  </div>
+</div>
+
+<!-- TECH STACK -->
+<div class="section">
+  <div class="section-header">
+    <div>
+      <div class="section-label">טכנולוגיה</div>
+      <h2>Stack הפיתוח</h2>
+    </div>
+  </div>
+
+  <div class="tech-grid">
+    <div class="tech-card">
+      <div class="tech-card-label">Frontend</div>
+      <div class="tech-card-name">React + Tauri</div>
+      <div class="tech-card-desc">אפליקציית Desktop קלת משקל + Web Client</div>
+    </div>
+    <div class="tech-card">
+      <div class="tech-card-label">Audio Engine</div>
+      <div class="tech-card-name">WebRTC + OPUS</div>
+      <div class="tech-card-desc">שידור שמע בזמן אמת עם קודק OPUS לאיכות גבוהה</div>
+    </div>
+    <div class="tech-card">
+      <div class="tech-card-label">DAW Control</div>
+      <div class="tech-card-name">OSC + MIDI over IP</div>
+      <div class="tech-card-desc">Open Sound Control לשליטה בפרמטרים</div>
+    </div>
+    <div class="tech-card">
+      <div class="tech-card-label">Backend</div>
+      <div class="tech-card-name">Node.js + WebSocket</div>
+      <div class="tech-card-desc">Signaling server ל-P2P connection בלבד</div>
+    </div>
+    <div class="tech-card">
+      <div class="tech-card-label">Virtual Audio</div>
+      <div class="tech-card-name">BlackHole / VB-Cable</div>
+      <div class="tech-card-desc">ניתוב שמע מהDAW לסטרים</div>
+    </div>
+    <div class="tech-card">
+      <div class="tech-card-label">Security</div>
+      <div class="tech-card-name">DTLS-SRTP</div>
+      <div class="tech-card-desc">הצפנה מלאה P2P, ללא האזנה</div>
+    </div>
+  </div>
+</div>
+
+<!-- CTA -->
+<div class="cta-section">
+  <h2>מוכן להתחיל לעבוד ביחד?</h2>
+  <p>הצטרף לרשימת ה-Beta ועזור לנו לבנות את הכלי שכל מפיק ואמן צריך.</p>
+  <div style="display:flex;gap:16px;justify-content:center;flex-wrap:wrap;position:relative">
+    <a href="#" class="btn-primary">🎵 הצטרף ל-Beta</a>
+    <a href="#" class="btn-secondary">📄 קרא את התיעוד</a>
+  </div>
+</div>
+
+<!-- FOOTER -->
+<footer>
+  <p style="color:var(--muted)">© 2026 StudioSync — Made for musicians, by musicians</p>
+  <div class="footer-links">
+    <a href="#">Docs</a>
+    <a href="#">GitHub</a>
+    <a href="#">Discord</a>
+    <a href="#">Twitter</a>
+  </div>
+</footer>
+
+<script>
+  // Animate bars
+  document.querySelectorAll('.bar').forEach((bar, i) => {
+    const heights = [80,60,90,45,70,55,85,40,95,65,70,85,50,90,65,75,40,88,55,72];
+    bar.style.setProperty('--h', heights[i % heights.length] + '%');
+    bar.style.animationDelay = (i * 0.12) + 's';
+  });
+
+  // Intersection observer for animations
+  const observer = new IntersectionObserver(entries => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        entry.target.style.animation = 'slideUp 0.6s ease forwards';
+      }
+    });
+  }, { threshold: 0.1 });
+
+  document.querySelectorAll('.feature-card, .step-card, .tech-card, .stat-box').forEach(el => {
+    el.style.opacity = '0';
+    observer.observe(el);
+  });
+</script>
+</body>
+</html>

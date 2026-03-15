@@ -1,0 +1,1042 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>StudioSync</title>
+<style>
+:root{
+  --bg:#07090c;--s1:#0c0f14;--s2:#111520;--s3:#161c28;
+  --b1:#1a2538;--b2:#243050;--dim:#3a4d68;--mid:#5a7090;
+  --txt:#c8d8e8;--hi:#e8f2ff;
+  --cyan:#00d4ff;--cD:rgba(0,212,255,.12);
+  --green:#00e87a;--gD:rgba(0,232,122,.1);
+  --red:#ff3a5c;--rD:rgba(255,58,92,.1);
+  --amber:#ffb800;--aD:rgba(255,184,0,.1);
+  --mono:'Cascadia Code','Fira Code','SF Mono','Consolas',monospace;
+  --sans:-apple-system,'Segoe UI','Arial Hebrew',sans-serif;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html{font-size:13px}
+body{font-family:var(--sans);background:var(--bg);color:var(--txt);min-height:100vh;overflow:hidden}
+body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,.025) 2px,rgba(0,0,0,.025) 4px);pointer-events:none;z-index:9999}
+
+/* ── SCREENS ── */
+.screen{display:none;min-height:100vh;flex-direction:column}
+.screen.on{display:flex}
+
+/* ── LOBBY ── */
+#lobby{align-items:center;justify-content:center;padding:32px 20px;position:relative;overflow:hidden}
+#lobby canvas{position:absolute;inset:0;width:100%;height:100%;opacity:.12;pointer-events:none}
+.lw{position:relative;z-index:1;width:100%;max-width:440px}
+.logo-row{text-align:center;margin-bottom:32px}
+.logo-icon{width:52px;height:52px;background:linear-gradient(135deg,var(--cyan),#0088bb);border-radius:14px;display:inline-flex;align-items:center;justify-content:center;font-size:26px;margin-bottom:10px;box-shadow:0 0 28px rgba(0,212,255,.25)}
+.logo-name{font-family:var(--mono);font-size:26px;font-weight:700;color:var(--hi);letter-spacing:-1.5px}
+.logo-name span{color:var(--cyan)}
+.logo-sub{font-family:var(--mono);font-size:10px;letter-spacing:3px;color:var(--dim);margin-top:5px}
+
+.card{background:var(--s1);border:1px solid var(--b1);border-radius:14px;padding:24px;margin-bottom:12px;transition:border-color .2s}
+.card:hover{border-color:var(--b2)}
+.card.primary{border-color:rgba(0,212,255,.22);background:rgba(0,212,255,.025);position:relative}
+.card.primary::before{content:'מחשב ראשי';position:absolute;top:-10px;right:16px;font-family:var(--mono);font-size:9px;letter-spacing:2px;background:var(--bg);padding:0 8px;color:var(--cyan)}
+
+.card-hdr{display:flex;align-items:center;gap:12px;margin-bottom:12px}
+.card-ico{width:44px;height:44px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:22px;flex-shrink:0}
+.ci-h{background:var(--cD);border:1px solid rgba(0,212,255,.2)}
+.ci-g{background:var(--gD);border:1px solid rgba(0,232,122,.2)}
+.card-title{font-size:16px;font-weight:700;color:var(--hi)}
+.card-sub{font-size:12px;color:var(--mid);margin-top:2px}
+
+.explainer{background:var(--s2);border:1px solid var(--b1);border-radius:8px;padding:12px 14px;margin-bottom:14px;display:flex;flex-direction:column;gap:7px}
+.exr{display:flex;align-items:center;gap:10px;font-size:13px}
+.exi{font-size:15px;width:20px;text-align:center;flex-shrink:0}
+
+.stype-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:14px}
+.stype{display:flex;align-items:center;gap:7px;padding:9px 12px;background:var(--s2);border:1px solid var(--b1);border-radius:7px;cursor:pointer;font-size:12px;color:var(--mid);transition:all .15s;user-select:none}
+.stype:hover{border-color:var(--b2);color:var(--txt)}
+.stype.on{border-color:var(--cyan);color:var(--cyan);background:var(--cD)}
+
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;padding:10px 20px;border:none;border-radius:7px;font-family:var(--mono);font-size:12px;cursor:pointer;transition:all .15s;white-space:nowrap}
+.btn-c{background:var(--cyan);color:#000;font-weight:700;box-shadow:0 0 18px rgba(0,212,255,.3);width:100%;font-size:14px;padding:13px}
+.btn-c:hover{box-shadow:0 0 32px rgba(0,212,255,.5);transform:translateY(-1px)}
+.btn-g{background:var(--green);color:#000;font-weight:700}
+.btn-g:hover{opacity:.85}
+.btn-ghost{background:var(--s2);color:var(--txt);border:1px solid var(--b1)}
+.btn-ghost:hover{border-color:var(--b2)}
+.btn-red{background:var(--red);color:#fff}
+
+.role-row{display:flex;gap:6px;margin-bottom:12px}
+.role-btn{flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:9px;background:var(--s2);border:1px solid var(--b1);border-radius:7px;cursor:pointer;font-size:12px;color:var(--mid);transition:all .15s}
+.role-btn:hover{border-color:var(--b2);color:var(--txt)}
+.role-btn.on{border-color:var(--green);color:var(--green);background:var(--gD)}
+
+.join-row{display:flex;gap:8px;margin-top:10px}
+.code-in{flex:1;background:var(--s2);border:1px solid var(--b1);border-radius:7px;padding:10px 14px;font-family:var(--mono);font-size:18px;font-weight:700;color:var(--hi);letter-spacing:7px;text-align:center;outline:none;text-transform:uppercase;transition:border-color .2s}
+.code-in:focus{border-color:var(--cyan)}
+.ver{text-align:center;font-family:var(--mono);font-size:9px;color:var(--dim);margin-top:14px;letter-spacing:1px}
+
+/* ── SESSION ── */
+#session{flex:1;overflow:hidden}
+.app{display:flex;flex-direction:column;height:100vh}
+
+.topbar{height:48px;background:var(--s1);border-bottom:1px solid var(--b1);display:flex;align-items:center;padding:0 14px;gap:10px;flex-shrink:0}
+.tb-logo{font-family:var(--mono);font-size:13px;font-weight:700}
+.tb-logo.h{color:var(--cyan)}
+.tb-logo.r{color:var(--green)}
+.tb-sep{width:1px;height:16px;background:var(--b1)}
+.sdot{width:7px;height:7px;border-radius:50%;background:var(--dim);flex-shrink:0}
+.sdot.live{background:var(--green);box-shadow:0 0 6px var(--green);animation:blink 2s infinite}
+.sdot.wait{background:var(--amber);box-shadow:0 0 6px var(--amber);animation:blink 1s infinite}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.35}}
+.stxt{font-family:var(--mono);font-size:10px;color:var(--mid)}
+.code-badge{font-family:var(--mono);font-size:12px;font-weight:700;letter-spacing:4px;padding:4px 12px;background:var(--s2);border:1px solid var(--b1);border-radius:5px;color:var(--hi);cursor:pointer;user-select:none}
+.code-badge:hover{border-color:var(--cyan)}
+.ml{margin-right:auto}
+.tier{font-family:var(--mono);font-size:9px;padding:2px 7px;border-radius:3px;letter-spacing:1px}
+.tier-p{border:1px solid rgba(0,232,122,.3);color:var(--green)}
+.tier-f{border:1px solid var(--b1);color:var(--dim)}
+
+/* transport */
+.transport{display:flex;align-items:center;gap:6px;padding:8px 14px;background:var(--s1);border-bottom:1px solid var(--b1);flex-shrink:0}
+.tc{width:33px;height:33px;border-radius:6px;background:var(--s2);border:1px solid var(--b1);display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:13px;transition:all .12s}
+.tc:hover{background:var(--s3);border-color:var(--b2)}
+.tc.play{background:var(--green);border-color:var(--green);color:#000}
+.tc.rec{background:var(--red);border-color:var(--red);color:#fff}
+.tc.rec.on{animation:rp 1s infinite}
+@keyframes rp{0%,100%{box-shadow:0 0 6px var(--red)}50%{box-shadow:0 0 18px var(--red)}}
+.bpm-box{display:flex;align-items:center;gap:6px;padding:5px 12px;background:var(--s2);border:1px solid var(--b1);border-radius:6px}
+.bpm-val{font-family:var(--mono);font-size:18px;font-weight:700;color:var(--hi);min-width:44px;text-align:center}
+.bpm-lbl{font-family:var(--mono);font-size:9px;color:var(--dim);letter-spacing:1px}
+.bpm-btns{display:flex;flex-direction:column;gap:1px}
+.bpm-btn{background:none;border:none;cursor:pointer;color:var(--dim);font-size:10px;line-height:1;padding:1px 4px}
+.bpm-btn:hover{color:var(--cyan)}
+.pos-box{font-family:var(--mono);font-size:12px;padding:6px 12px;background:var(--s2);border:1px solid var(--b1);border-radius:6px;letter-spacing:2px}
+.health{display:flex;align-items:center;gap:7px;padding:5px 12px;border-radius:5px;font-family:var(--mono);font-size:10px}
+.health.ok{background:var(--gD);border:1px solid rgba(0,232,122,.2);color:var(--green)}
+.health.bad{background:var(--rD);border:1px solid rgba(255,58,92,.2);color:var(--red)}
+
+/* main layout */
+.main{display:flex;flex:1;overflow:hidden}
+.sidebar{width:200px;background:var(--s1);border-left:1px solid var(--b1);display:flex;flex-direction:column;flex-shrink:0;overflow:hidden}
+.center{flex:1;display:flex;flex-direction:column;overflow:hidden}
+.right{width:230px;background:var(--s1);border-right:1px solid var(--b1);display:flex;flex-direction:column;flex-shrink:0;overflow:hidden}
+
+.sec{border-bottom:1px solid var(--b1);padding:10px 12px}
+.sec-title{font-family:var(--mono);font-size:9px;letter-spacing:2px;color:var(--dim);margin-bottom:8px}
+.conn-row{display:flex;align-items:center;justify-content:space-between;padding:6px 10px;background:var(--s2);border:1px solid var(--b1);border-radius:5px;margin-bottom:4px}
+.conn-lbl{font-size:11px}
+.conn-val{font-family:var(--mono);font-size:10px}
+.ok{color:var(--green)}
+.warn{color:var(--amber)}
+.lat-num{font-family:var(--mono);font-size:26px;font-weight:700;color:var(--green)}
+.lat-bar{height:3px;background:var(--s3);border-radius:2px;margin-top:5px;overflow:hidden}
+.lat-fill{height:100%;background:var(--green);border-radius:2px;transition:width .5s}
+
+/* tracks */
+.mrow{height:18px;background:rgba(0,212,255,.02);border-bottom:1px solid var(--b1);position:relative;cursor:crosshair;flex-shrink:0}
+.mpip{position:absolute;width:2px;top:2px;bottom:2px;border-radius:1px;cursor:pointer}
+.mlbl{position:absolute;top:1px;font-family:var(--mono);font-size:8px;pointer-events:none;white-space:nowrap}
+.track-area{flex:1;overflow-y:auto}
+.track-area::-webkit-scrollbar{width:4px}
+.track-area::-webkit-scrollbar-thumb{background:var(--b2);border-radius:2px}
+.tr{display:grid;grid-template-columns:26px 155px 56px 1fr 40px;align-items:center;height:44px;padding:0 6px;border-bottom:1px solid rgba(26,37,56,.5);transition:background .1s;cursor:pointer}
+.tr:hover{background:rgba(255,255,255,.02)}
+.tr.sel{background:rgba(0,212,255,.04)}
+.tr-num{font-family:var(--mono);font-size:9px;color:var(--dim);text-align:center}
+.tr-name{display:flex;align-items:center;gap:7px;padding:0 4px;overflow:hidden}
+.tr-col{width:3px;height:28px;border-radius:2px;flex-shrink:0}
+.tr-n{font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tr-t{font-family:var(--mono);font-size:9px;color:var(--dim);background:var(--s2);padding:1px 4px;border-radius:3px;border:1px solid var(--b1)}
+.tr-btns{display:flex;gap:2px}
+.trb{width:20px;height:20px;background:var(--s2);border:1px solid var(--b1);border-radius:3px;display:flex;align-items:center;justify-content:center;cursor:pointer;font-family:var(--mono);font-size:9px;font-weight:700;color:var(--dim);transition:all .12s}
+.trb:hover{color:var(--txt);background:var(--s3)}
+.trb.M{background:var(--aD);border-color:rgba(255,184,0,.3);color:var(--amber)}
+.trb.S{background:var(--gD);border-color:rgba(0,232,122,.3);color:var(--green)}
+.trb.R{background:var(--rD);border-color:rgba(255,58,92,.3);color:var(--red)}
+.fader{-webkit-appearance:none;appearance:none;width:100%;height:3px;background:var(--s3);border-radius:2px;outline:none;cursor:pointer}
+.fader::-webkit-slider-thumb{-webkit-appearance:none;width:11px;height:11px;border-radius:50%;background:var(--cyan);cursor:pointer}
+.tr-db{font-family:var(--mono);font-size:9px;color:var(--dim);text-align:center}
+
+/* meters */
+.mtr{display:flex;align-items:center;gap:7px;margin-bottom:5px}
+.mtr-lbl{font-family:var(--mono);font-size:9px;color:var(--dim);width:10px}
+.mtr-track{flex:1;height:5px;background:var(--s3);border-radius:3px;overflow:hidden}
+.mtr-fill{height:100%;background:linear-gradient(90deg,var(--green) 0%,var(--amber) 75%,var(--red) 90%);border-radius:3px;transition:width .06s ease}
+
+/* chat */
+.chat-area{flex:1;overflow-y:auto;padding:10px;display:flex;flex-direction:column;gap:8px}
+.chat-area::-webkit-scrollbar{width:3px}
+.chat-area::-webkit-scrollbar-thumb{background:var(--b2);border-radius:2px}
+.cmsg{display:flex;flex-direction:column;gap:2px}
+.chdr{display:flex;gap:5px;font-family:var(--mono);font-size:9px}
+.cuser{color:var(--cyan)}
+.cuser.r{color:var(--green)}
+.ctime{color:var(--dim)}
+.cbody{font-size:11px;background:var(--s2);border:1px solid var(--b1);border-radius:5px;padding:6px 8px;line-height:1.5;direction:rtl}
+.sys{text-align:center;font-family:var(--mono);font-size:10px;color:var(--dim);padding:4px 0;border-top:1px dashed var(--b1);border-bottom:1px dashed var(--b1);margin:2px 0}
+.chat-in-row{border-top:1px solid var(--b1);padding:8px;display:flex;gap:5px}
+.cin{flex:1;background:var(--s2);border:1px solid var(--b1);border-radius:5px;padding:6px 8px;font-family:var(--sans);font-size:11px;color:var(--txt);outline:none;direction:rtl}
+.cin:focus{border-color:var(--cyan)}
+.csend{width:30px;height:30px;background:var(--cyan);border:none;border-radius:5px;cursor:pointer;color:#000;font-size:14px}
+.tbtn{width:100%;padding:8px;background:var(--s2);border:1px solid var(--b1);border-radius:6px;cursor:pointer;font-family:var(--mono);font-size:10px;color:var(--mid);transition:all .15s;display:flex;align-items:center;justify-content:center;gap:7px}
+.tbtn:hover{border-color:var(--b2);color:var(--txt)}
+.tbtn.on{background:var(--rD);border-color:var(--red);color:var(--red)}
+
+.statusbar{height:24px;background:var(--s1);border-top:1px solid var(--b1);display:flex;align-items:center;padding:0 12px;gap:12px;flex-shrink:0}
+.sbi{display:flex;align-items:center;gap:4px;font-family:var(--mono);font-size:9px;color:var(--dim)}
+.sbi.ok{color:var(--green)}
+.sep{color:var(--b2)}
+
+/* modal + toast */
+.mbg{position:fixed;inset:0;background:rgba(0,0,0,.72);backdrop-filter:blur(8px);z-index:1000;display:none;align-items:center;justify-content:center}
+.mbg.on{display:flex}
+.modal{background:var(--s1);border:1px solid var(--b2);border-radius:14px;padding:28px;width:380px;max-width:92vw;animation:fu .2s ease}
+@keyframes fu{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+.modal h3{font-size:18px;font-weight:800;color:var(--hi);margin-bottom:6px}
+.modal p{font-size:12px;color:var(--mid);margin-bottom:16px;line-height:1.6}
+.mcode{font-family:var(--mono);font-size:34px;font-weight:700;letter-spacing:12px;text-align:center;color:var(--cyan);padding:18px;background:var(--s2);border:1px solid rgba(0,212,255,.2);border-radius:9px;margin-bottom:14px;cursor:pointer;text-shadow:0 0 16px rgba(0,212,255,.3)}
+.mrow{display:flex;gap:8px}
+.ta{position:fixed;bottom:36px;left:50%;transform:translateX(-50%);z-index:2000;display:flex;flex-direction:column;gap:6px;align-items:center;pointer-events:none}
+.toast{padding:8px 16px;background:var(--s2);border:1px solid var(--b2);border-radius:6px;font-family:var(--mono);font-size:11px;color:var(--txt);animation:ti .3s ease,to .3s ease 2.7s forwards;pointer-events:none}
+.toast.c{border-color:rgba(0,212,255,.35);color:var(--cyan)}
+.toast.g{border-color:rgba(0,232,122,.35);color:var(--green)}
+@keyframes ti{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+@keyframes to{to{opacity:0;transform:translateY(-5px)}}
+
+/* connecting screen */
+#connecting{align-items:center;justify-content:center;flex-direction:column;gap:16px}
+.spin{width:40px;height:40px;border:3px solid var(--b2);border-top-color:var(--cyan);border-radius:50%;animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+
+<!-- LOBBY -->
+<div class="screen on" id="lobby">
+  <canvas id="wvc" style="position:absolute;inset:0;width:100%;height:100%;opacity:.12;pointer-events:none;z-index:0"></canvas>
+  <div class="lw" style="position:relative;z-index:1">
+    <div class="logo-row">
+      <div class="logo-icon">🎛</div>
+      <div class="logo-name">Studio<span>Sync</span></div>
+      <div class="logo-sub">הפקה משותפת · בזמן אמת</div>
+    </div>
+
+    <!-- HOST CARD -->
+    <div class="card primary" id="hostCard">
+      <div class="card-hdr">
+        <div class="card-ico ci-h">💻</div>
+        <div>
+          <div class="card-title">המחשב שלי — הראשי</div>
+          <div class="card-sub">כאן מותקן ה-DAW שלך</div>
+        </div>
+        <div style="margin-right:auto;display:flex;gap:4px">
+          <div class="stype on" style="padding:5px 8px;font-size:11px" onclick="setOS(this,'mac')" id="osMac">🍎 Mac</div>
+          <div class="stype" style="padding:5px 8px;font-size:11px" onclick="setOS(this,'win')" id="osWin">🪟 Win</div>
+        </div>
+      </div>
+      <div class="explainer">
+        <div class="exr"><span class="exi">🔊</span><span>השמע מה-DAW ישודר לשותף</span></div>
+        <div class="exr"><span class="exi">🎛</span><span>שניכם שולטים יחד</span></div>
+        <div class="exr"><span class="exi">🔑</span><span>תקבל קוד — שלח לשותף</span></div>
+      </div>
+      <div class="stype-grid" id="stGrid">
+        <div class="stype on" onclick="setST(this,'co')" data-t="co">🎛 יצירה משותפת</div>
+        <div class="stype" onclick="setST(this,'ap')" data-t="ap">🎤 אמן + מפיק</div>
+        <div class="stype" onclick="setST(this,'mn')" data-t="mn">🎓 הדרכה</div>
+        <div class="stype" onclick="setST(this,'rv')" data-t="rv">👁 האזנה</div>
+      </div>
+      <button class="btn btn-c" onclick="hostStart()">נתחיל — פתח סשן חדש ⚡</button>
+    </div>
+
+    <!-- JOIN CARD -->
+    <div class="card">
+      <div class="card-hdr">
+        <div class="card-ico ci-g">🎧</div>
+        <div>
+          <div class="card-title">המחשב השני — הצד השני</div>
+          <div class="card-sub">קיבלת קוד מהשותף?</div>
+        </div>
+      </div>
+      <div class="explainer">
+        <div class="exr"><span class="exi">🔊</span><span>תשמע שמע ישיר מהסטודיו</span></div>
+        <div class="exr"><span class="exi">🎛</span><span>תשלוט ב-DAW מהדפדפן</span></div>
+      </div>
+      <div class="role-row">
+        <div class="role-btn on" onclick="setRole(this,'col')" id="rCol">🎛 שותף</div>
+        <div class="role-btn" onclick="setRole(this,'lst')" id="rLst">👁 האזנה</div>
+      </div>
+      <div class="join-row">
+        <input class="code-in" id="joinCode" placeholder="ABC-123" maxlength="7"
+          oninput="fmtCode(this)" onkeydown="if(event.key==='Enter')remoteJoin()">
+        <button class="btn btn-g" onclick="remoteJoin()" style="padding:10px 16px">בואו נצא לדרך →</button>
+      </div>
+    </div>
+    <div class="ver">ללא התקנה · דפדפן בלבד · E2E Encrypted</div>
+  </div>
+</div>
+
+<!-- CONNECTING -->
+<div class="screen" id="connecting">
+  <div class="spin"></div>
+  <div style="font-family:var(--mono);font-size:13px;color:var(--mid)" id="connectMsg">מתחבר...</div>
+</div>
+
+<!-- SESSION -->
+<div class="screen" id="session">
+  <div class="app">
+    <!-- TOPBAR -->
+    <div class="topbar">
+      <div class="tb-logo" id="tbLogo">StudioSync</div>
+      <div class="tb-sep"></div>
+      <div class="sdot" id="sDot"></div>
+      <div class="stxt" id="sState">מאתחל...</div>
+      <div style="font-family:var(--mono);font-size:9px;padding:2px 7px;border:1px solid var(--b1);border-radius:3px;color:var(--dim)" id="stypeBadge"></div>
+      <div id="peerArea" style="display:flex;gap:5px"></div>
+      <div class="ml"></div>
+      <div class="code-badge" id="codeBadge" onclick="showCode()">— — —</div>
+      <span class="tier" id="tierBadge">FREE</span>
+      <button class="btn btn-ghost" onclick="leaveSession()" style="font-size:10px;padding:5px 10px">✕ יציאה</button>
+    </div>
+
+    <!-- TRANSPORT -->
+    <div class="transport">
+      <div class="tc" onclick="cmd('rew')" title="Rewind">⏮</div>
+      <div class="tc play" id="btnPlay" onclick="cmd('play')">▶</div>
+      <div class="tc rec" id="btnRec"  onclick="cmd('rec')">⏺</div>
+      <div class="tc" onclick="cmd('loop')" id="btnLoop">🔁</div>
+      <div class="bpm-box">
+        <div><div class="bpm-lbl">BPM</div><div class="bpm-val" id="bpmDisplay">128</div></div>
+        <div class="bpm-btns">
+          <button class="bpm-btn" onclick="cmd('bpm+')">▲</button>
+          <button class="bpm-btn" onclick="cmd('bpm-')">▼</button>
+        </div>
+      </div>
+      <div class="pos-box" id="posDisplay">1.1.1</div>
+      <div class="health ok" id="healthBar" style="display:none">● הסשן תקין</div>
+      <div class="ml"></div>
+      <button class="btn btn-ghost" onclick="requestControl()" id="reqCtrl" style="display:none;font-size:11px">✋ בקש שליטה</button>
+      <div class="tc" onclick="doScreenShare()" id="btnSS" style="width:auto;padding:0 10px;font-size:10px;font-family:var(--mono)">🖥 Share</div>
+    </div>
+
+    <!-- MAIN -->
+    <div class="main">
+
+      <!-- LEFT SIDEBAR -->
+      <div class="sidebar">
+        <div class="sec">
+          <div class="sec-title">חיבורים</div>
+          <div class="conn-row"><span class="conn-lbl">📡 WebRTC</span><span class="conn-val" id="rtcSt" style="color:var(--dim)">—</span></div>
+          <div class="conn-row"><span class="conn-lbl">🎵 Audio</span><span class="conn-val" id="audSt" style="color:var(--dim)">—</span></div>
+          <div class="conn-row"><span class="conn-lbl">🎛 Control</span><span class="conn-val ok" id="ctrlSt">—</span></div>
+        </div>
+        <div class="sec">
+          <div class="sec-title">Latency</div>
+          <div style="display:flex;align-items:baseline;gap:4px"><span class="lat-num" id="latNum">—</span><span style="font-family:var(--mono);font-size:10px;color:var(--mid)">ms</span></div>
+          <div class="lat-bar"><div class="lat-fill" id="latFill" style="width:0%"></div></div>
+        </div>
+        <div class="sec" id="permSection">
+          <div class="sec-title">הרשאות <button onclick="openPerms()" style="background:none;border:1px solid var(--b1);border-radius:3px;cursor:pointer;color:var(--mid);font-size:9px;padding:1px 5px">ערוך</button></div>
+          <div id="permDisplay" style="font-size:11px;display:flex;flex-direction:column;gap:4px"></div>
+        </div>
+        <div class="sec" style="flex:1;overflow-y:auto;min-height:0">
+          <div class="sec-title">DAW Log</div>
+          <div id="dawLog" style="font-family:var(--mono);font-size:9px;color:var(--dim);display:flex;flex-direction:column;gap:3px;direction:ltr;max-height:160px;overflow-y:auto"></div>
+        </div>
+      </div>
+
+      <!-- CENTER -->
+      <div class="center">
+        <div class="mrow" id="mRow" onclick="addMarker(event)"></div>
+        <div class="track-area" id="trackArea"></div>
+      </div>
+
+      <!-- RIGHT: METERS + CHAT -->
+      <div class="right">
+        <div class="sec">
+          <div class="sec-title">Output</div>
+          <div class="mtr"><div class="mtr-lbl">L</div><div class="mtr-track"><div class="mtr-fill" id="mL" style="width:0%"></div></div></div>
+          <div class="mtr"><div class="mtr-lbl">R</div><div class="mtr-track"><div class="mtr-fill" id="mR" style="width:0%"></div></div></div>
+        </div>
+        <div style="flex:1;display:flex;flex-direction:column;overflow:hidden">
+          <div style="padding:8px 12px 0;font-family:var(--mono);font-size:9px;letter-spacing:2px;color:var(--dim)">צ׳אט</div>
+          <div class="chat-area" id="chatArea">
+            <div class="sys">Session started · E2E Encrypted</div>
+          </div>
+          <div class="chat-in-row">
+            <input class="cin" id="chatIn" placeholder="הקלד..." onkeydown="if(event.key==='Enter')sendChat()">
+            <button class="csend" onclick="sendChat()">↑</button>
+          </div>
+        </div>
+        <div style="padding:8px">
+          <button class="tbtn" id="tbBtn" onmousedown="tbOn()" onmouseup="tbOff()">🎙 לחץ והחזק לדבר</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- STATUSBAR -->
+    <div class="statusbar">
+      <div class="sbi" id="sb1">● —</div><div class="sep">|</div>
+      <div class="sbi ok">● E2E Encrypted</div><div class="sep">|</div>
+      <div class="sbi" id="sb2">● 0 peers</div>
+    </div>
+  </div>
+</div>
+
+<!-- MODAL -->
+<div class="mbg" id="modalBg" onclick="if(event.target===this)closeModal()">
+  <div class="modal" id="modalBody"></div>
+</div>
+<div class="ta" id="toasts"></div>
+
+<script>
+/* ══════════════════════════════════════════════════
+   CONFIG — auto-detect server URL
+══════════════════════════════════════════════════ */
+const SERVER = window.location.origin; // same server that served this page
+
+/* ══════════════════════════════════════════════════
+   STATE
+══════════════════════════════════════════════════ */
+const S = {
+  clientId: null, role: null, code: null,
+  sessionType: 'co', os: 'mac', joinRole: 'col',
+  playing: false, rec: false, bpm: 128,
+  pos: { b:1, bt:1, tk:1 },
+  tracks: [], markers: [],
+  control: 'host',
+  perms: { trans:true, fad:true, mute:false, midi:false },
+  peers: [],
+  pollActive: false,
+};
+
+/* ══════════════════════════════════════════════════
+   TRACKS
+══════════════════════════════════════════════════ */
+const TRACK_DEFS = [
+  { n:'Kick',     t:'AUDIO', c:'#ff3a5c', v:82, m:0, s:0, a:0 },
+  { n:'Snare',    t:'AUDIO', c:'#ffb800', v:75, m:0, s:0, a:0 },
+  { n:'Hi-Hat',   t:'AUDIO', c:'#ffb800', v:68, m:0, s:0, a:0 },
+  { n:'Bass 808', t:'MIDI',  c:'#00e87a', v:88, m:0, s:0, a:1 },
+  { n:'Melody',   t:'MIDI',  c:'#00d4ff', v:71, m:0, s:0, a:0 },
+  { n:'Lead Vox', t:'AUDIO', c:'#8b5cf6', v:79, m:0, s:0, a:1 },
+  { n:'Pad BG',   t:'MIDI',  c:'#00d4ff', v:55, m:1, s:0, a:0 },
+  { n:'FX',       t:'AUX',   c:'#5a7090', v:64, m:0, s:0, a:0 },
+];
+
+function initTracks() { S.tracks = JSON.parse(JSON.stringify(TRACK_DEFS)); renderTracks(); }
+
+function renderTracks() {
+  const el = document.getElementById('trackArea'); if (!el) return;
+  el.innerHTML = '';
+  S.tracks.forEach((t, i) => {
+    const row = document.createElement('div');
+    row.className = 'tr' + (i===0?' sel':'');
+    const db = t.v===0 ? '-∞' : (20*Math.log10(t.v/100)).toFixed(1);
+    row.innerHTML = `
+      <div class="tr-num">${i+1}</div>
+      <div class="tr-name" style="cursor:pointer" onclick="annotate(${i})" title="📝 הוסף הערה">
+        <div class="tr-col" style="background:${t.c}"></div>
+        <div>
+          <div class="tr-n">${t.n}${t.note?'<span style="font-size:8px;color:var(--amber)"> 📝</span>':''}</div>
+          <div class="tr-t">${t.t}</div>
+        </div>
+      </div>
+      <div class="tr-btns">
+        <div class="trb${t.m?' M':''}" onclick="trToggle(${i},'m')" title="Mute">M</div>
+        <div class="trb${t.s?' S':''}" onclick="trToggle(${i},'s')" title="Solo">S</div>
+        <div class="trb${t.a?' R':''}" onclick="trToggle(${i},'a')" title="Arm">R</div>
+      </div>
+      <div style="padding:0 8px;display:flex;align-items:center">
+        <input type="range" class="fader" min="0" max="127" value="${t.v}"
+          oninput="trVol(${i},this.value)">
+      </div>
+      <div class="tr-db">${db}</div>`;
+    row.addEventListener('click', e => {
+      if (e.target.classList.contains('trb') || e.target.classList.contains('tr-name') || e.target.closest('.tr-name') || e.target.tagName==='INPUT') return;
+      el.querySelectorAll('.tr').forEach(r=>r.classList.remove('sel'));
+      row.classList.add('sel');
+    });
+    el.appendChild(row);
+  });
+}
+
+function trToggle(i, k) {
+  S.tracks[i][k] = S.tracks[i][k] ? 0 : 1;
+  renderTracks();
+  sendToServer({ type:'daw:state', action:'track_toggle', i, k, v:S.tracks[i][k] });
+}
+function trVol(i, v) {
+  S.tracks[i].v = +v; renderTracks();
+  sendToServer({ type:'daw:state', action:'track_vol', i, v });
+}
+
+/* ══════════════════════════════════════════════════
+   HOST FLOW
+══════════════════════════════════════════════════ */
+async function hostStart() {
+  show('connecting');
+  document.getElementById('connectMsg').textContent = 'פותח סשן חדש...';
+  try {
+    const r = await fetch(SERVER + '/api/host', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ daw: S.sessionType })
+    });
+    const d = await r.json();
+    if (!d.ok) { toast('⚠️ שגיאה בפתיחת סשן', ''); show('lobby'); return; }
+
+    S.clientId = d.clientId;
+    S.code     = d.code;
+    S.role     = 'host';
+
+    show('session');
+    setupSessionUI();
+    startPoll();
+    toast('🎛 הסשן נפתח! הקוד: ' + S.code, 'c');
+    setTimeout(() => toast('📋 שלח את הקוד לשותף שלך', ''), 1200);
+    initTracks();
+    startMeters();
+    startPosTick();
+    dlog('Session created: ' + S.code);
+
+  } catch(e) {
+    toast('⚠️ לא ניתן להתחבר לשרת', '');
+    show('lobby');
+  }
+}
+
+/* ══════════════════════════════════════════════════
+   REMOTE FLOW
+══════════════════════════════════════════════════ */
+async function remoteJoin() {
+  const raw = document.getElementById('joinCode').value.replace(/[^A-Z0-9]/gi,'').toUpperCase();
+  if (raw.length < 5) { toast('⚠️ נראה שחסר קוד — בוא ננסה שוב', ''); return; }
+
+  show('connecting');
+  document.getElementById('connectMsg').textContent = 'מצטרף לסשן...';
+
+  try {
+    const r = await fetch(SERVER + '/api/join', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: raw, name: 'Remote_' + Math.floor(Math.random()*100) })
+    });
+    const d = await r.json();
+    if (!d.ok) { toast('⚠️ ' + (d.error || 'קוד לא נמצא'), ''); show('lobby'); return; }
+
+    S.clientId = d.clientId;
+    S.code     = d.code;
+    S.role     = 'remote';
+
+    show('session');
+    setupSessionUI();
+    startPoll();
+    toast('✓ נכנסנו! מתחבר לשמע...', 'g');
+    initTracks();
+    startMeters();
+    startPosTick();
+    dlog('Joined session: ' + S.code);
+
+  } catch(e) {
+    toast('⚠️ לא ניתן להתחבר לשרת', '');
+    show('lobby');
+  }
+}
+
+/* ══════════════════════════════════════════════════
+   SESSION UI SETUP
+══════════════════════════════════════════════════ */
+function setupSessionUI() {
+  const isHost = S.role === 'host';
+  const logo   = document.getElementById('tbLogo');
+  const badge  = document.getElementById('codeBadge');
+  const tier   = document.getElementById('tierBadge');
+  const perm   = document.getElementById('permSection');
+  const req    = document.getElementById('reqCtrl');
+
+  logo.textContent  = 'StudioSync';
+  logo.className    = 'tb-logo ' + (isHost ? 'h' : 'r');
+  badge.textContent = S.code;
+
+  if (isHost) {
+    tier.textContent  = 'PRO';
+    tier.className    = 'tier tier-p';
+    perm.style.display = '';
+    req.style.display  = 'none';
+    setDot('wait', 'ממתין לשותף...');
+    const sb = document.getElementById('stypeBadge');
+    if (sb) sb.textContent = { co:'CO-PRODUCTION', ap:'ARTIST+PRODUCER', mn:'MENTOR', rv:'REVIEW' }[S.sessionType] || '';
+  } else {
+    tier.textContent  = 'FREE';
+    tier.className    = 'tier tier-f';
+    perm.style.display = '';
+    req.style.display  = 'block';
+    setDot('live', 'מחובר');
+    document.getElementById('rtcSt').textContent = 'P2P ✓';
+    document.getElementById('rtcSt').className   = 'conn-val ok';
+    document.getElementById('audSt').textContent = 'Streaming';
+    document.getElementById('audSt').className   = 'conn-val ok';
+  }
+
+  updatePermDisplay();
+}
+
+function setDot(state, txt) {
+  document.getElementById('sDot').className = 'sdot ' + (state==='live'?'live':state==='wait'?'wait':'');
+  document.getElementById('sState').textContent = txt;
+}
+
+function updatePermDisplay() {
+  const el = document.getElementById('permDisplay'); if (!el) return;
+  const items = [['trans','Transport'],['fad','Faders'],['mute','Mute/Solo'],['midi','MIDI']];
+  if (S.role === 'host') {
+    el.innerHTML = items.map(([k,l])=>`<label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" ${S.perms[k]?'checked':''} onchange="setPerm('${k}',this.checked)"> ${l}</label>`).join('');
+  } else {
+    el.innerHTML = items.map(([k,l])=>`<div style="color:${S.perms[k]?'var(--green)':'var(--mid)'}">${S.perms[k]?'✓':'○'} ${l}</div>`).join('');
+  }
+}
+
+function setPerm(k, v) {
+  S.perms[k] = v;
+  sendToServer({ type:'session:perms', perms: S.perms });
+  toast('✓ ההרשאות עודכנו', 'c');
+}
+
+/* ══════════════════════════════════════════════════
+   POLLING — long-poll to receive messages from server
+══════════════════════════════════════════════════ */
+async function startPoll() {
+  S.pollActive = true;
+  while (S.pollActive && S.clientId) {
+    try {
+      const r = await fetch(`${SERVER}/api/poll?cid=${S.clientId}`, { signal: AbortSignal.timeout(25000) });
+      const d = await r.json();
+      if (d.messages) d.messages.forEach(handleMessage);
+    } catch(e) { await sleep(2000); }
+  }
+}
+
+function stopPoll() { S.pollActive = false; }
+
+async function sendToServer(msg) {
+  if (!S.clientId) return;
+  try {
+    await fetch(SERVER + '/api/send?cid=' + S.clientId, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ msg })
+    });
+  } catch(e) {}
+}
+
+/* ══════════════════════════════════════════════════
+   MESSAGE HANDLER
+══════════════════════════════════════════════════ */
+function handleMessage(msg) {
+  switch(msg.type) {
+
+    case 'peer:joined':
+      S.peers.push({ id: msg.peerId, name: msg.name });
+      if (S.role === 'host') {
+        setDot('live', 'LIVE');
+        document.getElementById('peerArea').innerHTML =
+          `<div style="display:flex;align-items:center;gap:5px;padding:3px 9px;background:var(--s2);border:1px solid var(--b1);border-radius:12px;font-size:11px"><div class="sdot live"></div>${msg.name}</div>`;
+        document.getElementById('rtcSt').textContent = 'P2P ✓'; document.getElementById('rtcSt').className='conn-val ok';
+        document.getElementById('audSt').textContent = '48kHz ✓'; document.getElementById('audSt').className='conn-val ok';
+        document.getElementById('sb2').textContent = '● 1 peer'; document.getElementById('sb2').className='sbi ok';
+        document.getElementById('sb1').textContent = '● WebRTC: Connected'; document.getElementById('sb1').className='sbi ok';
+        document.getElementById('healthBar').style.display = 'flex';
+        sendToServer({ type:'daw:state', action:'snapshot', tracks:S.tracks, bpm:S.bpm, perms:S.perms, sessionType:S.sessionType });
+        applySessionDefaults();
+        startLatSim();
+        addChat('Host', 'הסשן מחובר! שניכם יכולים לעבוד ✓', false, true);
+      }
+      toast('🎧 ' + msg.name + ' הצטרף!', 'g');
+      dlog('Peer joined: ' + msg.name);
+      break;
+
+    case 'peer:left':
+      S.peers = S.peers.filter(p=>p.id!==msg.peerId);
+      if (S.role==='host') {
+        setDot('wait','ממתין לשותף...');
+        document.getElementById('peerArea').innerHTML='';
+        document.getElementById('healthBar').style.display='none';
+        document.getElementById('sb2').textContent='● 0 peers'; document.getElementById('sb2').className='sbi';
+        addChat('System','השותף התנתק',false,true);
+      }
+      toast('⚠️ השותף התנתק', ''); dlog('Peer left');
+      break;
+
+    case 'session:ended':
+      toast('⚠️ הסשן הסתיים', '');
+      setTimeout(leaveSession, 1500);
+      break;
+
+    case 'chat:msg':
+      addChat(msg.from, msg.text, msg.role==='remote', false);
+      break;
+
+    case 'session:perms':
+      S.perms = msg.perms;
+      updatePermDisplay();
+      toast('🔒 הרשאות עודכנו', '');
+      break;
+
+    case 'daw:state':
+      applyDAWState(msg);
+      break;
+  }
+}
+
+function applyDAWState(msg) {
+  if (msg.action === 'snapshot') {
+    if (msg.tracks) { S.tracks = msg.tracks; renderTracks(); }
+    if (msg.bpm) { S.bpm = msg.bpm; document.getElementById('bpmDisplay').textContent = msg.bpm; }
+    if (msg.perms) { S.perms = msg.perms; updatePermDisplay(); }
+    if (msg.sessionType) {
+      S.sessionType = msg.sessionType;
+      document.getElementById('stypeBadge').textContent = { co:'CO-PRODUCTION', ap:'ARTIST+PRODUCER', mn:'MENTOR', rv:'REVIEW' }[msg.sessionType] || '';
+    }
+    setDot('live','מחובר'); startLatSim();
+    document.getElementById('healthBar').style.display='flex';
+    document.getElementById('sb1').textContent='● WebRTC: Connected'; document.getElementById('sb1').className='sbi ok';
+    document.getElementById('sb2').textContent='● 1 peer'; document.getElementById('sb2').className='sbi ok';
+    addChat('System','הסשן מסונכרן ✓',false,true);
+    toast('✓ מחובר! השמע מתחיל...', 'g');
+    dlog('Snapshot received — ' + (msg.tracks?.length||0) + ' tracks');
+  }
+  else if (msg.action === 'play')        { S.playing=msg.v; updatePlayBtn(); dlog(msg.v?'PLAY':'STOP'); }
+  else if (msg.action === 'rec')         { S.rec=msg.v; updateRecBtn(); }
+  else if (msg.action === 'bpm')         { S.bpm=msg.v; document.getElementById('bpmDisplay').textContent=msg.v; dlog('BPM → '+msg.v); }
+  else if (msg.action === 'track_toggle'){ S.tracks[msg.i][msg.k]=msg.v; renderTracks(); }
+  else if (msg.action === 'track_vol')   { S.tracks[msg.i].v=msg.v; renderTracks(); }
+  else if (msg.action === 'pos')         { S.pos=msg.pos; updatePos(); }
+  else if (msg.action === 'marker_add')  { S.markers.push(msg.marker); renderMarkers(); }
+}
+
+/* ══════════════════════════════════════════════════
+   TRANSPORT COMMANDS
+══════════════════════════════════════════════════ */
+function cmd(c) {
+  if (c==='play') {
+    S.playing = !S.playing; updatePlayBtn();
+    sendToServer({ type:'daw:state', action:'play', v:S.playing });
+    toast(S.playing?'▶ Playing':'⏹ Stopped','');
+  }
+  else if (c==='rec') {
+    S.rec = !S.rec; updateRecBtn();
+    toast(S.rec?'⏺ Recording':'⏹ Stopped','');
+  }
+  else if (c==='rew') {
+    S.pos={b:1,bt:1,tk:1}; updatePos();
+    sendToServer({ type:'daw:state', action:'pos', pos:S.pos });
+    toast('⏮ Rewind','');
+  }
+  else if (c==='loop') {
+    const b=document.getElementById('btnLoop');
+    b.style.color=b.style.color==='var(--cyan)'?'':'var(--cyan)';
+    toast('🔁 Loop toggled','');
+  }
+  else if (c==='bpm+' || c==='bpm-') {
+    S.bpm = Math.max(20,Math.min(300,S.bpm+(c==='bpm+'?1:-1)));
+    document.getElementById('bpmDisplay').textContent = S.bpm;
+    sendToServer({ type:'daw:state', action:'bpm', v:S.bpm });
+  }
+}
+
+function updatePlayBtn() {
+  const b=document.getElementById('btnPlay');
+  if(b) b.textContent = S.playing?'⏸':'▶';
+}
+function updateRecBtn() {
+  const b=document.getElementById('btnRec');
+  if(b) b.className='tc rec'+(S.rec?' on':'');
+}
+
+/* ══════════════════════════════════════════════════
+   POSITION TICK
+══════════════════════════════════════════════════ */
+function startPosTick() {
+  setInterval(()=>{
+    if(!S.playing) return;
+    S.pos.tk++;
+    if(S.pos.tk>4){S.pos.tk=1;S.pos.bt++;}
+    if(S.pos.bt>4){S.pos.bt=1;S.pos.b++;}
+    updatePos();
+    if(S.role==='host') sendToServer({ type:'daw:state', action:'pos', pos:{...S.pos} });
+  }, 200);
+}
+function updatePos() {
+  const el=document.getElementById('posDisplay');
+  if(el) el.textContent=`${S.pos.b}.${S.pos.bt}.${S.pos.tk}`;
+}
+
+/* ══════════════════════════════════════════════════
+   MARKERS
+══════════════════════════════════════════════════ */
+const MCOLS=['#00d4ff','#00e87a','#ffb800','#ff3a5c','#8b5cf6'];
+function addMarker(e) {
+  const r=e.currentTarget.getBoundingClientRect();
+  const bar=Math.max(1,Math.round(((e.clientX-r.left)/r.width)*64));
+  const m={id:Date.now(),bar,lbl:'M'+(S.markers.length+1),col:MCOLS[S.markers.length%5]};
+  S.markers.push(m); renderMarkers();
+  sendToServer({ type:'daw:state', action:'marker_add', marker:m });
+  toast('📍 מרקר @ bar '+bar,'');
+}
+function renderMarkers() {
+  const row=document.getElementById('mRow'); if(!row) return;
+  row.innerHTML='';
+  S.markers.forEach(m=>{
+    const pct=((m.bar-1)/64)*100;
+    const p=document.createElement('div'); p.className='mpip';
+    p.style.cssText=`left:${pct}%;background:${m.col};`; p.title=m.lbl;
+    p.onclick=()=>toast('📍 '+m.lbl+' — bar '+m.bar,'');
+    const l=document.createElement('div'); l.className='mlbl';
+    l.style.cssText=`left:calc(${pct}% + 3px);color:${m.col};`; l.textContent=m.lbl;
+    row.appendChild(p); row.appendChild(l);
+  });
+}
+
+/* ══════════════════════════════════════════════════
+   CONTROL REQUEST
+══════════════════════════════════════════════════ */
+function requestControl() {
+  const btn=document.getElementById('reqCtrl');
+  if(btn){ btn.textContent='⏳ Pending...'; btn.disabled=true; }
+  sendToServer({ type:'daw:state', action:'control_request', name:'Remote' });
+  toast('✋ שולח בקשה לשותף...','');
+  // Simulate host response for demo
+  setTimeout(()=>handleControlRequest(),1200);
+}
+
+function handleControlRequest() {
+  modal(`<h3>✋ בקשת שליטה</h3>
+    <p>Remote רוצה לקחת שליטה ב-DAW.</p>
+    <div class="mrow">
+      <button class="btn btn-g" style="flex:1" onclick="grantCtrl()">✓ תן להם שליטה</button>
+      <button class="btn btn-ghost" onclick="denyCtrl()">✕ לא עכשיו</button>
+    </div>`);
+}
+
+function grantCtrl() {
+  closeModal(); S.control='remote';
+  document.getElementById('ctrlSt').textContent='Remote has control';
+  sendToServer({ type:'daw:state', action:'control_granted' });
+  addChat('System','שליטה הועברה ל-Remote',false,true);
+  toast('✓ שליטה הועברה','g');
+}
+function denyCtrl() {
+  closeModal();
+  const btn=document.getElementById('reqCtrl');
+  if(btn){ btn.textContent='✋ בקש שליטה'; btn.disabled=false; }
+  toast('בקשת שליטה נדחתה','');
+}
+
+/* ══════════════════════════════════════════════════
+   SESSION TYPE DEFAULTS
+══════════════════════════════════════════════════ */
+function applySessionDefaults() {
+  const map={ co:{trans:true,fad:true,mute:true,midi:true}, ap:{trans:true,fad:false,mute:false,midi:true}, mn:{trans:true,fad:true,mute:false,midi:false}, rv:{trans:true,fad:false,mute:false,midi:false} };
+  const d=map[S.sessionType]||map.co;
+  S.perms=d; updatePermDisplay();
+  sendToServer({ type:'session:perms', perms:d });
+}
+
+/* ══════════════════════════════════════════════════
+   CHAT
+══════════════════════════════════════════════════ */
+function addChat(from, text, isRemote, isSys=false) {
+  const area=document.getElementById('chatArea'); if(!area) return;
+  const now=new Date(); const t=now.getHours().toString().padStart(2,'0')+':'+now.getMinutes().toString().padStart(2,'0');
+  const d=document.createElement('div');
+  if(isSys){ d.className='sys'; d.textContent=text; }
+  else {
+    d.className='cmsg';
+    d.innerHTML=`<div class="chdr"><span class="cuser${isRemote?' r':''}">${from}</span><span class="ctime">${t}</span></div><div class="cbody">${text}</div>`;
+  }
+  area.appendChild(d); area.scrollTop=area.scrollHeight;
+}
+
+function sendChat() {
+  const inp=document.getElementById('chatIn'); if(!inp||!inp.value.trim()) return;
+  const text=inp.value.trim(); inp.value='';
+  addChat(S.role==='host'?'Host':'Remote', text, S.role==='remote');
+  sendToServer({ type:'chat:msg', text });
+}
+
+function tbOn() { document.getElementById('tbBtn')?.classList.add('on'); toast('🎙 Talkback פעיל',''); }
+function tbOff() { document.getElementById('tbBtn')?.classList.remove('on'); }
+
+/* ══════════════════════════════════════════════════
+   SCREEN SHARE
+══════════════════════════════════════════════════ */
+async function doScreenShare() {
+  if(!navigator.mediaDevices?.getDisplayMedia){ toast('⚠️ נסה Chrome/Edge',''); return; }
+  try {
+    const stream=await navigator.mediaDevices.getDisplayMedia({video:true,audio:false});
+    const btn=document.getElementById('btnSS');
+    if(btn){ btn.style.background='var(--cyan)'; btn.style.color='#000'; btn.textContent='🖥 Stop'; btn.onclick=()=>{stream.getTracks().forEach(t=>t.stop());btn.style.background='';btn.style.color='';btn.textContent='🖥 Share';btn.onclick=doScreenShare;}; }
+    toast('🖥 שיתוף מסך פעיל','g');
+  } catch(e){}
+}
+
+/* ══════════════════════════════════════════════════
+   METERS + ANIMATIONS
+══════════════════════════════════════════════════ */
+function startMeters() {
+  (function tick(){
+    const base=S.playing?0.45:0.03;
+    const L=Math.min(100,base*100+(S.playing?30:1)+Math.sin(Date.now()/190)*14);
+    const R=Math.min(100,base*100+(S.playing?28:1)+Math.cos(Date.now()/170)*12);
+    const mL=document.getElementById('mL'); const mR=document.getElementById('mR');
+    if(mL) mL.style.width=L+'%'; if(mR) mR.style.width=R+'%';
+    requestAnimationFrame(tick);
+  })();
+}
+
+function startLatSim() {
+  setInterval(()=>{
+    const ms=12+Math.floor(Math.random()*10);
+    const n=document.getElementById('latNum'); if(n) n.textContent=ms;
+    const f=document.getElementById('latFill'); if(f) f.style.width=ms+'%';
+    const h=document.getElementById('healthBar'); if(h) h.textContent=`● הסשן תקין · ${ms}ms`;
+  }, 2500);
+}
+
+/* ══════════════════════════════════════════════════
+   ANNOTATION
+══════════════════════════════════════════════════ */
+function annotate(i) {
+  const t=S.tracks[i];
+  modal(`<h3>📝 ${t.n}</h3>
+    <p>הוסף הערה לטראק — תופיע לשני הצדדים.</p>
+    <textarea id="aTxt" style="width:100%;background:var(--s2);border:1px solid var(--b1);border-radius:7px;padding:10px;color:var(--txt);font-family:var(--sans);font-size:12px;resize:none;height:70px;direction:rtl;outline:none;margin-bottom:14px">${t.note||''}</textarea>
+    <div class="mrow">
+      <button class="btn btn-c" style="flex:1;background:var(--cyan);padding:10px" onclick="saveAnnotation(${i})">✓ שמור</button>
+      <button class="btn btn-ghost" onclick="closeModal()">ביטול</button>
+    </div>`);
+}
+function saveAnnotation(i) {
+  S.tracks[i].note=document.getElementById('aTxt')?.value||'';
+  renderTracks(); closeModal(); toast('✓ הערה נשמרה','c');
+}
+
+/* ══════════════════════════════════════════════════
+   PERMS MODAL
+══════════════════════════════════════════════════ */
+function openPerms() {
+  modal(`<h3>🔒 הרשאות Remote</h3>
+    <p>בחר מה השותף יכול לעשות:</p>
+    <div style="display:flex;flex-direction:column;gap:10px;margin:14px 0">
+      ${[['trans','Transport (Play/Stop/BPM)'],['fad','Faders & Pan'],['mute','Mute / Solo'],['midi','MIDI Input']].map(([k,l])=>`
+        <label style="display:flex;align-items:center;justify-content:space-between;font-size:13px;cursor:pointer">
+          <span>${l}</span><input type="checkbox" id="pm_${k}" ${S.perms[k]?'checked':''} style="width:16px;height:16px">
+        </label>`).join('')}
+    </div>
+    <div class="mrow">
+      <button class="btn btn-c" style="flex:1;background:var(--cyan);padding:10px" onclick="savePerms()">✓ שמור</button>
+      <button class="btn btn-ghost" onclick="closeModal()">ביטול</button>
+    </div>`);
+}
+function savePerms() {
+  ['trans','fad','mute','midi'].forEach(k=>{ const el=document.getElementById('pm_'+k); if(el) S.perms[k]=el.checked; });
+  updatePermDisplay(); setPerm('all',null); closeModal(); toast('✓ ההרשאות עודכנו','c');
+}
+
+/* ══════════════════════════════════════════════════
+   CODE MODAL
+══════════════════════════════════════════════════ */
+function showCode() {
+  modal(`<h3>🔑 קוד הסשן</h3>
+    <p>שלח את הקוד הזה לשותף שלך. הם פותחים את האתר הזה ומכניסים אותו.</p>
+    <div class="mcode" onclick="copyCode()">${S.code}</div>
+    <div style="font-family:var(--mono);font-size:10px;color:var(--dim);text-align:center;margin-bottom:14px">לחץ על הקוד להעתקה</div>
+    <div class="mrow">
+      <button class="btn btn-c" style="flex:1;background:var(--cyan);padding:10px" onclick="copyCode()">📋 העתק ושלח</button>
+      <button class="btn btn-ghost" onclick="closeModal()">סגור</button>
+    </div>`);
+}
+function copyCode() {
+  navigator.clipboard?.writeText(S.code);
+  toast('✓ הקוד הועתק — שלח לשותף: '+S.code,'c');
+  closeModal();
+}
+
+/* ══════════════════════════════════════════════════
+   LEAVE / END
+══════════════════════════════════════════════════ */
+function leaveSession() {
+  stopPoll(); S.clientId=null; S.code=null; S.role=null; S.peers=[];
+  S.playing=false; S.rec=false; S.pos={b:1,bt:1,tk:1}; S.markers=[];
+  show('lobby');
+  toast('Session ended','');
+}
+
+/* ══════════════════════════════════════════════════
+   DAW LOG
+══════════════════════════════════════════════════ */
+function dlog(msg) {
+  const log=document.getElementById('dawLog'); if(!log) return;
+  const el=document.createElement('div'); el.textContent='> '+msg;
+  el.style.cssText='opacity:0;transition:opacity .3s';
+  log.appendChild(el); setTimeout(()=>el.style.opacity='1',10);
+  if(log.children.length>15) log.removeChild(log.firstChild);
+  log.scrollTop=log.scrollHeight;
+}
+
+/* ══════════════════════════════════════════════════
+   MODAL / TOAST / UTILS
+══════════════════════════════════════════════════ */
+function modal(html){ document.getElementById('modalBody').innerHTML=html; document.getElementById('modalBg').classList.add('on'); }
+function closeModal(){ document.getElementById('modalBg').classList.remove('on'); }
+function toast(msg,cls=''){
+  const a=document.getElementById('toasts');
+  const el=document.createElement('div'); el.className='toast'+(cls?' '+cls:''); el.textContent=msg;
+  a.appendChild(el); setTimeout(()=>el.remove(),3200);
+}
+function show(id){ document.querySelectorAll('.screen').forEach(s=>s.classList.remove('on')); document.getElementById(id).classList.add('on'); }
+function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
+function fmtCode(el){ let v=el.value.replace(/[^A-Z0-9a-z]/gi,'').toUpperCase().slice(0,6); if(v.length>3) v=v.slice(0,3)+'-'+v.slice(3); el.value=v; }
+function setOS(el,os){ S.os=os; document.querySelectorAll('#osMac,#osWin').forEach(b=>b.classList.remove('on')); el.classList.add('on'); }
+function setST(el,t){ S.sessionType=t; document.querySelectorAll('#stGrid .stype').forEach(b=>b.classList.remove('on')); el.classList.add('on'); }
+function setRole(el,r){ S.joinRole=r; document.querySelectorAll('.role-btn').forEach(b=>b.classList.remove('on')); el.classList.add('on'); }
+
+/* ══════════════════════════════════════════════════
+   KEYBOARD
+══════════════════════════════════════════════════ */
+document.addEventListener('keydown',e=>{
+  const tag=document.activeElement?.tagName;
+  if(tag==='INPUT'||tag==='TEXTAREA') return;
+  if(e.code==='Space'&&S.code){ e.preventDefault(); cmd('play'); }
+  if(e.code==='ArrowUp'){ e.preventDefault(); cmd('bpm+'); }
+  if(e.code==='ArrowDown'){ e.preventDefault(); cmd('bpm-'); }
+  if(e.code==='KeyM'&&S.code){ S.markers.push({id:Date.now(),bar:S.pos.b,lbl:'M'+(S.markers.length+1),col:MCOLS[S.markers.length%5]}); renderMarkers(); toast('📍 מרקר @ bar '+S.pos.b,''); }
+});
+
+/* ══════════════════════════════════════════════════
+   WAVE CANVAS
+══════════════════════════════════════════════════ */
+(function(){
+  const cvs=document.getElementById('wvc'); if(!cvs) return;
+  const ctx=cvs.getContext('2d');
+  function resize(){ cvs.width=window.innerWidth; cvs.height=window.innerHeight; }
+  resize(); window.addEventListener('resize',resize);
+  let t=0;
+  (function draw(){
+    ctx.clearRect(0,0,cvs.width,cvs.height);
+    for(let l=0;l<5;l++){
+      ctx.beginPath(); ctx.strokeStyle=`rgba(0,212,255,${0.06-l*0.01})`; ctx.lineWidth=1.5;
+      const yb=cvs.height*.35+l*55;
+      for(let x=0;x<=cvs.width;x+=3){
+        const f=.005+l*.002,a=35+l*18;
+        const y=yb+Math.sin(x*f+t+l)*a+Math.sin(x*f*2.3+t*1.5)*a*.3;
+        x===0?ctx.moveTo(x,y):ctx.lineTo(x,y);
+      }
+      ctx.stroke();
+    }
+    t+=.015; requestAnimationFrame(draw);
+  })();
+})();
+</script>
+</body>
+</html>

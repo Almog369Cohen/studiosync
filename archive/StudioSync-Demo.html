@@ -1,0 +1,1134 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>StudioSync — Demo</title>
+<style>
+/* ─── DESIGN SYSTEM ───────────────────────────────────── */
+:root {
+  --bg:    #07090c;
+  --s1:    #0c0f14;
+  --s2:    #111520;
+  --s3:    #161c28;
+  --b1:    #1a2538;
+  --b2:    #243050;
+  --dim:   #3a4d68;
+  --mid:   #5a7090;
+  --txt:   #c8d8e8;
+  --hi:    #e8f2ff;
+  --cyan:  #00d4ff;
+  --cD:    rgba(0,212,255,.12);
+  --green: #00e87a;
+  --gD:    rgba(0,232,122,.1);
+  --red:   #ff3a5c;
+  --rD:    rgba(255,58,92,.1);
+  --amber: #ffb800;
+  --aD:    rgba(255,184,0,.1);
+  --mono:  'Cascadia Code','Fira Code','SF Mono','Consolas',monospace;
+  --sans:  -apple-system,'Segoe UI','Arial Hebrew',sans-serif;
+}
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+html{font-size:13px}
+body{font-family:var(--sans);background:var(--bg);color:var(--txt);min-height:100vh;overflow:hidden}
+
+/* scanlines */
+body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,.025) 2px,rgba(0,0,0,.025) 4px);pointer-events:none;z-index:9999}
+
+/* ─── LAYOUT ─────────────────────────────────────────── */
+#root{display:flex;flex-direction:column;height:100vh}
+
+/* TOP CHROME */
+#chrome{height:44px;background:var(--s1);border-bottom:1px solid var(--b1);display:flex;align-items:center;padding:0 16px;gap:12px;flex-shrink:0}
+.chrome-logo{font-family:var(--mono);font-size:15px;font-weight:700;color:var(--cyan);letter-spacing:-1px;white-space:nowrap}
+.chrome-logo span{color:var(--hi)}
+.chrome-sep{width:1px;height:18px;background:var(--b1)}
+.demo-badge{font-family:var(--mono);font-size:9px;letter-spacing:2px;padding:3px 8px;border:1px solid rgba(255,184,0,.35);border-radius:3px;color:var(--amber)}
+.chrome-hint{font-family:var(--mono);font-size:10px;color:var(--dim);margin-right:auto}
+
+/* SPLIT VIEW */
+#split{display:grid;grid-template-columns:1fr 4px 1fr;flex:1;overflow:hidden}
+.divider{background:var(--b1);cursor:col-resize;position:relative;user-select:none}
+.divider::after{content:'';position:absolute;inset:-4px 0;background:transparent}
+.divider:hover{background:var(--cyan)}
+.pane{display:flex;flex-direction:column;overflow:hidden;position:relative}
+.pane-label{position:absolute;top:8px;left:50%;transform:translateX(-50%);font-family:var(--mono);font-size:9px;letter-spacing:2px;padding:2px 10px;border-radius:10px;z-index:10;pointer-events:none;white-space:nowrap}
+.pane-label.host {background:rgba(0,212,255,.12);border:1px solid rgba(0,212,255,.25);color:var(--cyan)}
+.pane-label.guest{background:rgba(0,232,122,.1); border:1px solid rgba(0,232,122,.25);color:var(--green)}
+
+/* TOPBAR */
+.topbar{height:48px;background:var(--s1);border-bottom:1px solid var(--b1);display:flex;align-items:center;padding:0 14px;gap:10px;flex-shrink:0}
+.tb-logo{font-family:var(--mono);font-size:12px;font-weight:700;color:var(--cyan)}
+.tb-logo.g{color:var(--green)}
+.tb-sep{width:1px;height:16px;background:var(--b1)}
+.status-dot{width:7px;height:7px;border-radius:50%;background:var(--dim);flex-shrink:0}
+.status-dot.live{background:var(--green);box-shadow:0 0 6px var(--green);animation:blink 2s infinite}
+.status-dot.wait{background:var(--amber);box-shadow:0 0 6px var(--amber);animation:blink 1s infinite}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.35}}
+.status-txt{font-family:var(--mono);font-size:10px;color:var(--mid)}
+.code-badge{font-family:var(--mono);font-size:12px;font-weight:700;letter-spacing:4px;padding:4px 12px;background:var(--s2);border:1px solid var(--b1);border-radius:5px;color:var(--hi);cursor:pointer}
+.code-badge:hover{border-color:var(--cyan)}
+.ml{margin-right:auto}
+.btn{display:inline-flex;align-items:center;gap:6px;padding:7px 14px;border:none;border-radius:6px;font-family:var(--mono);font-size:11px;cursor:pointer;transition:all .15s;white-space:nowrap}
+.btn-c{background:var(--cyan);color:#000;box-shadow:0 0 16px rgba(0,212,255,.3)}
+.btn-c:hover{box-shadow:0 0 28px rgba(0,212,255,.5);transform:translateY(-1px)}
+.btn-g{background:var(--green);color:#000}
+.btn-g:hover{opacity:.85}
+.btn-ghost{background:var(--s2);color:var(--txt);border:1px solid var(--b1)}
+.btn-ghost:hover{border-color:var(--b2)}
+.btn-red{background:var(--red);color:#fff}
+.tier-badge{font-family:var(--mono);font-size:9px;padding:2px 7px;border-radius:3px;letter-spacing:1px}
+.tier-pro {border:1px solid rgba(0,232,122,.3);color:var(--green)}
+.tier-free{border:1px solid var(--b1);color:var(--dim)}
+.ctrl-bar{display:flex;align-items:center;gap:6px;padding:4px 10px;background:var(--s2);border:1px solid var(--b1);border-radius:5px;font-family:var(--mono);font-size:10px;color:var(--mid)}
+.ctrl-bar.mine  {border-color:rgba(0,212,255,.3);color:var(--cyan)}
+.ctrl-bar.theirs{border-color:rgba(0,232,122,.3);color:var(--green)}
+
+/* TRANSPORT */
+.transport{display:flex;align-items:center;gap:6px;padding:8px 14px;background:var(--s1);border-bottom:1px solid var(--b1);flex-shrink:0}
+.tc{width:32px;height:32px;border-radius:6px;background:var(--s2);border:1px solid var(--b1);display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:13px;transition:all .12s;color:var(--txt)}
+.tc:hover{background:var(--s3);border-color:var(--b2)}
+.tc.play{background:var(--green);border-color:var(--green);color:#000}
+.tc.rec {background:var(--red);border-color:var(--red);color:#fff}
+.tc.rec.on{box-shadow:0 0 12px var(--red);animation:recpulse 1s infinite}
+@keyframes recpulse{0%,100%{box-shadow:0 0 8px var(--red)}50%{box-shadow:0 0 20px var(--red)}}
+.bpm-box{display:flex;align-items:center;gap:6px;padding:5px 12px;background:var(--s2);border:1px solid var(--b1);border-radius:6px}
+.bpm-val{font-family:var(--mono);font-size:18px;font-weight:700;color:var(--hi);min-width:44px;text-align:center}
+.bpm-lbl{font-family:var(--mono);font-size:9px;color:var(--dim);letter-spacing:1px}
+.bpm-btns{display:flex;flex-direction:column;gap:1px}
+.bpm-btn{background:none;border:none;cursor:pointer;color:var(--dim);font-size:10px;line-height:1;padding:1px 4px}
+.bpm-btn:hover{color:var(--cyan)}
+.pos-box{font-family:var(--mono);font-size:12px;color:var(--txt);padding:6px 12px;background:var(--s2);border:1px solid var(--b1);border-radius:6px;letter-spacing:2px}
+.health{display:flex;align-items:center;gap:8px;padding:5px 12px;border-radius:5px;font-family:var(--mono);font-size:10px;margin:0 4px}
+.health.ok {background:var(--gD);border:1px solid rgba(0,232,122,.2);color:var(--green)}
+.health.warn{background:var(--aD);border:1px solid rgba(255,184,0,.2);color:var(--amber)}
+.health.bad {background:var(--rD);border:1px solid rgba(255,58,92,.2);color:var(--red)}
+
+/* TRACKS */
+.track-area{flex:1;overflow-y:auto}
+.track-area::-webkit-scrollbar{width:4px}
+.track-area::-webkit-scrollbar-thumb{background:var(--b2);border-radius:2px}
+.track-row{display:grid;grid-template-columns:28px 160px 56px 1fr 46px;align-items:center;height:44px;padding:0 6px;border-bottom:1px solid rgba(26,37,56,.5);transition:background .1s;cursor:pointer;gap:2px}
+.track-row:hover{background:rgba(255,255,255,.02)}
+.track-row.sel{background:rgba(0,212,255,.04)}
+.tr-num{font-family:var(--mono);font-size:9px;color:var(--dim);text-align:center}
+.tr-name-wrap{display:flex;align-items:center;gap:7px;padding:0 4px;overflow:hidden}
+.tr-color{width:3px;height:28px;border-radius:2px;flex-shrink:0}
+.tr-name{font-size:12px;font-weight:600;color:var(--txt);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tr-type{font-family:var(--mono);font-size:9px;color:var(--dim);background:var(--s2);padding:1px 5px;border-radius:3px;border:1px solid var(--b1)}
+.tr-btns{display:flex;gap:2px}
+.tr-btn{width:20px;height:20px;background:var(--s2);border:1px solid var(--b1);border-radius:3px;display:flex;align-items:center;justify-content:center;cursor:pointer;font-family:var(--mono);font-size:9px;font-weight:700;color:var(--dim);transition:all .12s}
+.tr-btn:hover{color:var(--txt);background:var(--s3)}
+.tr-btn.M{background:var(--aD);border-color:rgba(255,184,0,.3);color:var(--amber)}
+.tr-btn.S{background:var(--gD);border-color:rgba(0,232,122,.3);color:var(--green)}
+.tr-btn.R{background:var(--rD);border-color:rgba(255,58,92,.3);color:var(--red)}
+.fader{-webkit-appearance:none;appearance:none;width:100%;height:3px;background:var(--s3);border-radius:2px;outline:none;cursor:pointer}
+.fader::-webkit-slider-thumb{-webkit-appearance:none;width:11px;height:11px;border-radius:50%;background:var(--cyan);box-shadow:0 0 5px rgba(0,212,255,.4);cursor:pointer}
+.tr-db{font-family:var(--mono);font-size:9px;color:var(--dim);text-align:center;min-width:38px}
+
+/* MARKER ROW */
+.marker-row{height:18px;background:rgba(0,212,255,.02);border-bottom:1px solid var(--b1);position:relative;overflow:hidden;cursor:crosshair;flex-shrink:0}
+.marker-pip{position:absolute;width:2px;top:2px;bottom:2px;border-radius:1px;cursor:pointer}
+.marker-pip:hover{opacity:.7}
+.marker-lbl{position:absolute;top:1px;font-family:var(--mono);font-size:8px;pointer-events:none;white-space:nowrap}
+
+/* RIGHT PANEL */
+.right-panel{width:240px;background:var(--s1);border-right:1px solid var(--b1);display:flex;flex-direction:column;overflow:hidden;flex-shrink:0}
+.rp-section{border-bottom:1px solid var(--b1);padding:10px 12px}
+.rp-title{font-family:var(--mono);font-size:9px;letter-spacing:2px;color:var(--dim);margin-bottom:8px;display:flex;align-items:center;justify-content:space-between}
+.meter-row{display:flex;align-items:center;gap:7px;margin-bottom:5px}
+.meter-lbl{font-family:var(--mono);font-size:9px;color:var(--dim);width:10px}
+.meter-track{flex:1;height:5px;background:var(--s3);border-radius:3px;overflow:hidden}
+.meter-fill{height:100%;background:linear-gradient(90deg,var(--green) 0%,var(--amber) 75%,var(--red) 90%);border-radius:3px;transition:width .06s ease}
+.conn-row{display:flex;align-items:center;justify-content:space-between;padding:7px 10px;background:var(--s2);border:1px solid var(--b1);border-radius:6px;margin-bottom:4px}
+.conn-lbl{font-size:11px}
+.conn-val{font-family:var(--mono);font-size:10px}
+.ok {color:var(--green)}
+.warn{color:var(--amber)}
+.lat-num{font-family:var(--mono);font-size:26px;font-weight:700;color:var(--green)}
+.lat-unit{font-family:var(--mono);font-size:10px;color:var(--mid)}
+.lat-bar{height:3px;background:var(--s3);border-radius:2px;margin-top:5px;overflow:hidden}
+.lat-fill{height:100%;background:var(--green);border-radius:2px;transition:width .5s}
+
+/* CHAT */
+.chat-area{flex:1;overflow-y:auto;padding:10px;display:flex;flex-direction:column;gap:8px}
+.chat-area::-webkit-scrollbar{width:3px}
+.chat-area::-webkit-scrollbar-thumb{background:var(--b2);border-radius:2px}
+.chat-msg{display:flex;flex-direction:column;gap:2px}
+.chat-hdr{display:flex;gap:5px;font-family:var(--mono);font-size:9px}
+.chat-user{color:var(--cyan)}
+.chat-user.g{color:var(--green)}
+.chat-time{color:var(--dim)}
+.chat-body{font-size:11px;background:var(--s2);border:1px solid var(--b1);border-radius:5px;padding:6px 8px;line-height:1.5;direction:rtl}
+.sys-msg{text-align:center;font-family:var(--mono);font-size:10px;color:var(--dim);padding:4px 0;border-top:1px dashed var(--b1);border-bottom:1px dashed var(--b1)}
+.chat-input-row{border-top:1px solid var(--b1);padding:8px;display:flex;gap:5px}
+.chat-in{flex:1;background:var(--s2);border:1px solid var(--b1);border-radius:5px;padding:6px 8px;font-family:var(--sans);font-size:11px;color:var(--txt);outline:none;direction:rtl}
+.chat-in:focus{border-color:var(--cyan)}
+.chat-send{width:30px;height:30px;background:var(--cyan);border:none;border-radius:5px;cursor:pointer;color:#000;font-size:14px;display:flex;align-items:center;justify-content:center}
+.talkback{width:100%;padding:8px;background:var(--s2);border:1px solid var(--b1);border-radius:6px;cursor:pointer;font-family:var(--mono);font-size:10px;color:var(--mid);transition:all .15s;display:flex;align-items:center;justify-content:center;gap:7px}
+.talkback:hover{border-color:var(--b2);color:var(--txt)}
+.talkback.on{background:var(--rD);border-color:var(--red);color:var(--red)}
+
+/* STATUSBAR */
+.statusbar{height:24px;background:var(--s1);border-top:1px solid var(--b1);display:flex;align-items:center;padding:0 12px;gap:14px;flex-shrink:0}
+.sb{display:flex;align-items:center;gap:4px;font-family:var(--mono);font-size:9px;color:var(--dim)}
+.sb.ok{color:var(--green)}
+.sb.warn{color:var(--amber)}
+.sb-sep{color:var(--b2)}
+
+/* LOBBY */
+.lobby{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;padding:24px;position:relative;overflow:hidden}
+.lobby canvas{position:absolute;inset:0;width:100%;height:100%;opacity:.12;pointer-events:none}
+.lobby-inner{position:relative;z-index:1;width:100%;max-width:360px}
+.logo-row{text-align:center;margin-bottom:28px}
+.logo-icon{width:44px;height:44px;background:linear-gradient(135deg,var(--cyan),#0088bb);border-radius:12px;display:inline-flex;align-items:center;justify-content:center;font-size:22px;margin-bottom:8px;box-shadow:0 0 24px rgba(0,212,255,.25)}
+.logo-name{font-family:var(--mono);font-size:22px;font-weight:700;color:var(--hi);letter-spacing:-1px}
+.logo-name span{color:var(--cyan)}
+.logo-sub{font-family:var(--mono);font-size:9px;letter-spacing:3px;color:var(--dim);margin-top:4px}
+.lobby-card{background:var(--s1);border:1px solid var(--b1);border-radius:12px;padding:20px;margin-bottom:10px;cursor:pointer;transition:border-color .2s}
+.lobby-card:hover{border-color:var(--b2)}
+.lobby-card.primary{border-color:rgba(0,212,255,.22);background:rgba(0,212,255,.02);position:relative}
+.lobby-card.primary::before{content:'מחשב ראשי';position:absolute;top:-10px;right:14px;font-family:var(--mono);font-size:9px;letter-spacing:2px;background:var(--bg);padding:0 8px;color:var(--cyan)}
+.card-hdr{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+.card-icon{width:38px;height:38px;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:18px}
+.ci-h{background:var(--cD);border:1px solid rgba(0,212,255,.2)}
+.ci-g{background:var(--gD);border:1px solid rgba(0,232,122,.2)}
+.card-title{font-size:15px;font-weight:700;color:var(--hi)}
+.card-sub{font-size:11px;color:var(--mid);margin-top:1px}
+.explainer{background:var(--s2);border:1px solid var(--b1);border-radius:7px;padding:10px 12px;margin-bottom:12px;display:flex;flex-direction:column;gap:6px}
+.expl-row{display:flex;align-items:center;gap:8px;font-size:12px}
+.expl-ico{font-size:14px;width:18px;text-align:center;flex-shrink:0}
+.stype-grid{display:grid;grid-template-columns:1fr 1fr;gap:5px;margin-bottom:12px}
+.stype{display:flex;align-items:center;gap:6px;padding:8px 10px;background:var(--s2);border:1px solid var(--b1);border-radius:6px;cursor:pointer;font-size:11px;color:var(--mid);transition:all .15s;user-select:none}
+.stype:hover{border-color:var(--b2);color:var(--txt)}
+.stype.on{border-color:var(--cyan);color:var(--cyan);background:var(--cD)}
+.join-row{display:flex;gap:6px;margin-top:10px}
+.code-in{flex:1;background:var(--s2);border:1px solid var(--b1);border-radius:6px;padding:9px 12px;font-family:var(--mono);font-size:16px;font-weight:700;color:var(--hi);letter-spacing:6px;text-align:center;outline:none;transition:border-color .2s;text-transform:uppercase}
+.code-in:focus{border-color:var(--cyan)}
+.role-row{display:flex;gap:5px;margin-bottom:10px}
+.role-btn{flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:8px;background:var(--s2);border:1px solid var(--b1);border-radius:6px;cursor:pointer;font-size:11px;color:var(--mid);transition:all .15s}
+.role-btn:hover{border-color:var(--b2);color:var(--txt)}
+.role-btn.on{border-color:var(--green);color:var(--green);background:var(--gD)}
+.ver{text-align:center;font-family:var(--mono);font-size:9px;color:var(--dim);margin-top:12px;letter-spacing:1px}
+
+/* MODAL */
+.modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.7);backdrop-filter:blur(8px);z-index:1000;display:none;align-items:center;justify-content:center}
+.modal-bg.open{display:flex}
+.modal{background:var(--s1);border:1px solid var(--b2);border-radius:14px;padding:28px;width:400px;max-width:92vw;animation:fadeUp .2s ease}
+@keyframes fadeUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+.modal h3{font-size:18px;font-weight:800;color:var(--hi);margin-bottom:6px}
+.modal p{font-size:12px;color:var(--mid);margin-bottom:16px;line-height:1.6}
+.modal-code{font-family:var(--mono);font-size:34px;font-weight:700;letter-spacing:12px;text-align:center;color:var(--cyan);padding:18px;background:var(--s2);border:1px solid rgba(0,212,255,.2);border-radius:9px;margin-bottom:14px;cursor:pointer;text-shadow:0 0 18px rgba(0,212,255,.3)}
+.modal-row{display:flex;gap:8px}
+.toast-area{position:fixed;bottom:36px;left:50%;transform:translateX(-50%);z-index:2000;display:flex;flex-direction:column;gap:6px;align-items:center;pointer-events:none}
+.toast{padding:8px 16px;background:var(--s2);border:1px solid var(--b2);border-radius:6px;font-family:var(--mono);font-size:11px;color:var(--txt);animation:toastIn .3s ease,toastOut .3s ease 2.7s forwards}
+.toast.c{border-color:rgba(0,212,255,.35);color:var(--cyan)}
+.toast.g{border-color:rgba(0,232,122,.35);color:var(--green)}
+@keyframes toastIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+@keyframes toastOut{to{opacity:0;transform:translateY(-5px)}}
+
+/* UPGRADE */
+.upgrade-feature{display:flex;gap:8px;align-items:center;padding:7px 0;font-size:12px;border-bottom:1px solid var(--b1)}
+.upgrade-feature:last-child{border:none}
+.upgrade-feature .ok{color:var(--green);font-weight:700}
+</style>
+</head>
+<body>
+<div id="root">
+
+<!-- TOP CHROME -->
+<div id="chrome">
+  <div class="chrome-logo">Studio<span>Sync</span></div>
+  <div class="chrome-sep"></div>
+  <div class="demo-badge">DEMO MODE</div>
+  <div class="chrome-hint">← מחשב ראשי (Host) &nbsp;&nbsp;|&nbsp;&nbsp; מחשב שני (Remote) →</div>
+  <button class="btn btn-ghost" onclick="resetAll()" style="font-size:10px;padding:5px 10px">↺ אפס</button>
+</div>
+
+<!-- SPLIT VIEW -->
+<div id="split">
+
+  <!-- ═══════════════ LEFT: HOST PANE ═══════════════ -->
+  <div class="pane" id="hostPane">
+    <div class="pane-label host">🖥 מחשב ראשי — Host</div>
+
+    <!-- LOBBY HOST -->
+    <div id="hostLobby" class="lobby">
+      <canvas id="waveL"></canvas>
+      <div class="lobby-inner">
+        <div class="logo-row">
+          <div class="logo-icon">🎛</div>
+          <div class="logo-name">Studio<span>Sync</span></div>
+          <div class="logo-sub">הפקה משותפת · בזמן אמת</div>
+        </div>
+
+        <div class="lobby-card primary" onclick="hostStart()">
+          <div class="card-hdr">
+            <div class="card-icon ci-h">💻</div>
+            <div>
+              <div class="card-title">המחשב שלי — הראשי</div>
+              <div class="card-sub">כאן מותקן ה-DAW שלך</div>
+            </div>
+            <div style="margin-right:auto;display:flex;gap:4px">
+              <div class="stype on" style="padding:5px 8px;font-size:10px" onclick="event.stopPropagation();toggleOS(this,'mac')" id="osMac">🍎</div>
+              <div class="stype" style="padding:5px 8px;font-size:10px" onclick="event.stopPropagation();toggleOS(this,'win')" id="osWin">🪟</div>
+            </div>
+          </div>
+          <div class="explainer">
+            <div class="expl-row"><span class="expl-ico">🔊</span><span>השמע מה-DAW שלך ישודר לשותף</span></div>
+            <div class="expl-row"><span class="expl-ico">🎛</span><span>שניכם שולטים ב-DAW יחד</span></div>
+            <div class="expl-row"><span class="expl-ico">🔑</span><span>תקבל קוד — שלח לשותף</span></div>
+          </div>
+          <div class="stype-grid" id="stypeGrid" onclick="event.stopPropagation()">
+            <div class="stype on" onclick="pickType(this,'co')" data-t="co">🎛 יצירה משותפת</div>
+            <div class="stype" onclick="pickType(this,'ap')"  data-t="ap">🎤 אמן + מפיק</div>
+            <div class="stype" onclick="pickType(this,'mn')"  data-t="mn">🎓 הדרכה</div>
+            <div class="stype" onclick="pickType(this,'rv')"  data-t="rv">👁 האזנה ומשוב</div>
+          </div>
+          <button class="btn btn-c" style="width:100%;justify-content:center;font-size:13px;padding:12px" onclick="event.stopPropagation();hostStart()">
+            נתחיל — פתח סשן חדש ⚡
+          </button>
+        </div>
+        <div class="ver">v1.0 · P2P · E2E Encrypted · WebRTC</div>
+      </div>
+    </div>
+
+    <!-- SESSION HOST (hidden initially) -->
+    <div id="hostSession" style="display:none;flex-direction:column;height:100%">
+      <div class="topbar">
+        <div class="tb-logo">StudioSync</div>
+        <div class="tb-sep"></div>
+        <div class="status-dot" id="hDot"></div>
+        <div class="status-txt" id="hState">מאתחל...</div>
+        <div style="font-family:var(--mono);font-size:9px;padding:2px 7px;border:1px solid var(--b1);border-radius:3px;color:var(--dim)" id="stypeBadge">CO-PRODUCTION</div>
+        <div id="hPeerArea" style="display:flex;gap:5px"></div>
+        <div class="ml"></div>
+        <div class="ctrl-bar mine" id="hCtrl"><span style="width:5px;height:5px;border-radius:50%;background:var(--cyan);display:inline-block"></span> You have control</div>
+        <div class="code-badge" id="hCode" onclick="showCodeModal()">— — —</div>
+        <span class="tier-badge tier-pro">PRO</span>
+        <button class="btn btn-ghost" onclick="confirmEnd()" style="font-size:10px;padding:5px 10px">✕</button>
+      </div>
+
+      <div class="transport">
+        <div class="tc" onclick="transport('rew')">⏮</div>
+        <div class="tc play" id="btnPlay" onclick="togglePlay()">▶</div>
+        <div class="tc rec"  id="btnRec"  onclick="toggleRec()">⏺</div>
+        <div class="tc" onclick="toggleLoop()" id="btnLoop">🔁</div>
+        <div class="bpm-box">
+          <div><div class="bpm-lbl">BPM</div><div class="bpm-val" id="bpmVal">128</div></div>
+          <div class="bpm-btns">
+            <button class="bpm-btn" onclick="bpm(1)">▲</button>
+            <button class="bpm-btn" onclick="bpm(-1)">▼</button>
+          </div>
+        </div>
+        <div class="pos-box" id="posVal">1.1.1</div>
+        <div class="health ok" id="healthBar" style="display:none">● Session healthy</div>
+        <div class="ml"></div>
+        <div class="tc" onclick="screenShare()" id="btnScreen" style="width:auto;padding:0 10px;font-size:10px;font-family:var(--mono)">🖥 Share</div>
+        <div class="tc rec" id="btnRecSession" onclick="toggleRecSession()" style="width:auto;padding:0 10px;font-size:10px;font-family:var(--mono)">⏺ Rec</div>
+      </div>
+
+      <div style="display:flex;flex:1;overflow:hidden">
+        <!-- LEFT SIDEBAR -->
+        <div style="width:200px;background:var(--s1);border-left:1px solid var(--b1);display:flex;flex-direction:column;overflow:hidden;flex-shrink:0">
+          <div class="rp-section">
+            <div class="rp-title">חיבורים</div>
+            <div class="conn-row"><span class="conn-lbl">🔌 DAW</span><span class="conn-val ok" id="oscSt">OSC ✓</span></div>
+            <div class="conn-row"><span class="conn-lbl">🎵 Audio</span><span class="conn-val ok" id="audioSt">48kHz ✓</span></div>
+            <div class="conn-row"><span class="conn-lbl">📡 P2P</span><span class="conn-val" id="p2pSt" style="color:var(--mid)">—</span></div>
+          </div>
+          <div class="rp-section">
+            <div class="rp-title">Latency</div>
+            <div style="display:flex;align-items:baseline;gap:4px"><span class="lat-num" id="latNum">—</span><span class="lat-unit">ms</span></div>
+            <div class="lat-bar"><div class="lat-fill" id="latFill" style="width:0%"></div></div>
+          </div>
+          <div class="rp-section" style="flex:1;overflow-y:auto">
+            <div class="rp-title">הרשאות Remote
+              <button onclick="openPermsModal()" style="background:none;border:1px solid var(--b1);border-radius:3px;cursor:pointer;color:var(--mid);font-size:9px;padding:1px 5px">ערוך</button>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:4px;font-size:11px" id="permsList">
+              <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" checked id="p_trans"> Transport</label>
+              <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox" checked id="p_fad">   Faders</label>
+              <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox"       id="p_mute">  Mute/Solo</label>
+              <label style="display:flex;align-items:center;gap:6px;cursor:pointer"><input type="checkbox"       id="p_midi">  MIDI</label>
+            </div>
+          </div>
+        </div>
+
+        <!-- CENTER: TRACKS -->
+        <div style="flex:1;display:flex;flex-direction:column;overflow:hidden">
+          <div class="marker-row" id="mRow" onclick="addMarkerAt(event)"></div>
+          <div class="track-area" id="trackArea"></div>
+        </div>
+
+        <!-- RIGHT: METERS + CHAT -->
+        <div class="right-panel">
+          <div class="rp-section">
+            <div class="rp-title">Output</div>
+            <div class="meter-row"><div class="meter-lbl">L</div><div class="meter-track"><div class="meter-fill" id="mL" style="width:0%"></div></div></div>
+            <div class="meter-row"><div class="meter-lbl">R</div><div class="meter-track"><div class="meter-fill" id="mR" style="width:0%"></div></div></div>
+          </div>
+          <div style="flex:1;display:flex;flex-direction:column;overflow:hidden">
+            <div style="padding:8px 12px 0;font-family:var(--mono);font-size:9px;letter-spacing:2px;color:var(--dim)">צ׳אט</div>
+            <div class="chat-area" id="chatH">
+              <div class="sys-msg">Session started · Encrypted P2P</div>
+            </div>
+            <div class="chat-input-row">
+              <input class="chat-in" id="chatIn" placeholder="הקלד..." onkeydown="if(event.key==='Enter')sendMsg('host')">
+              <button class="chat-send" onclick="sendMsg('host')">↑</button>
+            </div>
+          </div>
+          <div style="padding:8px">
+            <button class="talkback" id="tbH" onmousedown="tbOn('tbH')" onmouseup="tbOff('tbH')">🎙 לחץ והחזק לדבר</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="statusbar">
+        <div class="sb" id="sbWebrtc">● WebRTC: —</div><div class="sb-sep">|</div>
+        <div class="sb" id="sbAudio">● Audio: —</div><div class="sb-sep">|</div>
+        <div class="sb ok" id="sbLat">● Latency: —</div><div class="sb-sep">|</div>
+        <div class="sb ok">● E2E Encrypted</div><div class="sb-sep">|</div>
+        <div class="sb" id="sbPeers">● 0 peers</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- DIVIDER -->
+  <div class="divider"></div>
+
+  <!-- ═══════════════ RIGHT: REMOTE PANE ═══════════════ -->
+  <div class="pane" id="remotePane">
+    <div class="pane-label guest">🎧 מחשב שני — Remote</div>
+
+    <!-- LOBBY REMOTE -->
+    <div id="remoteLobby" class="lobby">
+      <canvas id="waveR"></canvas>
+      <div class="lobby-inner">
+        <div class="logo-row">
+          <div class="logo-icon" style="background:linear-gradient(135deg,var(--green),#007744)">🎧</div>
+          <div class="logo-name">Studio<span style="color:var(--green)">Sync</span></div>
+          <div class="logo-sub">הצטרף לסשן</div>
+        </div>
+
+        <div class="lobby-card">
+          <div class="card-hdr">
+            <div class="card-icon ci-g">🎧</div>
+            <div>
+              <div class="card-title">המחשב השני — הצד השני</div>
+              <div class="card-sub">קיבלת קוד מהשותף?</div>
+            </div>
+          </div>
+          <div class="explainer" style="margin-bottom:10px">
+            <div class="expl-row"><span class="expl-ico">🔊</span><span>תשמע שמע ישיר מהסטודיו</span></div>
+            <div class="expl-row"><span class="expl-ico">🎛</span><span>תשלוט ב-DAW מהדפדפן</span></div>
+          </div>
+          <div class="role-row">
+            <div class="role-btn on" onclick="pickRole(this,'col')" id="roleCol">🎛 שותף — שליטה מלאה</div>
+            <div class="role-btn"    onclick="pickRole(this,'lst')" id="roleLst">👁 האזנה בלבד</div>
+          </div>
+          <div class="join-row">
+            <input class="code-in" id="joinIn" placeholder="ABC-123" maxlength="7" oninput="fmtCode(this)" onkeydown="if(event.key==='Enter')remoteJoin()">
+            <button class="btn btn-g" onclick="remoteJoin()">בואו נצא לדרך →</button>
+          </div>
+          <div id="joinHint" style="font-family:var(--mono);font-size:10px;color:var(--dim);text-align:center;margin-top:8px;display:none">
+            💡 בדמו — לחץ "פתח סשן" משמאל קודם
+          </div>
+        </div>
+        <div class="ver">Free tier · ללא התקנה · דפדפן בלבד</div>
+      </div>
+    </div>
+
+    <!-- SESSION REMOTE (hidden initially) -->
+    <div id="remoteSession" style="display:none;flex-direction:column;height:100%">
+      <div class="topbar">
+        <div class="tb-logo g">StudioSync <span style="font-size:9px;letter-spacing:2px;color:var(--mid)">REMOTE</span></div>
+        <div class="tb-sep"></div>
+        <div class="status-dot live"></div>
+        <div class="status-txt" id="rState" style="color:var(--green)">מחובר</div>
+        <div style="font-family:var(--mono);font-size:9px;padding:2px 7px;border:1px solid var(--b1);border-radius:3px" id="syncBadge" style="color:var(--mid)">SYNCED</div>
+        <button class="btn btn-ghost" id="reqCtrlBtn" onclick="requestControl()" style="font-size:10px;padding:5px 10px;display:none">✋ Request Control</button>
+        <div class="ml"></div>
+        <div class="code-badge" id="rCode">— — —</div>
+        <span class="tier-badge tier-free">FREE</span>
+        <button class="btn btn-ghost" onclick="remoteLeave()" style="font-size:10px;padding:5px 10px">✕ נתק</button>
+      </div>
+
+      <div class="transport">
+        <div class="tc" onclick="rCmd('rew')">⏮</div>
+        <div class="tc play" id="rBtnPlay" onclick="rCmd('play')">▶</div>
+        <div class="tc rec" onclick="rCmd('rec')">⏺</div>
+        <div class="tc" onclick="rCmd('loop')">🔁</div>
+        <div class="bpm-box">
+          <div><div class="bpm-lbl">BPM</div><div class="bpm-val" id="rBpmVal">128</div></div>
+          <div class="bpm-btns">
+            <button class="bpm-btn" onclick="rBpm(1)">▲</button>
+            <button class="bpm-btn" onclick="rBpm(-1)">▼</button>
+          </div>
+        </div>
+        <div class="pos-box" id="rPosVal">1.1.1</div>
+        <div style="font-family:var(--mono);font-size:10px;color:var(--green);padding:5px 10px;background:var(--gD);border:1px solid rgba(0,232,122,.2);border-radius:5px;margin-right:auto">🔊 Audio Live</div>
+      </div>
+
+      <div style="display:flex;flex:1;overflow:hidden">
+        <!-- LEFT: connection info -->
+        <div style="width:200px;background:var(--s1);border-left:1px solid var(--b1);display:flex;flex-direction:column;overflow:hidden;flex-shrink:0">
+          <div class="rp-section">
+            <div class="rp-title">חיבור</div>
+            <div class="conn-row"><span class="conn-lbl">📡 WebRTC</span><span class="conn-val ok">P2P ✓</span></div>
+            <div class="conn-row"><span class="conn-lbl">🔊 Audio</span><span class="conn-val ok">Streaming</span></div>
+            <div class="conn-row"><span class="conn-lbl">🎛 Control</span><span class="conn-val ok" id="rCtrlSt">Active</span></div>
+          </div>
+          <div class="rp-section">
+            <div class="rp-title">Latency</div>
+            <div style="display:flex;align-items:baseline;gap:4px"><span class="lat-num" style="color:var(--green)" id="rLatNum">—</span><span class="lat-unit">ms</span></div>
+            <div class="lat-bar"><div class="lat-fill" id="rLatFill" style="width:0%;background:var(--green)"></div></div>
+            <div id="connQual" style="margin-top:6px;padding:5px 8px;border-radius:5px;font-family:var(--mono);font-size:10px;background:var(--gD);border:1px solid rgba(0,232,122,.2);color:var(--green)">● P2P Direct</div>
+          </div>
+          <div class="rp-section">
+            <div class="rp-title">הרשאות שלי</div>
+            <div style="display:flex;flex-direction:column;gap:4px;font-size:11px" id="rPermsList">
+              <div style="color:var(--green)">✓ Transport</div>
+              <div style="color:var(--green)">✓ Faders</div>
+              <div style="color:var(--mid)">○ Mute/Solo</div>
+              <div style="color:var(--mid)">○ MIDI</div>
+            </div>
+          </div>
+          <div class="rp-section" style="flex:1">
+            <div class="rp-title">Monitor Volume</div>
+            <input type="range" class="fader" min="0" max="100" value="80" style="width:100%;margin-bottom:4px" oninput="setVol(this.value)">
+            <div style="font-family:var(--mono);font-size:9px;color:var(--dim);text-align:center" id="volLbl">80%</div>
+          </div>
+        </div>
+
+        <!-- CENTER: mirrored tracks -->
+        <div style="flex:1;display:flex;flex-direction:column;overflow:hidden">
+          <div class="marker-row" id="rMRow"></div>
+          <div class="track-area" id="rTrackArea"></div>
+        </div>
+
+        <!-- RIGHT: chat -->
+        <div class="right-panel">
+          <div class="rp-section">
+            <div class="rp-title">Audio Monitor</div>
+            <div class="meter-row"><div class="meter-lbl">L</div><div class="meter-track"><div class="meter-fill" id="rML" style="width:0%"></div></div></div>
+            <div class="meter-row"><div class="meter-lbl">R</div><div class="meter-track"><div class="meter-fill" id="rMR" style="width:0%"></div></div></div>
+          </div>
+          <div style="flex:1;display:flex;flex-direction:column;overflow:hidden">
+            <div style="padding:8px 12px 0;font-family:var(--mono);font-size:9px;letter-spacing:2px;color:var(--dim)">צ׳אט</div>
+            <div class="chat-area" id="chatR">
+              <div class="sys-msg">Connected to session · Encrypted P2P</div>
+            </div>
+            <div class="chat-input-row">
+              <input class="chat-in" id="chatRIn" placeholder="הקלד..." onkeydown="if(event.key==='Enter')sendMsg('remote')">
+              <button class="chat-send" onclick="sendMsg('remote')">↑</button>
+            </div>
+          </div>
+          <div style="padding:8px">
+            <button class="talkback" id="tbR" onmousedown="tbOn('tbR')" onmouseup="tbOff('tbR')">🎙 לחץ והחזק לדבר</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="statusbar">
+        <div class="sb ok">● WebRTC: P2P Direct</div><div class="sb-sep">|</div>
+        <div class="sb ok">● Audio: 48kHz</div><div class="sb-sep">|</div>
+        <div class="sb ok" id="rSbLat">● Latency: —</div><div class="sb-sep">|</div>
+        <div class="sb ok">● E2E Encrypted</div>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /split -->
+</div><!-- /root -->
+
+<!-- MODAL -->
+<div class="modal-bg" id="modalBg" onclick="if(event.target===this)closeModal()">
+  <div class="modal" id="modalBody"></div>
+</div>
+
+<!-- TOASTS -->
+<div class="toast-area" id="toasts"></div>
+
+<script>
+/* ═══════════════════════════════════════════════════════
+   STATE
+═══════════════════════════════════════════════════════ */
+const S = {
+  code: '', playing: false, recording: false,
+  bpm: 128, pos: {b:1,bt:1,tk:1},
+  sessionType: 'co', peerJoined: false,
+  tracks: [], markers: [],
+  control: 'host', // 'host'|'remote'|'shared'
+  perms: { trans:true, fad:true, mute:false, midi:false },
+};
+
+/* ═══════════════════════════════════════════════════════
+   TRACKS
+═══════════════════════════════════════════════════════ */
+const TRACKS = [
+  { n:'Kick',      t:'AUDIO', c:'#ff3a5c', v:82, m:0, s:0, a:0 },
+  { n:'Snare',     t:'AUDIO', c:'#ffb800', v:75, m:0, s:0, a:0 },
+  { n:'Hi-Hat',    t:'AUDIO', c:'#ffb800', v:68, m:0, s:0, a:0 },
+  { n:'Bass 808',  t:'MIDI',  c:'#00e87a', v:88, m:0, s:0, a:1 },
+  { n:'Melody',    t:'MIDI',  c:'#00d4ff', v:71, m:0, s:0, a:0 },
+  { n:'Lead Vox',  t:'AUDIO', c:'#8b5cf6', v:79, m:0, s:0, a:1 },
+  { n:'Pad BG',    t:'MIDI',  c:'#00d4ff', v:55, m:1, s:0, a:0 },
+  { n:'FX Return', t:'AUX',   c:'#5a7090', v:64, m:0, s:0, a:0 },
+];
+
+function initTracks() { S.tracks = JSON.parse(JSON.stringify(TRACKS)); renderBoth(); }
+
+function renderTracks(containerId, isRemote) {
+  const el = document.getElementById(containerId);
+  if (!el) return;
+  el.innerHTML = '';
+  S.tracks.forEach((t, i) => {
+    const row = document.createElement('div');
+    row.className = 'track-row' + (i===0?' sel':'');
+    row.dataset.i = i;
+    const db = t.v===0 ? '-∞' : (20*Math.log10(t.v/100)).toFixed(1);
+    row.innerHTML = `
+      <div class="tr-num">${i+1}</div>
+      <div class="tr-name-wrap" onclick="openAnnotation(${i})" title="Annotate">
+        <div class="tr-color" style="background:${t.c}"></div>
+        <div>
+          <div class="tr-name">${t.n}${t.note?'<span style="font-size:8px;color:var(--amber)"> 📝</span>':''}</div>
+          <div class="tr-type">${t.t}</div>
+        </div>
+      </div>
+      <div class="tr-btns">
+        <div class="tr-btn ${t.m?'M':''}" onclick="toggleM(${i})" title="Mute">M</div>
+        <div class="tr-btn ${t.s?'S':''}" onclick="toggleS(${i})" title="Solo">S</div>
+        <div class="tr-btn ${t.a?'R':''}" onclick="toggleA(${i})" title="Arm">R</div>
+      </div>
+      <div style="padding:0 8px;display:flex;align-items:center">
+        <input type="range" class="fader" min="0" max="127" value="${t.v}" oninput="setVolumeTrack(${i},this.value)">
+      </div>
+      <div class="tr-db" id="db${containerId}${i}">${db}</div>`;
+    row.addEventListener('click', e => {
+      if (e.target.classList.contains('tr-btn') || e.target.classList.contains('tr-name-wrap') || e.target.closest('.tr-name-wrap') || e.target.tagName==='INPUT') return;
+      el.querySelectorAll('.track-row').forEach(r=>r.classList.remove('sel'));
+      row.classList.add('sel');
+    });
+    el.appendChild(row);
+  });
+  renderVU(containerId);
+}
+
+function renderBoth() { renderTracks('trackArea','h'); renderTracks('rTrackArea','r'); renderMarkers(); }
+
+function toggleM(i) {
+  S.tracks[i].m = S.tracks[i].m ? 0 : 1;
+  renderBoth(); syncAction('mute',i,S.tracks[i].m);
+}
+function toggleS(i) { S.tracks[i].s = S.tracks[i].s ? 0 : 1; renderBoth(); }
+function toggleA(i) { S.tracks[i].a = S.tracks[i].a ? 0 : 1; renderBoth(); }
+function setVolumeTrack(i, v) {
+  S.tracks[i].v = +v;
+  const db = v==0?'-∞':(20*Math.log10(v/100)).toFixed(1);
+  ['h','r'].forEach(p=>{ const el=document.getElementById('db'+p+(i===0?'trackArea':('trackArea'))+i); });
+  renderBoth();
+  syncAction('vol',i,v);
+}
+
+/* VU meters */
+function renderVU(cId) {}  // handled by animation loop
+
+/* ═══════════════════════════════════════════════════════
+   HOST FLOW
+═══════════════════════════════════════════════════════ */
+function genCode() {
+  const c = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  let s = ''; for(let i=0;i<6;i++) s+=c[Math.floor(Math.random()*c.length)];
+  return s.slice(0,3)+'-'+s.slice(3);
+}
+
+function hostStart() {
+  S.code = genCode();
+  document.getElementById('hCode').textContent = S.code;
+  document.getElementById('rCode').textContent = S.code;
+  document.getElementById('stypeBadge').textContent = {co:'CO-PRODUCTION',ap:'ARTIST+PRODUCER',mn:'MENTOR',rv:'MIX REVIEW'}[S.sessionType] || 'CO-PRODUCTION';
+
+  show('hostLobby', false); show('hostSession', true);
+  setHState('wait', 'ממתין לשותף...');
+  initTracks();
+  startMeters();
+  startPositionTick();
+
+  // Show "join hint" on remote side
+  document.getElementById('joinHint').style.display = 'block';
+  document.getElementById('joinIn').value = S.code;
+
+  toast('🎛 הסשן נפתח! הקוד שלך: '+S.code, 'c');
+  setTimeout(()=>toast('💡 עכשיו לחץ "בואו נצא לדרך" מהצד הימני', ''), 1200);
+}
+
+function setHState(dot, txt) {
+  document.getElementById('hDot').className = 'status-dot '+(dot==='live'?'live':dot==='wait'?'wait':'');
+  document.getElementById('hState').textContent = txt;
+}
+
+/* ═══════════════════════════════════════════════════════
+   REMOTE FLOW
+═══════════════════════════════════════════════════════ */
+function fmtCode(el) {
+  let v = el.value.replace(/[^A-Z0-9a-z]/gi,'').toUpperCase().slice(0,6);
+  if(v.length>3) v=v.slice(0,3)+'-'+v.slice(3);
+  el.value = v;
+}
+
+function remoteJoin() {
+  const code = document.getElementById('joinIn').value.replace('-','').toUpperCase();
+  if (code.length < 5) { toast('⚠️ נראה שחסר קוד — בוא ננסה שוב', ''); return; }
+  if (!S.code) { toast('💡 קודם פתח סשן מהצד השמאלי', ''); return; }
+  if (code !== S.code.replace('-','')) { toast('⚠️ הקוד לא נמצא — בדוק ונסה שוב', ''); return; }
+
+  show('remoteLobby', false); show('remoteSession', true);
+  S.peerJoined = true;
+
+  // Update host
+  setTimeout(() => {
+    setHState('live', 'LIVE');
+    document.getElementById('hPeerArea').innerHTML = `<div style="display:flex;align-items:center;gap:5px;padding:3px 8px;background:var(--s2);border:1px solid var(--b1);border-radius:12px;font-size:11px"><div class="status-dot live"></div>Remote_01</div>`;
+    document.getElementById('p2pSt').textContent = 'P2P ✓'; document.getElementById('p2pSt').className = 'conn-val ok';
+    document.getElementById('sbWebrtc').textContent = '● WebRTC: Connected'; document.getElementById('sbWebrtc').className = 'sb ok';
+    document.getElementById('sbAudio').textContent = '● Audio: 48kHz'; document.getElementById('sbAudio').className = 'sb ok';
+    document.getElementById('healthBar').style.display = 'flex';
+    document.getElementById('sbPeers').textContent = '● 1 peer';
+    document.getElementById('reqCtrlBtn').style.display = S.perms.trans ? '' : 'none';
+
+    // Apply session type defaults
+    applySessionTypeDefaults();
+    startLatencySim();
+    addChat('chatH', 'Remote_01', 'היי! אני בפנים ושומע הכל 🎵', true);
+  }, 600);
+
+  toast('✓ נכנסנו! השמע מתחיל...', 'g');
+  setTimeout(()=>toast('🎵 Audio stream פעיל', 'g'), 1400);
+}
+
+function applySessionTypeDefaults() {
+  const defs = {
+    co: { trans:true, fad:true, mute:true, midi:true, ctrl:'shared' },
+    ap: { trans:true, fad:false, mute:false, midi:true, ctrl:'host' },
+    mn: { trans:true, fad:true, mute:false, midi:false, ctrl:'host' },
+    rv: { trans:true, fad:false, mute:false, midi:false, ctrl:'host' },
+  };
+  const d = defs[S.sessionType] || defs.co;
+  S.perms = { trans:d.trans, fad:d.fad, mute:d.mute, midi:d.midi };
+  ['p_trans','p_fad','p_mute','p_midi'].forEach((id,i)=>{
+    const el = document.getElementById(id);
+    if(el) el.checked = [d.trans,d.fad,d.mute,d.midi][i];
+  });
+  updateCtrlBar(d.ctrl);
+  updateRemotePerms();
+}
+
+function updateCtrlBar(who) {
+  S.control = who;
+  const hb = document.getElementById('hCtrl');
+  if(!hb) return;
+  if(who==='shared') { hb.className='ctrl-bar'; hb.style.borderColor='rgba(255,184,0,.3)'; hb.style.color='var(--amber)'; hb.querySelector('span').style.background='var(--amber)'; hb.lastChild.textContent='Shared control'; }
+  else if(who==='remote') { hb.className='ctrl-bar theirs'; hb.querySelector('span').style.background='var(--green)'; hb.lastChild.textContent='Remote has control'; }
+  else { hb.className='ctrl-bar mine'; hb.querySelector('span').style.background='var(--cyan)'; hb.lastChild.textContent='You have control'; }
+  const trackArea = document.getElementById('trackArea');
+  if(trackArea) { trackArea.style.opacity = who==='remote' ? '0.5' : '1'; trackArea.style.pointerEvents = who==='remote' ? 'none' : ''; }
+}
+
+function updateRemotePerms() {
+  const el = document.getElementById('rPermsList');
+  if(!el) return;
+  const perms = [{k:'trans',l:'Transport'},{k:'fad',l:'Faders'},{k:'mute',l:'Mute/Solo'},{k:'midi',l:'MIDI'}];
+  el.innerHTML = perms.map(p=>`<div style="color:${S.perms[p.k]?'var(--green)':'var(--mid)'}">${S.perms[p.k]?'✓':'○'} ${p.l}</div>`).join('');
+  const rta = document.getElementById('rTrackArea');
+  if(rta) { const can = S.control==='remote'||S.control==='shared'; rta.style.opacity=can?'1':'0.5'; rta.style.pointerEvents=can?'':'none'; }
+}
+
+function requestControl() {
+  const btn = document.getElementById('reqCtrlBtn');
+  if(btn) { btn.textContent='⏳ Pending…'; btn.style.color='var(--amber)'; }
+  toast('✋ שולח בקשה לשותף...', '');
+  setTimeout(()=>showCtrlRequestModal(), 1000);
+}
+
+function showCtrlRequestModal() {
+  modal(`<h3>✋ Control Request</h3>
+    <p><strong style="color:var(--green)">Remote_01</strong> רוצה לקחת שליטה ב-DAW.</p>
+    <div class="modal-row">
+      <button class="btn btn-g" style="flex:1" onclick="grantControl()">✓ תן להם שליטה</button>
+      <button class="btn btn-ghost" onclick="denyControl()">✕ לא עכשיו</button>
+    </div>`);
+}
+
+function grantControl() {
+  closeModal(); updateCtrlBar('remote');
+  const btn = document.getElementById('reqCtrlBtn'); if(btn) btn.style.display='none';
+  toast('✓ קיבלת שליטה מה-Host', 'g');
+  syncBadge('SYNCED','g'); addSysMsg('chatH','Control granted to Remote_01'); addSysMsg('chatR','You have control');
+}
+
+function denyControl() {
+  closeModal(); updateCtrlBar('host');
+  const btn = document.getElementById('reqCtrlBtn'); if(btn){ btn.textContent='✋ Request Control'; btn.style.color=''; }
+  toast('Control request denied', '');
+}
+
+/* ═══════════════════════════════════════════════════════
+   TRANSPORT
+═══════════════════════════════════════════════════════ */
+function togglePlay() {
+  S.playing = !S.playing;
+  const b = document.getElementById('btnPlay');
+  b.textContent = S.playing ? '⏸' : '▶';
+  const rb = document.getElementById('rBtnPlay');
+  if(rb) rb.textContent = S.playing ? '⏸' : '▶';
+  syncAction('play', null, S.playing);
+  toast(S.playing ? '▶ Playing' : '⏹ Stopped', '');
+}
+
+function toggleRec() {
+  S.recording = !S.recording;
+  const b = document.getElementById('btnRec');
+  if(b){ b.textContent='⏺'; b.className='tc rec'+(S.recording?' on':''); }
+}
+
+function toggleLoop() {
+  const b = document.getElementById('btnLoop');
+  if(b) b.style.color = b.style.color === 'var(--cyan)' ? '' : 'var(--cyan)';
+  toast('🔁 Loop toggled', '');
+}
+
+function transport(cmd) {
+  if(cmd==='rew'){ S.pos={b:1,bt:1,tk:1}; updatePos(); toast('⏮ Rewind', ''); }
+}
+
+function bpm(d) {
+  S.bpm = Math.max(20, Math.min(300, S.bpm+d));
+  ['bpmVal','rBpmVal'].forEach(id=>{ const el=document.getElementById(id); if(el) el.textContent=S.bpm; });
+  syncAction('bpm', null, S.bpm);
+}
+
+function rBpm(d) { bpm(d); toast('BPM → '+S.bpm+' (→ Host)', ''); }
+
+function rCmd(cmd) {
+  if(cmd==='play') togglePlay();
+  else if(cmd==='rec') toggleRec();
+  else if(cmd==='rew') transport('rew');
+  else if(cmd==='loop') toggleLoop();
+  toast(cmd.toUpperCase()+' → Host', '');
+}
+
+function updatePos() {
+  const s = `${S.pos.b}.${S.pos.bt}.${S.pos.tk}`;
+  ['posVal','rPosVal'].forEach(id=>{ const el=document.getElementById(id); if(el) el.textContent=s; });
+}
+
+/* ═══════════════════════════════════════════════════════
+   MARKERS
+═══════════════════════════════════════════════════════ */
+const MCOLS = ['#00d4ff','#00e87a','#ffb800','#ff3a5c','#8b5cf6'];
+function addMarkerAt(e) {
+  const rect=e.currentTarget.getBoundingClientRect();
+  const pct=(e.clientX-rect.left)/rect.width;
+  const bar=Math.max(1,Math.round(pct*64));
+  S.markers.push({ id:Date.now(), bar, lbl:'M'+(S.markers.length+1), col:MCOLS[S.markers.length%5] });
+  renderMarkers(); toast('📍 מרקר @ bar '+bar, '');
+}
+function renderMarkers() {
+  ['mRow','rMRow'].forEach(id=>{
+    const row=document.getElementById(id); if(!row) return;
+    row.innerHTML='';
+    S.markers.forEach(m=>{
+      const pct=((m.bar-1)/64)*100;
+      const pip=document.createElement('div'); pip.className='marker-pip';
+      pip.style.cssText=`left:${pct}%;background:${m.col};`;
+      pip.title=m.lbl+' (bar '+m.bar+')'; pip.onclick=()=>toast('📍 '+m.lbl+' — bar '+m.bar, '');
+      const lbl=document.createElement('div'); lbl.className='marker-lbl';
+      lbl.style.cssText=`left:calc(${pct}% + 3px);color:${m.col};`;
+      lbl.textContent=m.lbl;
+      row.appendChild(pip); row.appendChild(lbl);
+    });
+  });
+}
+
+/* ═══════════════════════════════════════════════════════
+   SYNC (simulated — in real app goes via WebRTC DataChannel)
+═══════════════════════════════════════════════════════ */
+function syncAction(type, idx, val) {
+  // Simulates DataChannel message to remote
+  // In production: RTC.sendToAll({type,idx,val})
+  if (type==='bpm') setTimeout(()=>syncBpmDisplay(val), 30);
+}
+function syncBpmDisplay(v) {
+  ['bpmVal','rBpmVal'].forEach(id=>{ const el=document.getElementById(id); if(el) el.textContent=v; });
+}
+function syncBadge(txt, cls) {
+  const el=document.getElementById('syncBadge');
+  if(!el) return;
+  el.textContent=txt;
+  el.style.color = cls==='g'?'var(--green)':cls==='r'?'var(--red)':'var(--mid)';
+  el.style.borderColor = cls==='g'?'rgba(0,232,122,.3)':cls==='r'?'rgba(255,58,92,.3)':'var(--b1)';
+}
+
+/* ═══════════════════════════════════════════════════════
+   METERS + ANIMATIONS
+═══════════════════════════════════════════════════════ */
+function startMeters() {
+  function tick() {
+    const base=S.playing?0.45:0.03;
+    const lv=base*100+(S.playing?30:1), rv=base*100+(S.playing?28:1);
+    const L=Math.min(100,lv+Math.sin(Date.now()/190)*14);
+    const R=Math.min(100,rv+Math.cos(Date.now()/170)*12);
+    ['mL','rML'].forEach(id=>{ const el=document.getElementById(id); if(el) el.style.width=L+'%'; });
+    ['mR','rMR'].forEach(id=>{ const el=document.getElementById(id); if(el) el.style.width=R+'%'; });
+    requestAnimationFrame(tick);
+  }
+  tick();
+}
+
+function startPositionTick() {
+  setInterval(()=>{
+    if(!S.playing) return;
+    S.pos.tk++;
+    if(S.pos.tk>4){S.pos.tk=1;S.pos.bt++;}
+    if(S.pos.bt>4){S.pos.bt=1;S.pos.b++;}
+    updatePos();
+  }, 200);
+}
+
+function startLatencySim() {
+  setInterval(()=>{
+    const ms = 12+Math.floor(Math.random()*10);
+    ['latNum','rLatNum'].forEach(id=>{ const el=document.getElementById(id); if(el) el.textContent=ms; });
+    ['latFill','rLatFill'].forEach(id=>{ const el=document.getElementById(id); if(el) el.style.width=ms+'%'; });
+    ['sbLat','rSbLat'].forEach(id=>{ const el=document.getElementById(id); if(el) el.textContent=`● Latency: ${ms}ms`; });
+    const qual=document.getElementById('connQual');
+    if(qual) { qual.textContent=ms<30?`● Excellent P2P (${ms}ms)`:ms<80?`● Good (${ms}ms)`:`● Slow (${ms}ms)`; }
+    const hb=document.getElementById('healthBar');
+    if(hb) hb.textContent=`● הסשן תקין · P2P Direct · ${ms}ms`;
+  }, 2500);
+}
+
+function toggleRecSession() {
+  const btn=document.getElementById('btnRecSession');
+  if(!btn) return;
+  const on=btn.style.boxShadow!=='';
+  btn.style.boxShadow=on?'':'0 0 12px var(--red)';
+  btn.textContent=on?'⏺ Rec':'⏹ Stop';
+  toast(on?'⏹ הקלטה הסתיימה — שומר את הקובץ...':'⏺ ההקלטה התחילה', on?'':'g');
+}
+
+/* ═══════════════════════════════════════════════════════
+   SCREEN SHARE
+═══════════════════════════════════════════════════════ */
+function screenShare() {
+  if (!navigator.mediaDevices?.getDisplayMedia) { toast('⚠️ Screen share: נסה Chrome/Edge', ''); return; }
+  navigator.mediaDevices.getDisplayMedia({ video:true, audio:false }).then(stream=>{
+    const btn=document.getElementById('btnScreen');
+    if(btn){ btn.style.background='var(--cyan)'; btn.style.color='#000'; btn.textContent='🖥 Stop'; btn.onclick=()=>{stream.getTracks().forEach(t=>t.stop());btn.style.background='';btn.style.color='';btn.textContent='🖥 Share';btn.onclick=screenShare;}; }
+    toast('🖥 שיתוף מסך פעיל — השותף רואה את המסך שלך', 'g');
+  }).catch(()=>{});
+}
+
+/* ═══════════════════════════════════════════════════════
+   CHAT
+═══════════════════════════════════════════════════════ */
+function addChat(areaId, user, txt, isRemote=false) {
+  const area=document.getElementById(areaId); if(!area) return;
+  const now=new Date(); const t=now.getHours().toString().padStart(2,'0')+':'+now.getMinutes().toString().padStart(2,'0');
+  const d=document.createElement('div'); d.className='chat-msg';
+  d.innerHTML=`<div class="chat-hdr"><span class="chat-user${isRemote?' g':''}">${user}</span><span class="chat-time">${t}</span></div><div class="chat-body">${txt}</div>`;
+  area.appendChild(d); area.scrollTop=area.scrollHeight;
+}
+function addSysMsg(areaId, txt) {
+  const area=document.getElementById(areaId); if(!area) return;
+  const d=document.createElement('div'); d.className='sys-msg'; d.textContent=txt;
+  area.appendChild(d); area.scrollTop=area.scrollHeight;
+}
+function sendMsg(side) {
+  const inId=side==='host'?'chatIn':'chatRIn';
+  const inp=document.getElementById(inId); if(!inp||!inp.value.trim()) return;
+  const txt=inp.value.trim(); inp.value='';
+  const isHost=side==='host';
+  addChat('chatH', isHost?'Host':'Remote_01', txt, !isHost);
+  addChat('chatR', isHost?'Host':'Remote_01', txt, !isHost);
+}
+
+function tbOn(id) { const el=document.getElementById(id); if(el) el.classList.add('on'); toast('🎙 Talkback פעיל', ''); }
+function tbOff(id) { const el=document.getElementById(id); if(el) el.classList.remove('on'); }
+
+/* ═══════════════════════════════════════════════════════
+   MODALS
+═══════════════════════════════════════════════════════ */
+function modal(html) { document.getElementById('modalBody').innerHTML=html; document.getElementById('modalBg').classList.add('open'); }
+function closeModal() { document.getElementById('modalBg').classList.remove('open'); }
+function showCodeModal() {
+  modal(`<h3>🔑 קוד הסשן</h3>
+    <p>שלח את הקוד הזה לשותף. הם יכנסו למחשב השני ויזינו אותו.</p>
+    <div class="modal-code" onclick="copyCode()">${S.code}</div>
+    <div style="font-family:var(--mono);font-size:10px;color:var(--dim);text-align:center;margin-bottom:14px">לחץ על הקוד להעתקה</div>
+    <div class="modal-row">
+      <button class="btn btn-c" style="flex:1" onclick="copyCode()">📋 העתק קוד ושלח</button>
+      <button class="btn btn-ghost" onclick="closeModal()">סגור</button>
+    </div>`);
+}
+function copyCode() {
+  navigator.clipboard?.writeText(S.code);
+  toast('✓ הקוד הועתק — שלח אותו לשותף: '+S.code, 'c');
+  closeModal();
+}
+function confirmEnd() {
+  modal(`<h3>לסיים את הסשן?</h3>
+    <p>הסשן ייסגר לכל המשתתפים.</p>
+    <div class="modal-row">
+      <button class="btn btn-red" style="flex:1" onclick="endSession()">✕ כן, לסיים</button>
+      <button class="btn btn-ghost" onclick="closeModal()">לא, להמשיך</button>
+    </div>`);
+}
+function endSession() {
+  closeModal(); resetAll();
+  toast('✓ הסשן נסגר — תודה שהשתמשת ב-StudioSync 🎛', 'c');
+}
+
+function remoteLeave() {
+  show('remoteSession', false); show('remoteLobby', true);
+  S.peerJoined=false;
+  setHState('wait', 'ממתין לשותף...');
+  document.getElementById('p2pSt').textContent='—'; document.getElementById('p2pSt').className='conn-val';
+  document.getElementById('sbPeers').textContent='● 0 peers';
+  document.getElementById('hPeerArea').innerHTML='';
+  document.getElementById('healthBar').style.display='none';
+  toast('⚠️ השותף התנתק — השליטה חזרה אליך', '');
+  updateCtrlBar('host');
+  addSysMsg('chatH', 'Remote_01 left the session');
+}
+
+function openPermsModal() {
+  modal(`<h3>🔒 הרשאות Remote</h3>
+    <p>בחר מה השותף יכול לעשות:</p>
+    <div style="display:flex;flex-direction:column;gap:10px;margin:14px 0">
+      ${[['trans','Transport (Play/Stop/BPM)'],['fad','Faders & Pan'],['mute','Mute / Solo'],['midi','MIDI Input']].map(([k,l])=>`
+        <label style="display:flex;align-items:center;justify-content:space-between;font-size:13px;cursor:pointer">
+          <span>${l}</span>
+          <input type="checkbox" id="pm_${k}" ${S.perms[k]?'checked':''} style="width:16px;height:16px">
+        </label>`).join('')}
+    </div>
+    <div class="modal-row">
+      <button class="btn btn-c" style="flex:1" onclick="savePerms()">✓ שמור הרשאות</button>
+      <button class="btn btn-ghost" onclick="closeModal()">ביטול</button>
+    </div>`);
+}
+function savePerms() {
+  ['trans','fad','mute','midi'].forEach(k=>{ const el=document.getElementById('pm_'+k); if(el) S.perms[k]=el.checked; });
+  ['p_trans','p_fad','p_mute','p_midi'].forEach((id,i)=>{ const el=document.getElementById(id); const k=['trans','fad','mute','midi'][i]; if(el) el.checked=S.perms[k]; });
+  updateRemotePerms(); closeModal(); toast('✓ ההרשאות עודכנו', 'c');
+}
+
+function openAnnotation(i) {
+  const t = S.tracks[i];
+  modal(`<h3>📝 ${t.n}</h3>
+    <p>הוסף הערה לטראק — תופיע לשני הצדדים.</p>
+    <textarea id="anTxt" style="width:100%;background:var(--s2);border:1px solid var(--b1);border-radius:7px;padding:10px;color:var(--txt);font-family:var(--sans);font-size:12px;resize:none;height:70px;direction:rtl;outline:none;margin-bottom:14px">${t.note||''}</textarea>
+    <div class="modal-row">
+      <button class="btn btn-c" style="flex:1" onclick="saveAnnotation(${i})">✓ שמור</button>
+      <button class="btn btn-ghost" onclick="closeModal()">ביטול</button>
+    </div>`);
+}
+function saveAnnotation(i) {
+  S.tracks[i].note = document.getElementById('anTxt')?.value||'';
+  renderBoth(); closeModal(); toast('✓ הערה נשמרה', 'c');
+}
+
+function setVol(v) {
+  const el=document.getElementById('volLbl'); if(el) el.textContent=v+'%';
+}
+
+/* ═══════════════════════════════════════════════════════
+   SESSION TYPES + ROLES
+═══════════════════════════════════════════════════════ */
+function pickType(el, t) {
+  document.querySelectorAll('#stypeGrid .stype').forEach(b=>b.classList.remove('on'));
+  el.classList.add('on'); S.sessionType=t;
+}
+function pickRole(el, r) {
+  document.querySelectorAll('.role-btn').forEach(b=>b.classList.remove('on'));
+  el.classList.add('on');
+}
+function toggleOS(el, os) {
+  document.querySelectorAll('#osMac,#osWin').forEach(b=>b.classList.remove('on'));
+  el.classList.add('on');
+}
+
+/* ═══════════════════════════════════════════════════════
+   RESET
+═══════════════════════════════════════════════════════ */
+function resetAll() {
+  S.playing=false; S.recording=false; S.bpm=128; S.pos={b:1,bt:1,tk:1}; S.code=''; S.peerJoined=false; S.markers=[];
+  show('hostLobby', true); show('hostSession', false);
+  show('remoteLobby', true); show('remoteSession', false);
+  document.getElementById('joinHint').style.display='none';
+  document.getElementById('joinIn').value='';
+}
+
+/* ═══════════════════════════════════════════════════════
+   UTILS
+═══════════════════════════════════════════════════════ */
+function show(id, visible) {
+  const el=document.getElementById(id);
+  if(!el) return;
+  if(visible) { el.style.display=''; el.style.flexDirection=id.includes('Session')?'column':''; }
+  else { el.style.display='none'; }
+}
+function toast(msg, cls='') {
+  const area=document.getElementById('toasts');
+  const el=document.createElement('div');
+  el.className='toast'+(cls?' '+cls:'');
+  el.textContent=msg;
+  area.appendChild(el);
+  setTimeout(()=>el.remove(), 3200);
+}
+
+/* ═══════════════════════════════════════════════════════
+   KEYBOARD SHORTCUTS
+═══════════════════════════════════════════════════════ */
+document.addEventListener('keydown', e=>{
+  const tag=document.activeElement?.tagName;
+  if(tag==='INPUT'||tag==='TEXTAREA') return;
+  if(e.code==='Space'){e.preventDefault(); if(S.code) togglePlay();}
+  if(e.code==='ArrowUp'){e.preventDefault(); bpm(e.shiftKey?10:1);}
+  if(e.code==='ArrowDown'){e.preventDefault(); bpm(e.shiftKey?-10:-1);}
+  if(e.code==='KeyM' && S.code) {
+    S.markers.push({id:Date.now(),bar:S.pos.b,lbl:'M'+(S.markers.length+1),col:MCOLS[S.markers.length%5]});
+    renderMarkers(); toast('📍 מרקר @ bar '+S.pos.b,'');
+  }
+});
+
+/* ═══════════════════════════════════════════════════════
+   WAVE CANVAS BACKGROUND
+═══════════════════════════════════════════════════════ */
+function initWave(canvasId) {
+  const cvs=document.getElementById(canvasId); if(!cvs) return;
+  const ctx=cvs.getContext('2d');
+  function resize(){ cvs.width=cvs.parentElement.offsetWidth||600; cvs.height=cvs.parentElement.offsetHeight||400; }
+  resize(); window.addEventListener('resize', resize);
+  let t=0;
+  (function draw(){
+    ctx.clearRect(0,0,cvs.width,cvs.height);
+    for(let l=0;l<5;l++){
+      ctx.beginPath(); ctx.strokeStyle=`rgba(0,212,255,${0.06-l*0.01})`; ctx.lineWidth=1.5;
+      const yb=cvs.height*0.35+l*55;
+      for(let x=0;x<=cvs.width;x+=3){
+        const f=0.005+l*0.002,a=35+l*18;
+        const y=yb+Math.sin(x*f+t+l)*a+Math.sin(x*f*2.3+t*1.5)*a*.3;
+        x===0?ctx.moveTo(x,y):ctx.lineTo(x,y);
+      }
+      ctx.stroke();
+    }
+    t+=0.015; requestAnimationFrame(draw);
+  })();
+}
+initWave('waveL'); initWave('waveR');
+</script>
+</body>
+</html>
