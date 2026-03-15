@@ -5,7 +5,7 @@
       "name": "studiosync",
       "runtimeExecutable": "node",
       "runtimeArgs": ["server.js"],
-      "port": 4567
+      "port": 4444
     }
   ]
 }

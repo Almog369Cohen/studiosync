@@ -6,9 +6,10 @@
 
 const robot = require('robotjs');
 const http = require('http');
+const https = require('https');
 
 // ── Config ──
-const SERVER = process.argv[2] || 'http://localhost:4567';
+const SERVER = process.argv[2] || 'http://localhost:4444';
 const screen = robot.getScreenSize();
 console.log('\n🎛  StudioSync Agent');
 console.log('   שרת:', SERVER);
@@ -45,12 +46,15 @@ function mapKey(browserKey) {
   return null;
 }
 
-// ── HTTP helpers ──
+// ── HTTP/HTTPS helpers ──
+const client = SERVER.startsWith('https') ? https : http;
+
 function post(path, data) {
   return new Promise((resolve, reject) => {
     const url = new URL(path, SERVER);
     const body = JSON.stringify(data);
-    const req = http.request(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } }, res => {
+    const mod = url.protocol === 'https:' ? https : http;
+    const req = mod.request(url, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } }, res => {
       let s = '';
       res.on('data', d => s += d);
       res.on('end', () => { try { resolve(JSON.parse(s)); } catch { resolve({}); } });
@@ -63,7 +67,8 @@ function post(path, data) {
 function get(path) {
   return new Promise((resolve, reject) => {
     const url = new URL(path, SERVER);
-    http.get(url, { timeout: 30000 }, res => {
+    const mod = url.protocol === 'https:' ? https : http;
+    mod.get(url, { timeout: 30000 }, res => {
       let s = '';
       res.on('data', d => s += d);
       res.on('end', () => { try { resolve(JSON.parse(s)); } catch { resolve({}); } });

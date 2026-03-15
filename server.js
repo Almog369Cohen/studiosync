@@ -603,7 +603,23 @@ function createPC(isInitiator, iceServers) {
         document.body.appendChild(remoteAudioEl);
       }
       remoteAudioEl.srcObject = e.streams[0] || new MediaStream([e.track]);
-      remoteAudioEl.play().catch(() => toast('⚠️ לחץ על המסך כדי להפעיל שמע', ''));
+      remoteAudioEl.play().catch(() => {
+        dlog('Audio autoplay blocked — waiting for user click');
+        toast('🔊 לחץ במקום כלשהו כדי להפעיל שמע', '');
+        // Resume audio on first user interaction anywhere on the page
+        const resumeAudio = () => {
+          if (remoteAudioEl) {
+            remoteAudioEl.play().then(() => {
+              dlog('Audio resumed after user click');
+              toast('🔊 שמע מופעל!', 'g');
+            }).catch(() => {});
+          }
+          document.removeEventListener('click', resumeAudio);
+          document.removeEventListener('keydown', resumeAudio);
+        };
+        document.addEventListener('click', resumeAudio, { once: false });
+        document.addEventListener('keydown', resumeAudio, { once: false });
+      });
       document.getElementById('audSt').textContent = 'Audio ✓';
       document.getElementById('audSt').className = 'cv ok';
       toast('🔊 שמע מתקבל!', 'g');
@@ -867,7 +883,7 @@ function showRemoteVideo(stream) {
     const overlay = document.createElement('div');
     overlay.style.cssText = 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.8);cursor:pointer;z-index:802;';
     overlay.innerHTML = '<div style="text-align:center"><div style="font-size:48px;margin-bottom:12px">▶</div><div style="font-family:var(--mono);font-size:14px;color:var(--cyan)">לחץ כדי להתחיל</div></div>';
-    overlay.onclick = () => { vidEl.play(); overlay.remove(); };
+    overlay.onclick = () => { vidEl.play(); if (remoteAudioEl) remoteAudioEl.play(); overlay.remove(); };
     container.appendChild(overlay);
   });
   toast('🖥 רואים את Ableton! לחץ על המסך לשליטה', 'g');
