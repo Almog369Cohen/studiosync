@@ -573,6 +573,7 @@ function createPC(isInitiator, iceServers) {
         document.body.appendChild(remoteAudioEl);
       }
       remoteAudioEl.srcObject = e.streams[0] || new MediaStream([e.track]);
+      remoteAudioEl.play().catch(() => toast('⚠️ לחץ על המסך כדי להפעיל שמע', ''));
       document.getElementById('audSt').textContent = 'Audio ✓';
       document.getElementById('audSt').className = 'cv ok';
       toast('🔊 שמע מתקבל!', 'g');
@@ -791,6 +792,13 @@ function showRemoteVideo(stream) {
       + '<button id="remoteCloseBtn" style="padding:4px 10px;background:var(--rD);border:1px solid rgba(255,58,92,.3);border-radius:5px;color:var(--red);font-family:var(--mono);font-size:10px;cursor:pointer">✕ סגור</button>';
     container.appendChild(toolbar);
 
+    // Loading indicator
+    const loading = document.createElement('div');
+    loading.id = 'remoteVidLoading';
+    loading.style.cssText = 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;z-index:802;pointer-events:none;';
+    loading.innerHTML = '<div style="text-align:center"><div class="spin" style="margin:0 auto 12px"></div><div style="font-family:var(--mono);font-size:12px;color:var(--mid)">ממתין לשידור מהמורה...</div></div>';
+    container.appendChild(loading);
+
     // Video
     const vid = document.createElement('video');
     vid.id = 'remoteVid';
@@ -798,6 +806,7 @@ function showRemoteVideo(stream) {
     vid.playsInline = true;
     vid.muted = true; // Audio comes from separate audio element
     vid.style.cssText = 'flex:1;width:100%;object-fit:contain;background:#000;cursor:crosshair;';
+    vid.onplaying = () => { const ld = document.getElementById('remoteVidLoading'); if (ld) ld.remove(); };
     container.appendChild(vid);
 
     document.body.appendChild(container);
@@ -820,7 +829,17 @@ function showRemoteVideo(stream) {
     setupRemoteInputCapture(vid);
   }
 
-  document.getElementById('remoteVid').srcObject = stream;
+  const vidEl = document.getElementById('remoteVid');
+  vidEl.srcObject = stream;
+  // Force play — handle autoplay policy
+  vidEl.play().catch(() => {
+    // Autoplay blocked — show click-to-play overlay
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(0,0,0,.8);cursor:pointer;z-index:802;';
+    overlay.innerHTML = '<div style="text-align:center"><div style="font-size:48px;margin-bottom:12px">▶</div><div style="font-family:var(--mono);font-size:14px;color:var(--cyan)">לחץ כדי להתחיל</div></div>';
+    overlay.onclick = () => { vidEl.play(); overlay.remove(); };
+    container.appendChild(overlay);
+  });
   toast('🖥 רואים את Ableton! לחץ על המסך לשליטה', 'g');
 }
 
