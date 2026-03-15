@@ -1,0 +1,11 @@
+services:
+  - type: web
+    name: studiosync
+    runtime: node
+    buildCommand: echo "ready"
+    startCommand: node server.js
+    envVars:
+      - key: PORT
+        value: 10000
+    plan: free
+    autoDeploy: true
