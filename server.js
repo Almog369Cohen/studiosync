@@ -1,19 +1,101 @@
-const http = require('http');
-const os   = require('os');
+const http  = require('http');
+const https = require('https');
+const os    = require('os');
 const crypto = require('crypto');
 
+// ── Morning (Green Invoice) API ────────────────────────────
+const MORNING_API_ID     = process.env.MORNING_API_ID     || '';
+const MORNING_API_SECRET = process.env.MORNING_API_SECRET || '';
+const MORNING_BASE       = 'https://api.greeninvoice.co.il/api/v1';
+const MORNING_PRICE      = Number(process.env.MORNING_PRICE || '99');   // ₪/month
+const APP_URL            = process.env.APP_URL || 'https://studiosync-nxu0.onrender.com';
+
+let morningToken = null;
+let morningTokenExp = 0;
+
+async function morningRequest(method, path, body) {
+  return new Promise((resolve, reject) => {
+    const payload = body ? JSON.stringify(body) : null;
+    const options = {
+      hostname: 'api.greeninvoice.co.il',
+      path: '/api/v1' + path,
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(morningToken ? { Authorization: 'Bearer ' + morningToken } : {}),
+        ...(payload ? { 'Content-Length': Buffer.byteLength(payload) } : {})
+      }
+    };
+    const req = https.request(options, res => {
+      let data = '';
+      res.on('data', d => data += d);
+      res.on('end', () => {
+        try { resolve(JSON.parse(data)); }
+        catch(e) { resolve({ error: data }); }
+      });
+    });
+    req.on('error', reject);
+    if (payload) req.write(payload);
+    req.end();
+  });
+}
+
+async function getMorningToken() {
+  if (morningToken && Date.now() < morningTokenExp) return morningToken;
+  const res = await morningRequest('POST', '/account/token', { id: MORNING_API_ID, secret: MORNING_API_SECRET });
+  if (!res.token) throw new Error('Morning auth failed: ' + JSON.stringify(res));
+  morningToken = res.token;
+  morningTokenExp = Date.now() + 23 * 60 * 60 * 1000; // 23h
+  return morningToken;
+}
+
+async function createMorningPaymentLink(email, name) {
+  await getMorningToken();
+  // Create a payment request document (type 400 = בקשת תשלום)
+  const doc = await morningRequest('POST', '/documents', {
+    description: 'StudioSync Pro — מנוי חודשי',
+    type: 400,
+    date: new Date().toISOString().slice(0, 10),
+    dueDate: new Date(Date.now() + 7 * 86400000).toISOString().slice(0, 10),
+    lang: 'he',
+    currency: 'ILS',
+    vatType: 0,
+    discount: 0,
+    client: { name: name || 'StudioSync User', emails: email ? [email] : [] },
+    income: [{
+      catalogNum: 'SS-PRO-MONTHLY',
+      description: 'StudioSync Pro — שליטה מרחוק + שמע + שיתוף מסך ללא הגבלה',
+      quantity: 1,
+      price: MORNING_PRICE,
+      currency: 'ILS',
+      vatType: 1
+    }],
+    remarks: 'לאחר התשלום תקבל קוד רישיון לאפליקציה'
+  });
+  if (doc.errorCode) throw new Error('Morning doc error: ' + doc.message);
+  // The payment URL is in doc.url or doc.paymentUrl
+  return doc.url || doc.paymentUrl || doc.editUrl || null;
+}
+
 // ── License System ─────────────────────────────────────────
-// VALID_LICENSES = comma-separated license keys in env var
-// e.g. on Render: VALID_LICENSES=SS-XXXX-YYYY,SS-AAAA-BBBB
 const VALID_LICENSES = new Set(
   (process.env.VALID_LICENSES || '').split(',').map(k => k.trim()).filter(Boolean)
 );
+// Runtime-issued licenses (from Morning webhooks, in-memory)
+const runtimeLicenses = new Map(); // key → { email, createdAt }
 // Trial: up to 3 free sessions per day per IP
 const trialSessions = new Map(); // ip → { count, date }
 
+function genLicenseKey() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const seg = () => Array.from({ length: 4 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
+  return 'SS-' + seg() + '-' + seg() + '-' + seg();
+}
+
 function checkLicense(key) {
   if (!key) return false;
-  return VALID_LICENSES.has(key.trim().toUpperCase());
+  const k = key.trim().toUpperCase();
+  return VALID_LICENSES.has(k) || runtimeLicenses.has(k);
 }
 
 function checkTrial(ip) {
@@ -147,6 +229,45 @@ const server = http.createServer(async (req, res) => {
     const data = await body(req);
     const valid = checkLicense(data.license);
     return json(res, { ok: valid, plan: valid ? 'pro' : 'invalid' });
+  }
+
+  // ── Create Morning payment link ──
+  if (path === '/api/create-payment' && req.method === 'POST') {
+    if (!MORNING_API_ID) return json(res, { ok: false, error: 'payment_not_configured' });
+    const data = await body(req);
+    try {
+      const url = await createMorningPaymentLink(data.email, data.name);
+      return json(res, { ok: true, url });
+    } catch(e) {
+      console.error('Morning error:', e.message);
+      return json(res, { ok: false, error: e.message }, 500);
+    }
+  }
+
+  // ── Morning Webhook (payment confirmation) ──
+  if (path === '/api/morning-webhook' && req.method === 'POST') {
+    const data = await body(req);
+    console.log('[Morning webhook]', JSON.stringify(data).slice(0, 300));
+    // Morning sends document data — check it's a paid payment request
+    const isPaid = data.status === 'paid' || data.payment?.length > 0 || data.type === 400;
+    if (isPaid) {
+      const email = data.client?.emails?.[0] || data.client?.email || '';
+      const name  = data.client?.name || '';
+      const key   = genLicenseKey();
+      runtimeLicenses.set(key, { email, name, createdAt: new Date().toISOString() });
+      console.log('[License issued]', key, 'for', email);
+      // Also append to VALID_LICENSES so it survives memory
+      VALID_LICENSES.add(key);
+    }
+    return json(res, { ok: true });
+  }
+
+  // ── Admin: list active licenses (protected) ──
+  if (path === '/api/admin/licenses' && req.method === 'GET') {
+    const adminPass = process.env.ADMIN_PASS || 'studiosync-admin';
+    if (url.searchParams.get('pass') !== adminPass) return json(res, { ok: false }, 403);
+    const list = [...runtimeLicenses.entries()].map(([k, v]) => ({ key: k, ...v }));
+    return json(res, { ok: true, count: list.length, licenses: list });
   }
 
   if (path === '/api/host' && req.method === 'POST') {
@@ -1084,26 +1205,58 @@ async function hostStart(){
 
 function showUpgradeModal(){
   const m=document.createElement('div');
-  m.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:9999;display:flex;align-items:center;justify-content:center;';
-  m.innerHTML=\`<div style="background:#1a1a2e;border:1px solid #00ffff44;border-radius:16px;padding:32px;max-width:440px;width:90%;text-align:center;font-family:var(--mono);">
-    <div style="font-size:32px;margin-bottom:12px">🎛</div>
-    <div style="font-size:20px;font-weight:700;color:#00ffff;margin-bottom:8px">StudioSync Pro</div>
-    <div style="color:#aaa;margin-bottom:24px;font-size:13px">הגעת לגבול הניסיון (3 סשנים ביום)</div>
-    <div style="background:#0d0d1a;border-radius:10px;padding:16px;margin-bottom:20px;text-align:right;">
-      <div style="color:#fff;font-size:15px;margin-bottom:8px">✓ סשנים ללא הגבלה</div>
-      <div style="color:#fff;font-size:15px;margin-bottom:8px">✓ שיתוף מסך + שמע</div>
-      <div style="color:#fff;font-size:15px;margin-bottom:8px">✓ שליטה מרחוק</div>
-      <div style="color:#fff;font-size:15px">✓ תמיכה מלאה</div>
+  m.id='upgradeModal';
+  m.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.88);z-index:9999;display:flex;align-items:center;justify-content:center;';
+  m.innerHTML=\`<div style="background:#1a1a2e;border:1px solid #00ffff44;border-radius:16px;padding:32px;max-width:460px;width:92%;font-family:var(--mono);">
+    <div style="text-align:center;margin-bottom:20px">
+      <div style="font-size:32px;margin-bottom:8px">🎛</div>
+      <div style="font-size:20px;font-weight:700;color:#00ffff;margin-bottom:6px">StudioSync Pro</div>
+      <div style="color:#888;font-size:13px">הגעת לגבול הניסיון (3 סשנים ביום חינם)</div>
     </div>
-    <div style="font-size:28px;font-weight:700;color:#00ffff;margin-bottom:4px">$29 / חודש</div>
-    <div style="color:#666;font-size:12px;margin-bottom:20px">או $249 / שנה (חיסכון של 28%)</div>
-    <button onclick="window.open('https://buy.stripe.com/PLACEHOLDER','_blank')" style="width:100%;padding:14px;background:#00ffff;color:#000;border:none;border-radius:8px;font-size:16px;font-weight:700;cursor:pointer;margin-bottom:12px">💳 שדרג עכשיו</button>
-    <div style="margin-bottom:12px;color:#888;font-size:12px">— יש לך כבר קוד רישיון? —</div>
-    <input id="licInput" placeholder="SS-XXXX-YYYY" style="width:calc(100% - 24px);padding:10px 12px;background:#0d0d1a;border:1px solid #333;border-radius:6px;color:#fff;font-family:var(--mono);font-size:14px;margin-bottom:10px;text-transform:uppercase;" />
-    <button onclick="activateLicense()" style="width:100%;padding:10px;background:transparent;color:#00ffff;border:1px solid #00ffff44;border-radius:6px;cursor:pointer;font-size:14px;margin-bottom:12px">אמת רישיון</button>
-    <button onclick="this.closest('div[style]').remove()" style="background:none;border:none;color:#555;cursor:pointer;font-size:13px;">סגור</button>
+    <div style="background:#0d0d1a;border-radius:10px;padding:14px 18px;margin-bottom:20px;">
+      <div style="color:#ccc;font-size:14px;line-height:1.8;text-align:right;">
+        ✓ סשנים ללא הגבלה<br/>
+        ✓ שיתוף מסך + שמע מ-DAW<br/>
+        ✓ שליטה מרחוק בעכבר ומקלדת<br/>
+        ✓ תמיכה מלאה
+      </div>
+    </div>
+    <div style="text-align:center;margin-bottom:18px">
+      <div style="font-size:30px;font-weight:700;color:#00ffff">₪${MORNING_PRICE} <span style="font-size:14px;color:#666">/ חודש</span></div>
+    </div>
+    <div id="paySection">
+      <input id="payEmail" type="email" placeholder="האימייל שלך (לקבלת קוד רישיון)" style="width:calc(100% - 26px);padding:11px 12px;background:#0d0d1a;border:1px solid #333;border-radius:6px;color:#fff;font-size:14px;margin-bottom:10px;" dir="ltr"/>
+      <input id="payName" type="text" placeholder="שם מלא" style="width:calc(100% - 26px);padding:11px 12px;background:#0d0d1a;border:1px solid #333;border-radius:6px;color:#fff;font-size:14px;margin-bottom:14px;" dir="rtl"/>
+      <button onclick="startMorningPayment()" style="width:100%;padding:14px;background:#00ffff;color:#000;border:none;border-radius:8px;font-size:16px;font-weight:700;cursor:pointer;margin-bottom:16px">💳 לתשלום מאובטח →</button>
+    </div>
+    <div style="text-align:center;color:#555;font-size:12px;margin-bottom:14px">— יש לך כבר קוד רישיון? —</div>
+    <input id="licInput" placeholder="SS-XXXX-XXXX-XXXX" style="width:calc(100% - 26px);padding:10px 12px;background:#0d0d1a;border:1px solid #333;border-radius:6px;color:#fff;font-size:14px;margin-bottom:10px;text-transform:uppercase;letter-spacing:1px;" dir="ltr"/>
+    <button onclick="activateLicense()" style="width:100%;padding:10px;background:transparent;color:#00ffff;border:1px solid #00ffff44;border-radius:6px;cursor:pointer;font-size:14px;margin-bottom:14px">אמת רישיון</button>
+    <button onclick="document.getElementById('upgradeModal')?.remove()" style="display:block;width:100%;background:none;border:none;color:#444;cursor:pointer;font-size:12px;text-align:center;">סגור</button>
   </div>\`;
   document.body.appendChild(m);
+}
+
+async function startMorningPayment(){
+  const email=(document.getElementById('payEmail')?.value||'').trim();
+  const name=(document.getElementById('payName')?.value||'').trim();
+  if(!email){ toast('⚠️ הכנס אימייל',''); return; }
+  const btn=document.querySelector('#paySection button');
+  if(btn){ btn.textContent='⏳ יוצר קישור תשלום...'; btn.disabled=true; }
+  try{
+    const r=await fetch(SERVER+'/api/create-payment',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,name})});
+    const d=await r.json();
+    if(d.ok && d.url){
+      window.open(d.url,'_blank');
+      if(btn){ btn.textContent='✅ קישור נפתח! לאחר תשלום הכנס את קוד הרישיון שקיבלת'; btn.style.background='#0d0d1a'; btn.style.color='#0f0'; btn.disabled=true; }
+    } else {
+      toast('⚠️ שגיאה ביצירת תשלום — נסה שוב','');
+      if(btn){ btn.textContent='💳 לתשלום מאובטח →'; btn.disabled=false; }
+    }
+  }catch(e){
+    toast('⚠️ שגיאת חיבור','');
+    if(btn){ btn.textContent='💳 לתשלום מאובטח →'; btn.disabled=false; }
+  }
 }
 
 async function activateLicense(){
@@ -1113,8 +1266,8 @@ async function activateLicense(){
   const d=await r.json();
   if(d.ok){
     localStorage.setItem('ss_license', key);
-    document.querySelector('div[style*="inset:0"]')?.remove();
-    toast('✅ רישיון פעיל!','g');
+    document.getElementById('upgradeModal')?.remove();
+    toast('✅ רישיון פעיל! מתחיל סשן...','g');
     hostStart();
   } else {
     toast('⚠️ קוד רישיון לא תקין','');
