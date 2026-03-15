@@ -1,0 +1,70 @@
+#!/bin/bash
+set -e
+
+# ── Install Homebrew if needed ──
+if ! command -v brew &>/dev/null; then
+  echo "Installing Homebrew..."
+  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+fi
+
+# ── Install BlackHole if needed ──
+if ! brew list --cask blackhole-2ch &>/dev/null; then
+  echo "Installing BlackHole (virtual audio driver)..."
+  brew install --cask blackhole-2ch
+fi
+
+# ── Install Node.js if needed ──
+if ! command -v node &>/dev/null; then
+  echo "Installing Node.js..."
+  brew install node
+fi
+
+# ── Install robotjs ──
+echo "Installing StudioSync agent dependencies..."
+cd /usr/local/studiosync
+npm install robotjs 2>/dev/null || npm install --build-from-source robotjs
+
+# ── Create StudioSync.app launcher (appears in Applications) ──
+APP_DIR="/Applications/StudioSync Agent.app"
+mkdir -p "$APP_DIR/Contents/MacOS"
+mkdir -p "$APP_DIR/Contents/Resources"
+
+cat > "$APP_DIR/Contents/MacOS/StudioSync Agent" << 'APPSCRIPT'
+#!/bin/bash
+# StudioSync Agent Launcher
+osascript -e 'display dialog "StudioSync Agent\n\nהכנס את קוד הסשן:" default answer "" with title "StudioSync" buttons {"ביטול", "התחל"} default button "התחל"' 2>/dev/null
+CODE=$(osascript -e 'set answer to button returned of (display dialog "הכנס קוד סשן:" default answer "" with title "StudioSync Agent" buttons {"ביטול", "התחל"} default button "התחל")
+set code to text returned of result
+return code' 2>/dev/null)
+
+if [ -n "$CODE" ]; then
+  /usr/local/bin/node /usr/local/studiosync/agent.js https://studiosync-nxu0.onrender.com "$CODE"
+fi
+APPSCRIPT
+chmod +x "$APP_DIR/Contents/MacOS/StudioSync Agent"
+
+cat > "$APP_DIR/Contents/Info.plist" << 'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key><string>StudioSync Agent</string>
+  <key>CFBundleExecutable</key><string>StudioSync Agent</string>
+  <key>CFBundleIdentifier</key><string>com.studiosync.agent</string>
+  <key>CFBundleVersion</key><string>1.0</string>
+  <key>LSUIElement</key><false/>
+  <key>NSHighResolutionCapable</key><true/>
+</dict>
+</plist>
+PLIST
+
+echo ""
+echo "✅ StudioSync Agent הותקן בהצלחה!"
+echo ""
+echo "📌 הגדרת סאונד (פעם אחת בלבד):"
+echo "   1. פתח Audio MIDI Setup (Spotlight → Audio MIDI Setup)"
+echo "   2. לחץ + → Create Multi-Output Device"
+echo "   3. סמן: Built-in Output + BlackHole 2ch"
+echo "   4. ב-Ableton → Preferences → Audio → Output: BlackHole 2ch"
+echo ""
+echo "🎛  כדי להפעיל: פתח 'StudioSync Agent' מ-Applications"

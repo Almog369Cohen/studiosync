@@ -1,0 +1,3 @@
+StudioSync License
+==================
+This software is provided for use with StudioSync sessions only.

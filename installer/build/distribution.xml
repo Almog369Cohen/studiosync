@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<installer-gui-script minSpecVersion="1">
+  <title>StudioSync Agent</title>
+  <welcome file="welcome.html" mime-type="text/html"/>
+  <license file="license.txt" mime-type="text/plain"/>
+  <conclusion file="conclusion.html" mime-type="text/html"/>
+  <options customize="never" require-scripts="false" rootVolumeOnly="true"/>
+  <domains enable_localSystem="true"/>
+  <pkg-ref id="com.studiosync.agent"/>
+  <choices-outline>
+    <line choice="default">
+      <line choice="com.studiosync.agent"/>
+    </line>
+  </choices-outline>
+  <choice id="default"/>
+  <choice id="com.studiosync.agent" visible="false">
+    <pkg-ref id="com.studiosync.agent"/>
+  </choice>
+  <pkg-ref id="com.studiosync.agent" version="1.0" onConclusion="none">StudioSync.pkg</pkg-ref>
+</installer-gui-script>

@@ -1,5 +1,34 @@
 const http = require('http');
 const os   = require('os');
+const crypto = require('crypto');
+
+// ── License System ─────────────────────────────────────────
+// VALID_LICENSES = comma-separated license keys in env var
+// e.g. on Render: VALID_LICENSES=SS-XXXX-YYYY,SS-AAAA-BBBB
+const VALID_LICENSES = new Set(
+  (process.env.VALID_LICENSES || '').split(',').map(k => k.trim()).filter(Boolean)
+);
+// Trial: up to 3 free sessions per day per IP
+const trialSessions = new Map(); // ip → { count, date }
+
+function checkLicense(key) {
+  if (!key) return false;
+  return VALID_LICENSES.has(key.trim().toUpperCase());
+}
+
+function checkTrial(ip) {
+  const today = new Date().toISOString().slice(0,10);
+  const rec = trialSessions.get(ip);
+  if (!rec || rec.date !== today) return true; // new day, reset
+  return rec.count < 3; // 3 free sessions/day
+}
+
+function useTrial(ip) {
+  const today = new Date().toISOString().slice(0,10);
+  const rec = trialSessions.get(ip);
+  if (!rec || rec.date !== today) { trialSessions.set(ip, { count: 1, date: today }); return; }
+  rec.count++;
+}
 
 // ── Sessions ──────────────────────────────────────────────
 const sessions  = new Map(); // code → { hostId, peers }
@@ -113,15 +142,33 @@ const server = http.createServer(async (req, res) => {
     ]});
   }
 
+  // ── License verification endpoint ──
+  if (path === '/api/verify-license' && req.method === 'POST') {
+    const data = await body(req);
+    const valid = checkLicense(data.license);
+    return json(res, { ok: valid, plan: valid ? 'pro' : 'invalid' });
+  }
+
   if (path === '/api/host' && req.method === 'POST') {
     const data = await body(req);
+    const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket?.remoteAddress || 'unknown';
+    const licensed = checkLicense(data.license);
+
+    // Enforce trial limits for unlicensed users
+    if (!licensed) {
+      if (!checkTrial(ip)) {
+        return json(res, { ok: false, error: 'trial_limit', message: 'הגעת ל-3 סשנים חינמיים להיום. שדרג לגרסה המלאה כדי להמשיך.' }, 402);
+      }
+      useTrial(ip);
+    }
+
     const id   = 'h_' + Date.now() + Math.random().toString(36).slice(2,6);
     const code = genCode();
     clients.set(id, { role: 'host', code, name: 'Host', res: null, seen: Date.now() });
     queues.set(id, []);
-    sessions.set(code, { hostId: id, peers: new Set([id]), daw: data.daw });
-    console.log('[+] Session:', code);
-    return json(res, { ok: true, code, clientId: id });
+    sessions.set(code, { hostId: id, peers: new Set([id]), daw: data.daw, licensed });
+    console.log('[+] Session:', code, licensed ? '(PRO)' : '(trial)');
+    return json(res, { ok: true, code, clientId: id, plan: licensed ? 'pro' : 'trial' });
   }
 
   if (path === '/api/join' && req.method === 'POST') {
@@ -544,7 +591,11 @@ async function fetchICE() {
 }
 
 function createPC(isInitiator, iceServers) {
-  pc = new RTCPeerConnection({ iceServers: iceServers || ICE_SERVERS });
+  pc = new RTCPeerConnection({
+    iceServers: iceServers || ICE_SERVERS,
+    bundlePolicy: 'max-bundle',       // all tracks in one connection = less overhead
+    iceCandidatePoolSize: 10          // pre-gather candidates for faster connect
+  });
 
   pc.onicecandidate = e => {
     if (e.candidate) {
@@ -625,6 +676,12 @@ function createPC(isInitiator, iceServers) {
       toast('🔊 שמע מתקבל!', 'g');
     }
     if (e.track.kind === 'video') {
+      // Minimize jitter buffer for lowest latency
+      const receiver = pc.getReceivers().find(r => r.track === e.track);
+      if (receiver && 'jitterBufferTarget' in receiver) {
+        receiver.jitterBufferTarget = 0;
+        dlog('Jitter buffer minimized for low latency');
+      }
       showRemoteVideo(e.streams[0] || new MediaStream([e.track]));
     }
   };
@@ -739,11 +796,20 @@ async function handleCreateOffer(peerId) {
   try {
     toast('📺 בחר את מסך Ableton לשיתוף', 'c');
     screenStream = await navigator.mediaDevices.getDisplayMedia({
-      video: { cursor: 'always', width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } },
+      video: { cursor: 'always', width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 }, latency: 0, resizeMode: 'none' },
       audio: true  // Also try screen audio as fallback (works on Windows/ChromeOS)
     });
     screenStream.getVideoTracks().forEach(t => {
-      pc.addTrack(t, screenStream);
+      const sender = pc.addTrack(t, screenStream);
+      // Low-latency encoding: 3Mbps cap, high priority
+      sender.getParameters && setTimeout(() => {
+        const p = sender.getParameters();
+        if (p.encodings && p.encodings.length > 0) {
+          p.encodings[0].maxBitrate = 3_000_000;
+          p.encodings[0].networkPriority = 'high';
+          sender.setParameters(p).catch(() => {});
+        }
+      }, 1000);
       dlog('Video track: ' + t.label);
     });
     // If screen share has audio and we don't have BlackHole audio — use it as fallback
@@ -997,15 +1063,62 @@ function trV(i,v){ S.tracks[i].v=+v; renderTracks(); dcSend({type:'daw:state',ac
 async function hostStart(){
   show('connecting'); document.getElementById('connectMsg').textContent='פותח סשן חדש...';
   try{
-    const r=await fetch(SERVER+'/api/host',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({daw:S.stype})});
+    const license = localStorage.getItem('ss_license') || '';
+    const r=await fetch(SERVER+'/api/host',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({daw:S.stype, license})});
     const d=await r.json();
-    if(!d.ok){ toast('⚠️ שגיאה בפתיחת סשן',''); show('lobby'); return; }
-    S.cid=d.clientId; S.code=d.code; S.role='host';
+    if(!d.ok){
+      if(d.error==='trial_limit'){
+        show('lobby');
+        showUpgradeModal();
+        return;
+      }
+      toast('⚠️ שגיאה בפתיחת סשן',''); show('lobby'); return;
+    }
+    S.cid=d.clientId; S.code=d.code; S.role='host'; S.plan=d.plan||'trial';
     show('session'); setupUI(); startPoll(); initTracks(); startMeters(); startPosTick();
     toast('🎛 הסשן נפתח! הקוד: '+S.code,'c');
-    setTimeout(()=>toast('📋 שתף את הכתובת עם הקוד לשותף',''),1400);
-    dlog('Session: '+S.code);
+    if(S.plan==='trial') setTimeout(()=>toast('🆓 מצב ניסיון — '+((3-(JSON.parse(localStorage.getItem('ss_trial')||'{}')).count||3))+' סשנים נותרו',''),1400);
+    dlog('Session: '+S.code+' ('+S.plan+')');
   }catch(e){ toast('⚠️ לא ניתן להתחבר לשרת',''); show('lobby'); }
+}
+
+function showUpgradeModal(){
+  const m=document.createElement('div');
+  m.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:9999;display:flex;align-items:center;justify-content:center;';
+  m.innerHTML=\`<div style="background:#1a1a2e;border:1px solid #00ffff44;border-radius:16px;padding:32px;max-width:440px;width:90%;text-align:center;font-family:var(--mono);">
+    <div style="font-size:32px;margin-bottom:12px">🎛</div>
+    <div style="font-size:20px;font-weight:700;color:#00ffff;margin-bottom:8px">StudioSync Pro</div>
+    <div style="color:#aaa;margin-bottom:24px;font-size:13px">הגעת לגבול הניסיון (3 סשנים ביום)</div>
+    <div style="background:#0d0d1a;border-radius:10px;padding:16px;margin-bottom:20px;text-align:right;">
+      <div style="color:#fff;font-size:15px;margin-bottom:8px">✓ סשנים ללא הגבלה</div>
+      <div style="color:#fff;font-size:15px;margin-bottom:8px">✓ שיתוף מסך + שמע</div>
+      <div style="color:#fff;font-size:15px;margin-bottom:8px">✓ שליטה מרחוק</div>
+      <div style="color:#fff;font-size:15px">✓ תמיכה מלאה</div>
+    </div>
+    <div style="font-size:28px;font-weight:700;color:#00ffff;margin-bottom:4px">$29 / חודש</div>
+    <div style="color:#666;font-size:12px;margin-bottom:20px">או $249 / שנה (חיסכון של 28%)</div>
+    <button onclick="window.open('https://buy.stripe.com/PLACEHOLDER','_blank')" style="width:100%;padding:14px;background:#00ffff;color:#000;border:none;border-radius:8px;font-size:16px;font-weight:700;cursor:pointer;margin-bottom:12px">💳 שדרג עכשיו</button>
+    <div style="margin-bottom:12px;color:#888;font-size:12px">— יש לך כבר קוד רישיון? —</div>
+    <input id="licInput" placeholder="SS-XXXX-YYYY" style="width:calc(100% - 24px);padding:10px 12px;background:#0d0d1a;border:1px solid #333;border-radius:6px;color:#fff;font-family:var(--mono);font-size:14px;margin-bottom:10px;text-transform:uppercase;" />
+    <button onclick="activateLicense()" style="width:100%;padding:10px;background:transparent;color:#00ffff;border:1px solid #00ffff44;border-radius:6px;cursor:pointer;font-size:14px;margin-bottom:12px">אמת רישיון</button>
+    <button onclick="this.closest('div[style]').remove()" style="background:none;border:none;color:#555;cursor:pointer;font-size:13px;">סגור</button>
+  </div>\`;
+  document.body.appendChild(m);
+}
+
+async function activateLicense(){
+  const key=(document.getElementById('licInput')?.value||'').trim().toUpperCase();
+  if(!key){ toast('⚠️ הכנס מפתח רישיון',''); return; }
+  const r=await fetch(SERVER+'/api/verify-license',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({license:key})});
+  const d=await r.json();
+  if(d.ok){
+    localStorage.setItem('ss_license', key);
+    document.querySelector('div[style*="inset:0"]')?.remove();
+    toast('✅ רישיון פעיל!','g');
+    hostStart();
+  } else {
+    toast('⚠️ קוד רישיון לא תקין','');
+  }
 }
 
 async function remoteJoin(){
