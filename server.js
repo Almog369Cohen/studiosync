@@ -98,6 +98,17 @@ const server = http.createServer(async (req, res) => {
   }
 
   // ── API ────────────────────────────────────────────────
+  if (path === '/api/ice') {
+    return json(res, { iceServers: [
+      { urls: 'stun:stun.l.google.com:19302' },
+      { urls: 'stun:stun.relay.metered.ca:80' },
+      { urls: 'turn:global.relay.metered.ca:80', username: 'open', credential: 'open' },
+      { urls: 'turn:global.relay.metered.ca:80?transport=tcp', username: 'open', credential: 'open' },
+      { urls: 'turn:global.relay.metered.ca:443', username: 'open', credential: 'open' },
+      { urls: 'turn:global.relay.metered.ca:443?transport=tcp', username: 'open', credential: 'open' }
+    ]});
+  }
+
   if (path === '/api/host' && req.method === 'POST') {
     const data = await body(req);
     const id   = 'h_' + Date.now() + Math.random().toString(36).slice(2,6);
@@ -340,6 +351,7 @@ body::after{content:'';position:fixed;inset:0;background:repeating-linear-gradie
 #connecting{align-items:center;justify-content:center;flex-direction:column;gap:14px}
 .spin{width:40px;height:40px;border:3px solid var(--b2);border-top-color:var(--cyan);border-radius:50%;animation:spin 1s linear infinite}
 @keyframes spin{to{transform:rotate(360deg)}}
+@keyframes clickFlash{0%{transform:scale(.5);opacity:1}100%{transform:scale(2);opacity:0}}
 </style>
 </head>
 <body>
@@ -500,10 +512,16 @@ const S = { cid:null, role:null, code:null, stype:'co', bpm:128, playing:false, 
 const MCOLS = ['#00d4ff','#00e87a','#ffb800','#ff3a5c','#8b5cf6'];
 
 // ══════ WebRTC Engine ══════
+// TURN servers are critical for connections across different networks (no shared WiFi)
+// Free TURN from Open Relay Project + Google STUN
 const ICE_SERVERS = [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' },
-  { urls: 'stun:stun2.l.google.com:19302' }
+  { urls: 'stun:stun.relay.metered.ca:80' },
+  { urls: 'turn:global.relay.metered.ca:80', username: 'open', credential: 'open' },
+  { urls: 'turn:global.relay.metered.ca:80?transport=tcp', username: 'open', credential: 'open' },
+  { urls: 'turn:global.relay.metered.ca:443', username: 'open', credential: 'open' },
+  { urls: 'turn:global.relay.metered.ca:443?transport=tcp', username: 'open', credential: 'open' }
 ];
 let pc = null;       // RTCPeerConnection
 let dc = null;       // DataChannel (for DAW sync + remote input)
@@ -511,8 +529,17 @@ let remoteAudioEl = null;  // <audio> for remote playback
 let screenStream = null;   // screen share MediaStream
 let screenSender = null;   // RTCRtpSender for screen video
 
-function createPC(isInitiator) {
-  pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+async function fetchICE() {
+  try {
+    const r = await fetch(SERVER + '/api/ice');
+    const d = await r.json();
+    if (d.iceServers) return d.iceServers;
+  } catch(e) {}
+  return ICE_SERVERS; // fallback
+}
+
+function createPC(isInitiator, iceServers) {
+  pc = new RTCPeerConnection({ iceServers: iceServers || ICE_SERVERS });
 
   pc.onicecandidate = e => {
     if (e.candidate) {
@@ -617,24 +644,49 @@ function updateLatency(sentTs) {
 // WebRTC signaling handlers
 async function handleCreateOffer(peerId) {
   dlog('Creating offer for ' + peerId);
-  createPC(true);
-  // Capture audio to send (Host shares system audio or mic)
+  const ice = await fetchICE();
+  createPC(true, ice);
+
+  // Host automatically shares screen + system audio when peer joins
+  // This is the core of StudioSync — the remote sees and hears everything
   try {
-    const stream = await navigator.mediaDevices.getDisplayMedia({ video: false, audio: true });
-    stream.getAudioTracks().forEach(t => pc.addTrack(t, stream));
-    dlog('Audio track added');
-    toast('🔊 שמע משודר!', 'g');
-  } catch (e) {
-    dlog('No audio capture, trying mic...');
-    try {
-      const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      micStream.getAudioTracks().forEach(t => pc.addTrack(t, micStream));
-      toast('🎙 מיקרופון פעיל', 'c');
-    } catch (e2) {
-      dlog('No audio available');
-      toast('⚠️ לא נמצא מקור שמע', '');
+    toast('📺 בחר את חלון Ableton (עם סימון "Share system audio")', 'c');
+    screenStream = await navigator.mediaDevices.getDisplayMedia({
+      video: { cursor: 'always', width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } },
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, sampleRate: 48000 }
+    });
+    // Add all tracks (video + audio) to peer connection
+    screenStream.getTracks().forEach(t => {
+      pc.addTrack(t, screenStream);
+      dlog('Track added: ' + t.kind + ' (' + t.label + ')');
+    });
+    const hasAudio = screenStream.getAudioTracks().length > 0;
+    const hasVideo = screenStream.getVideoTracks().length > 0;
+    if (hasVideo) toast('🖥 מסך משודר!', 'g');
+    if (hasAudio) { toast('🔊 שמע Ableton משודר!', 'g'); document.getElementById('audSt').textContent = 'Audio ✓'; document.getElementById('audSt').className = 'cv ok'; }
+    if (!hasAudio) {
+      toast('⚠️ השמע לא נלכד — וודא ש-"Share system audio" מסומן', '');
+      // Fallback: try mic
+      try {
+        const micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        micStream.getAudioTracks().forEach(t => pc.addTrack(t, micStream));
+        toast('🎙 מיקרופון פעיל כגיבוי', 'c');
+      } catch(e2) {}
     }
+    // Handle stream ending (user clicks "Stop sharing")
+    screenStream.getVideoTracks()[0]?.addEventListener('ended', () => {
+      toast('🖥 שיתוף המסך הופסק', '');
+      const btn = document.getElementById('btnSS');
+      if (btn) { btn.style.background = ''; btn.style.color = ''; btn.textContent = '🖥 Share'; btn.onclick = doShare; }
+    });
+    // Update UI
+    const btn = document.getElementById('btnSS');
+    if (btn) { btn.style.background = 'var(--cyan)'; btn.style.color = '#000'; btn.textContent = '🖥 Stop'; btn.onclick = stopShare; }
+  } catch (e) {
+    dlog('Screen share declined: ' + e.message);
+    toast('⚠️ שיתוף מסך בוטל — אפשר לשתף אחר כך עם כפתור Share', '');
   }
+
   const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
   send({ type: 'webrtc:offer', peerId, offer: pc.localDescription });
@@ -643,7 +695,7 @@ async function handleCreateOffer(peerId) {
 async function handleOffer(peerId, offer) {
   dlog('Received offer from ' + peerId);
   S.hostId = peerId;
-  if (!pc) createPC(false);
+  if (!pc) { const ice = await fetchICE(); createPC(false, ice); }
   await pc.setRemoteDescription(offer);
   const answer = await pc.createAnswer();
   await pc.setLocalDescription(answer);
@@ -662,78 +714,139 @@ async function handleICE(peerId, candidate) {
   }
 }
 
-// Screen share → WebRTC video track
+// Screen share → full DAW view for Remote
 function showRemoteVideo(stream) {
-  let vid = document.getElementById('remoteVid');
-  if (!vid) {
-    vid = document.createElement('video');
+  let container = document.getElementById('remoteVidContainer');
+  if (!container) {
+    container = document.createElement('div');
+    container.id = 'remoteVidContainer';
+    container.style.cssText = 'position:fixed;inset:0;z-index:800;background:#000;display:flex;flex-direction:column;';
+
+    // Toolbar
+    const toolbar = document.createElement('div');
+    toolbar.style.cssText = 'height:36px;background:var(--s1);border-bottom:1px solid var(--b1);display:flex;align-items:center;padding:0 12px;gap:10px;flex-shrink:0;z-index:801;';
+    toolbar.innerHTML = '<div style="font-family:var(--mono);font-size:12px;font-weight:700;color:var(--cyan)">🖥 Ableton — שליטה מרחוק</div>'
+      + '<div style="margin-right:auto"></div>'
+      + '<div id="remoteLatBadge" style="font-family:var(--mono);font-size:10px;color:var(--green);padding:2px 8px;background:var(--s2);border:1px solid var(--b1);border-radius:4px">—</div>'
+      + '<button id="remoteMiniBtn" style="padding:4px 10px;background:var(--s2);border:1px solid var(--b1);border-radius:5px;color:var(--txt);font-family:var(--mono);font-size:10px;cursor:pointer">🔲 מזער</button>'
+      + '<button id="remoteCloseBtn" style="padding:4px 10px;background:var(--rD);border:1px solid rgba(255,58,92,.3);border-radius:5px;color:var(--red);font-family:var(--mono);font-size:10px;cursor:pointer">✕ סגור</button>';
+    container.appendChild(toolbar);
+
+    // Video
+    const vid = document.createElement('video');
     vid.id = 'remoteVid';
     vid.autoplay = true;
     vid.playsInline = true;
-    vid.muted = true;
-    vid.style.cssText = 'position:fixed;bottom:60px;left:12px;width:320px;border-radius:10px;border:2px solid var(--cyan);z-index:500;box-shadow:0 4px 24px rgba(0,0,0,.6);cursor:pointer;';
-    vid.title = 'לחץ להגדלה';
-    vid.onclick = () => {
-      if (vid.style.width === '320px') { vid.style.width = '640px'; } else { vid.style.width = '320px'; }
+    vid.muted = true; // Audio comes from separate audio element
+    vid.style.cssText = 'flex:1;width:100%;object-fit:contain;background:#000;cursor:crosshair;';
+    container.appendChild(vid);
+
+    document.body.appendChild(container);
+
+    // Minimize button
+    document.getElementById('remoteMiniBtn').onclick = () => {
+      if (container.style.inset === '0px' || container.style.inset === '0') {
+        container.style.cssText = 'position:fixed;bottom:60px;left:12px;width:420px;height:260px;z-index:800;background:#000;display:flex;flex-direction:column;border-radius:10px;border:2px solid var(--cyan);box-shadow:0 4px 24px rgba(0,0,0,.6);overflow:hidden;resize:both;';
+        document.getElementById('remoteMiniBtn').textContent = '🔳 הגדל';
+      } else {
+        container.style.cssText = 'position:fixed;inset:0;z-index:800;background:#000;display:flex;flex-direction:column;';
+        document.getElementById('remoteMiniBtn').textContent = '🔲 מזער';
+      }
     };
-    const closeBtn = document.createElement('div');
-    closeBtn.textContent = '✕';
-    closeBtn.style.cssText = 'position:fixed;bottom:60px;left:12px;width:22px;height:22px;background:var(--red);color:#fff;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;cursor:pointer;z-index:501;transform:translate(-6px,-6px);';
-    closeBtn.onclick = () => { vid.remove(); closeBtn.remove(); };
-    document.body.appendChild(vid);
-    document.body.appendChild(closeBtn);
+
+    // Close button
+    document.getElementById('remoteCloseBtn').onclick = () => { container.remove(); };
+
+    // Remote input: mouse + keyboard on the video
+    setupRemoteInputCapture(vid);
   }
-  vid.srcObject = stream;
-  toast('🖥 שיתוף מסך מתקבל!', 'g');
+
+  document.getElementById('remoteVid').srcObject = stream;
+  toast('🖥 רואים את Ableton! לחץ על המסך לשליטה', 'g');
 }
 
-// Remote input handling (Host receives from Remote)
-function handleRemoteInput(msg) {
-  if (S.role !== 'host') return;
-  // Show remote cursor on host screen
-  let cursor = document.getElementById('remoteCursor');
-  if (!cursor) {
-    cursor = document.createElement('div');
-    cursor.id = 'remoteCursor';
-    cursor.style.cssText = 'position:fixed;width:18px;height:18px;background:var(--green);border-radius:50%;opacity:0.7;pointer-events:none;z-index:600;transition:left 0.05s,top 0.05s;box-shadow:0 0 8px var(--green);';
-    cursor.innerHTML = '<div style="position:absolute;top:20px;right:-4px;font-family:var(--mono);font-size:9px;color:var(--green);white-space:nowrap">Remote</div>';
-    document.body.appendChild(cursor);
-  }
-  if (msg.action === 'move') {
-    cursor.style.left = msg.x + 'px';
-    cursor.style.top = msg.y + 'px';
-  } else if (msg.action === 'click') {
-    cursor.style.background = 'var(--cyan)';
-    setTimeout(() => cursor.style.background = 'var(--green)', 200);
-  }
-}
-
-// Remote: capture and send input events
-function startRemoteInput() {
+// Remote: capture mouse/keyboard on the video and send to Host
+function setupRemoteInputCapture(vid) {
   if (S.role !== 'remote') return;
-  const vid = document.getElementById('remoteVid');
-  if (!vid) return;
 
   vid.addEventListener('mousemove', e => {
     const rect = vid.getBoundingClientRect();
-    const x = ((e.clientX - rect.left) / rect.width * 100).toFixed(1);
-    const y = ((e.clientY - rect.top) / rect.height * 100).toFixed(1);
+    const x = ((e.clientX - rect.left) / rect.width).toFixed(4);
+    const y = ((e.clientY - rect.top) / rect.height).toFixed(4);
     dcSend({ type: 'remote:input', action: 'move', x: parseFloat(x), y: parseFloat(y) });
   });
 
   vid.addEventListener('click', e => {
     const rect = vid.getBoundingClientRect();
-    const x = ((e.clientX - rect.left) / rect.width * 100).toFixed(1);
-    const y = ((e.clientY - rect.top) / rect.height * 100).toFixed(1);
-    dcSend({ type: 'remote:input', action: 'click', x: parseFloat(x), y: parseFloat(y) });
+    const x = ((e.clientX - rect.left) / rect.width).toFixed(4);
+    const y = ((e.clientY - rect.top) / rect.height).toFixed(4);
+    dcSend({ type: 'remote:input', action: 'click', x: parseFloat(x), y: parseFloat(y), button: e.button });
   });
 
-  document.addEventListener('keydown', e => {
-    if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA') return;
-    dcSend({ type: 'remote:input', action: 'key', key: e.key, code: e.code });
+  vid.addEventListener('dblclick', e => {
+    const rect = vid.getBoundingClientRect();
+    const x = ((e.clientX - rect.left) / rect.width).toFixed(4);
+    const y = ((e.clientY - rect.top) / rect.height).toFixed(4);
+    dcSend({ type: 'remote:input', action: 'dblclick', x: parseFloat(x), y: parseFloat(y) });
   });
 
-  toast('🖱 שליטה מרחוק פעילה על שיתוף המסך', 'g');
+  vid.addEventListener('contextmenu', e => {
+    e.preventDefault();
+    const rect = vid.getBoundingClientRect();
+    const x = ((e.clientX - rect.left) / rect.width).toFixed(4);
+    const y = ((e.clientY - rect.top) / rect.height).toFixed(4);
+    dcSend({ type: 'remote:input', action: 'rightclick', x: parseFloat(x), y: parseFloat(y) });
+  });
+
+  vid.addEventListener('wheel', e => {
+    e.preventDefault();
+    dcSend({ type: 'remote:input', action: 'scroll', dx: e.deltaX, dy: e.deltaY });
+  }, { passive: false });
+
+  // Keyboard when video is focused
+  vid.tabIndex = 0;
+  vid.addEventListener('keydown', e => {
+    e.preventDefault();
+    dcSend({ type: 'remote:input', action: 'keydown', key: e.key, code: e.code, shift: e.shiftKey, ctrl: e.ctrlKey, alt: e.altKey, meta: e.metaKey });
+  });
+  vid.addEventListener('keyup', e => {
+    e.preventDefault();
+    dcSend({ type: 'remote:input', action: 'keyup', key: e.key, code: e.code });
+  });
+
+  vid.focus();
+  toast('🖱 לחץ על המסך ותתחיל לשלוט — עכבר + מקלדת', 'g');
+}
+
+// Remote input handling (Host receives from Remote)
+// Shows cursor overlay on Host screen — positions are 0-1 normalized
+function handleRemoteInput(msg) {
+  if (S.role !== 'host') return;
+  let cursor = document.getElementById('remoteCursor');
+  if (!cursor) {
+    cursor = document.createElement('div');
+    cursor.id = 'remoteCursor';
+    cursor.style.cssText = 'position:fixed;width:20px;height:20px;border-radius:50%;pointer-events:none;z-index:900;transition:left 0.04s linear,top 0.04s linear;';
+    cursor.innerHTML = '<svg width="20" height="20" viewBox="0 0 20 20"><polygon points="0,0 0,16 4,12 8,20 11,19 7,11 13,11" fill="#00e87a" stroke="#000" stroke-width="1"/></svg>'
+      + '<div style="position:absolute;top:22px;right:0;font-family:var(--mono);font-size:9px;color:var(--green);white-space:nowrap;background:rgba(0,0,0,.7);padding:1px 4px;border-radius:3px">Remote</div>';
+    document.body.appendChild(cursor);
+  }
+  const sw = window.innerWidth, sh = window.innerHeight;
+  if (msg.action === 'move') {
+    cursor.style.left = (msg.x * sw) + 'px';
+    cursor.style.top = (msg.y * sh) + 'px';
+  } else if (msg.action === 'click' || msg.action === 'dblclick') {
+    cursor.style.left = (msg.x * sw) + 'px';
+    cursor.style.top = (msg.y * sh) + 'px';
+    // Flash effect
+    const flash = document.createElement('div');
+    flash.style.cssText = 'position:fixed;width:30px;height:30px;border:2px solid var(--cyan);border-radius:50%;pointer-events:none;z-index:899;animation:clickFlash .4s ease forwards;left:' + (msg.x*sw-5) + 'px;top:' + (msg.y*sh-5) + 'px;';
+    document.body.appendChild(flash);
+    setTimeout(() => flash.remove(), 500);
+    dlog('Remote ' + msg.action + ' @ ' + (msg.x*100).toFixed(0) + '%, ' + (msg.y*100).toFixed(0) + '%');
+  } else if (msg.action === 'keydown') {
+    dlog('Remote key: ' + msg.key);
+  }
 }
 const TDEFS = [
   {n:'Kick',t:'AUDIO',c:'#ff3a5c',v:82,m:0,s:0,a:0},
