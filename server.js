@@ -698,34 +698,65 @@ async function handleCreateOffer(peerId) {
   const ice = await fetchICE();
   createPC(true, ice);
 
-  // ── Audio will be captured together with screen share (simpler, works on all platforms) ──
+  // ── Step 1: Capture AUDIO from BlackHole (auto-detect) ──
   let audioAdded = false;
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const audioInputs = devices.filter(d => d.kind === 'audioinput' && d.deviceId !== 'default' && d.deviceId !== 'communications');
+    // Look for BlackHole or any virtual audio device
+    const virtualNames = ['blackhole', 'vb-cable', 'loopback', 'virtual', 'soundflower'];
+    const virtualDev = audioInputs.find(d => virtualNames.some(v => d.label.toLowerCase().includes(v)));
+
+    if (virtualDev) {
+      dlog('Found virtual audio: ' + virtualDev.label);
+      const audioStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          deviceId: { exact: virtualDev.deviceId },
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: false,
+          sampleRate: 48000,
+          channelCount: 2
+        }
+      });
+      audioStream.getAudioTracks().forEach(t => {
+        pc.addTrack(t, audioStream);
+        dlog('Audio track: ' + t.label + ' (48kHz stereo)');
+      });
+      audioAdded = true;
+      toast('🔊 שמע DAW משודר דרך ' + virtualDev.label + '!', 'g');
+      document.getElementById('audSt').textContent = 'Audio 48kHz ✓';
+      document.getElementById('audSt').className = 'cv ok';
+    } else {
+      dlog('No virtual audio device found. Available: ' + audioInputs.map(d=>d.label).join(', '));
+      toast('⚠️ BlackHole לא מותקן — התלמיד לא ישמע סאונד. התקן עם install-teacher-mac', '');
+    }
+  } catch(e) {
+    dlog('Audio capture error: ' + e.message);
+  }
 
   // ── Step 2: Capture SCREEN (Ableton window) ──
   try {
-    toast('📺 עכשיו בחר את מסך Ableton לשיתוף — סמן גם "שיתוף אודיו"!', 'c');
+    toast('📺 בחר את מסך Ableton לשיתוף', 'c');
     screenStream = await navigator.mediaDevices.getDisplayMedia({
       video: { cursor: 'always', width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } },
-      audio: true  // Request system audio — Chrome shows "Share system audio" checkbox
+      audio: true  // Also try screen audio as fallback (works on Windows/ChromeOS)
     });
     screenStream.getVideoTracks().forEach(t => {
       pc.addTrack(t, screenStream);
       dlog('Video track: ' + t.label);
     });
-    // Add audio tracks from screen share if available
+    // If screen share has audio and we don't have BlackHole audio — use it as fallback
     const screenAudioTracks = screenStream.getAudioTracks();
-    if (screenAudioTracks.length > 0) {
+    if (screenAudioTracks.length > 0 && !audioAdded) {
       screenAudioTracks.forEach(t => {
         pc.addTrack(t, screenStream);
-        dlog('Screen audio track: ' + t.label);
+        dlog('Screen audio track (fallback): ' + t.label);
       });
       audioAdded = true;
-      toast('🔊 שמע מערכת משודר!', 'g');
+      toast('🔊 שמע משודר דרך שיתוף המסך!', 'g');
       document.getElementById('audSt').textContent = 'Audio ✓';
       document.getElementById('audSt').className = 'cv ok';
-    } else {
-      toast('⚠️ לא סימנת "שיתוף אודיו" — התלמיד לא ישמע סאונד', '');
-      dlog('No audio tracks in screen share — user did not check "Share system audio"');
     }
     toast('🖥 מסך Ableton משודר!', 'g');
     screenStream.getVideoTracks()[0]?.addEventListener('ended', () => {
