@@ -698,88 +698,35 @@ async function handleCreateOffer(peerId) {
   const ice = await fetchICE();
   createPC(true, ice);
 
-  // ── Step 1: Capture AUDIO from DAW (studio quality, no mic) ──
-  // On Mac: getDisplayMedia can't capture system audio reliably.
-  // Solution: Use getUserMedia with a specific audio device (virtual audio routing).
-  // The Host picks their DAW audio output device from a list.
+  // ── Audio will be captured together with screen share (simpler, works on all platforms) ──
   let audioAdded = false;
-  try {
-    // Get all audio input devices — look for virtual/loopback devices
-    const devices = await navigator.mediaDevices.enumerateDevices();
-    const audioInputs = devices.filter(d => d.kind === 'audioinput' && d.deviceId !== 'default' && d.deviceId !== 'communications');
-
-    // Check if there's a known virtual audio device
-    const virtualNames = ['blackhole', 'vb-cable', 'loopback', 'virtual', 'aggregate', 'zoom', 'soundflower', 'ecamm'];
-    const virtualDev = audioInputs.find(d => virtualNames.some(v => d.label.toLowerCase().includes(v)));
-    const targetDev = virtualDev || audioInputs[0];
-
-    if (audioInputs.length > 0) {
-      // Show device picker modal
-      const pickerHtml = '<h3>🔊 בחר מקור שמע</h3><p>מאיפה Ableton מנגן? בחר את כרטיס הקול או ה-output של ה-DAW:</p>'
-        + '<div style="display:flex;flex-direction:column;gap:6px;margin:14px 0;max-height:200px;overflow-y:auto">'
-        + audioInputs.map((d,i) => {
-          const isVirtual = virtualNames.some(v => d.label.toLowerCase().includes(v));
-          const label = d.label || 'Audio Device ' + (i+1);
-          return '<div class="stype' + (d.deviceId === targetDev?.deviceId ? ' on' : '') + '" onclick="pickAudioDev(\\'' + d.deviceId + '\\',this)" data-did="' + d.deviceId + '" style="padding:10px 14px;font-size:12px;justify-content:space-between">'
-            + '<span>' + label + '</span>'
-            + (isVirtual ? '<span style="font-size:9px;background:var(--gD);color:var(--green);padding:2px 6px;border-radius:3px">מומלץ</span>' : '')
-            + '</div>';
-        }).join('')
-        + '</div>'
-        + '<div style="background:var(--s2);border:1px solid var(--b1);border-radius:7px;padding:10px;margin-bottom:14px;font-size:11px;color:var(--mid);line-height:1.6">'
-        + '💡 <b>טיפ:</b> באבלטון → Preferences → Audio → Output → בחר את אותו מכשיר שבחרת פה. ככה השמע יגיע ישיר בלי מיקרופון.'
-        + '</div>'
-        + '<div class="mrow"><button class="btn btn-c" style="flex:1" onclick="confirmAudioDev()">✓ התחל שידור שמע</button></div>';
-      modal(pickerHtml);
-
-      // Wait for user to pick device
-      await new Promise((resolve) => {
-        window._audioPickResolve = resolve;
-        window._audioPickDevId = targetDev?.deviceId;
-      });
-      closeModal();
-
-      const chosenId = window._audioPickDevId;
-      if (chosenId) {
-        const audioStream = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            deviceId: { exact: chosenId },
-            echoCancellation: false,
-            noiseSuppression: false,
-            autoGainControl: false,
-            sampleRate: 48000,
-            channelCount: 2
-          }
-        });
-        audioStream.getAudioTracks().forEach(t => {
-          pc.addTrack(t, audioStream);
-          dlog('Audio track: ' + t.label + ' (48kHz stereo, no processing)');
-        });
-        audioAdded = true;
-        toast('🔊 שמע DAW משודר באיכות סטודיו!', 'g');
-        document.getElementById('audSt').textContent = 'Audio 48kHz ✓';
-        document.getElementById('audSt').className = 'cv ok';
-      }
-    }
-  } catch(e) {
-    dlog('Audio capture error: ' + e.message);
-  }
-
-  if (!audioAdded) {
-    toast('⚠️ לא נבחר מקור שמע — השותף לא ישמע', '');
-  }
 
   // ── Step 2: Capture SCREEN (Ableton window) ──
   try {
-    toast('📺 עכשיו בחר את מסך Ableton לשיתוף', 'c');
+    toast('📺 עכשיו בחר את מסך Ableton לשיתוף — סמן גם "שיתוף אודיו"!', 'c');
     screenStream = await navigator.mediaDevices.getDisplayMedia({
       video: { cursor: 'always', width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } },
-      audio: false  // Audio already captured separately in studio quality
+      audio: true  // Request system audio — Chrome shows "Share system audio" checkbox
     });
     screenStream.getVideoTracks().forEach(t => {
       pc.addTrack(t, screenStream);
       dlog('Video track: ' + t.label);
     });
+    // Add audio tracks from screen share if available
+    const screenAudioTracks = screenStream.getAudioTracks();
+    if (screenAudioTracks.length > 0) {
+      screenAudioTracks.forEach(t => {
+        pc.addTrack(t, screenStream);
+        dlog('Screen audio track: ' + t.label);
+      });
+      audioAdded = true;
+      toast('🔊 שמע מערכת משודר!', 'g');
+      document.getElementById('audSt').textContent = 'Audio ✓';
+      document.getElementById('audSt').className = 'cv ok';
+    } else {
+      toast('⚠️ לא סימנת "שיתוף אודיו" — התלמיד לא ישמע סאונד', '');
+      dlog('No audio tracks in screen share — user did not check "Share system audio"');
+    }
     toast('🖥 מסך Ableton משודר!', 'g');
     screenStream.getVideoTracks()[0]?.addEventListener('ended', () => {
       toast('🖥 שיתוף המסך הופסק', '');
@@ -1296,15 +1243,6 @@ function showCode(){
 }
 function copyCode(){ navigator.clipboard?.writeText(S.code); toast('✓ הקוד הועתק: '+S.code,'c'); closeModal(); }
 
-// Audio device picker helpers
-function pickAudioDev(deviceId, el) {
-  window._audioPickDevId = deviceId;
-  document.querySelectorAll('#mBody .stype').forEach(s => s.classList.remove('on'));
-  el.classList.add('on');
-}
-function confirmAudioDev() {
-  if (window._audioPickResolve) { window._audioPickResolve(); window._audioPickResolve = null; }
-}
 
 function leaveSession(){
   S.poll=false; S.cid=null; S.code=null; S.role=null; S.peers=[]; S.playing=false; S.rec=false; S.pos={b:1,bt:1,tk:1}; S.markers=[];
