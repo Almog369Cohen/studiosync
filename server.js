@@ -550,6 +550,32 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 .add-track-btn { margin:8px 12px; padding:8px; border:1.5px dashed var(--b2); border-radius:var(--radius); background:none; color:var(--mid); cursor:pointer; font-size:13px; font-family:var(--sans); text-align:center; }
 .add-track-btn:hover { border-color:var(--accent); color:var(--accent); background:var(--accentH); }
 
+/* ── Virtual Piano ───────────────────────────────────── */
+#pianoWrap { position:fixed; bottom:56px; left:0; right:0; background:var(--bg); border-top:1px solid var(--b1); z-index:48; display:none; flex-direction:column; }
+#pianoWrap.open { display:flex; }
+.piano-header { display:flex; align-items:center; gap:10px; padding:6px 16px; border-bottom:1px solid var(--b1); }
+.piano-header-label { font-size:12px; font-weight:600; color:var(--mid); flex:1; }
+.piano-oct { padding:3px 10px; font-size:11px; border:1px solid var(--b1); border-radius:4px; background:none; cursor:pointer; color:var(--mid); }
+.piano-oct:hover { border-color:var(--accent); color:var(--accent); }
+.piano-close { background:none; border:none; cursor:pointer; color:var(--mid); font-size:16px; padding:0 4px; }
+.piano-ch select { font-size:11px; border:1px solid var(--b1); border-radius:4px; padding:2px 4px; color:var(--txt); background:var(--bg); }
+.piano-keys { position:relative; height:84px; display:flex; padding:6px 16px 0; overflow-x:auto; user-select:none; }
+.pk-w { width:32px; height:72px; background:#fff; border:1px solid #bbb; border-radius:0 0 4px 4px; cursor:pointer; flex-shrink:0; transition:background .05s; position:relative; z-index:1; display:flex; align-items:flex-end; justify-content:center; padding-bottom:4px; }
+.pk-w:hover,.pk-w.on { background:#e0d8ff; border-color:var(--accent); }
+.pk-b { width:22px; height:46px; background:#222; border-radius:0 0 3px 3px; cursor:pointer; flex-shrink:0; position:relative; z-index:2; margin:0 -11px; transition:background .05s; display:flex; align-items:flex-end; justify-content:center; padding-bottom:3px; }
+.pk-b:hover,.pk-b.on { background:var(--accent); }
+.pk-label { font-size:8px; color:#aaa; pointer-events:none; }
+.pk-w .pk-label { color:var(--mid); }
+.piano-vel { display:flex; align-items:center; gap:8px; padding:4px 16px; font-size:11px; color:var(--mid); border-top:1px solid var(--b1); }
+.piano-vel input[type=range] { width:100px; height:3px; -webkit-appearance:none; appearance:none; background:var(--b1); border-radius:2px; }
+.piano-vel input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:10px; height:10px; border-radius:50%; background:var(--accent); }
+
+/* ── Permissions badges in peer card ──────────────────── */
+.perm-row { display:flex; gap:4px; margin-top:4px; }
+.perm-badge { padding:2px 7px; border-radius:10px; font-size:10px; font-weight:600; cursor:pointer; border:1px solid var(--b1); color:var(--mid); background:var(--s1); user-select:none; }
+.perm-badge.on { background:var(--accentD); border-color:var(--accent); color:var(--accent); }
+.perm-badge.on-green { background:var(--gD); border-color:var(--green); color:var(--green); }
+
 /* ── Transport bar ───────────────────────────────────── */
 .transport-bar { height:56px; border-top:1px solid var(--b1); display:flex; align-items:center; gap:8px; padding:0 16px; background:var(--bg); flex-shrink:0; position:fixed; bottom:0; left:0; right:0; z-index:50; }
 .tc { width:34px; height:34px; border:1.5px solid var(--b1); border-radius:6px; background:none; cursor:pointer; font-size:14px; display:flex; align-items:center; justify-content:center; color:var(--txt); }
@@ -716,6 +742,31 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
   </div>
 
   <!-- Transport bar (fixed bottom) -->
+  <!-- Virtual Piano (hidden by default) -->
+  <div id="pianoWrap">
+    <div class="piano-header">
+      <span class="piano-header-label">🎹 Virtual Piano — MIDI to host</span>
+      <button class="piano-oct" onclick="pianoOctave(-1)">Oct −</button>
+      <span id="pianoOctLbl" style="font-size:11px;color:var(--mid)">C4</span>
+      <button class="piano-oct" onclick="pianoOctave(1)">Oct +</button>
+      <span style="font-size:11px;color:var(--dim);margin-left:8px">CH</span>
+      <select id="pianoChSel" style="font-size:11px;border:1px solid var(--b1);border-radius:4px;padding:2px 4px;color:var(--txt);background:var(--bg)">
+        <option>1</option><option>2</option><option>3</option><option>4</option>
+        <option>5</option><option>6</option><option>7</option><option>8</option>
+        <option>9</option><option>10</option><option>11</option><option>12</option>
+        <option>13</option><option>14</option><option>15</option><option>16</option>
+      </select>
+      <button class="piano-close" onclick="togglePiano()">×</button>
+    </div>
+    <div class="piano-keys" id="pianoKeys"></div>
+    <div class="piano-vel">
+      <span>Velocity</span>
+      <input type="range" id="pianoVel" min="1" max="127" value="100" />
+      <span id="pianoVelVal">100</span>
+      <span style="margin-left:16px;color:var(--dim)">Keyboard: Z-M (low) · Q-I (high)</span>
+    </div>
+  </div>
+
   <div class="transport-bar">
     <button class="tc" onclick="cmd('stop')">⏹</button>
     <button class="tc play-btn" id="playBtn" onclick="cmd('play')">▶</button>
@@ -729,7 +780,8 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
     <div class="pos-display" id="posDisp">1.1.1</div>
     <div class="tb-flex"></div>
     <div class="latency-pill" id="latPill">-- ms</div>
-    <button class="tc share-btn" onclick="doShare()">🖥 Share Screen</button>
+    <button class="tc" id="pianoBtn" onclick="togglePiano()" title="Virtual Piano / MIDI">🎹</button>
+    <button class="tc share-btn" onclick="doShare()">🖥 Share</button>
   </div>
 </div>
 
@@ -887,6 +939,7 @@ async function hostStart() {
     if (!d.ok) { toast('Error: ' + d.error, 'r'); show('lobby'); return; }
     S.cid = d.clientId;
     S.code = d.code;
+    S.peerNumber = d.peerNumber || 1;
     S.tracks = TDEFS.map(t => ({ ...t, v: 100, m: 0, s: 0, a: 0 }));
     enterSession();
   } catch(e) { toast('Connection error', 'r'); show('lobby'); }
@@ -911,6 +964,7 @@ async function remoteJoin() {
     if (!d.ok) { toast(d.error || 'Session not found', 'r'); show('lobby'); return; }
     S.cid = d.clientId;
     S.code = d.code;
+    S.peerNumber = d.peerNumber || 2;
     S.tracks = TDEFS.map(t => ({ ...t, v: 100, m: 0, s: 0, a: 0 }));
     enterSession();
   } catch(e) { toast('Connection error', 'r'); show('lobby'); }
@@ -1076,6 +1130,16 @@ function handleMsg(msg) {
       if (sl) sl.textContent = lat + 'ms';
       break;
     }
+    case 'perms:update': {
+      const pp = S.peers.get(msg.peerId);
+      if (pp) { pp.perms = msg.perms; renderPeerList(); }
+      break;
+    }
+    case 'remote:midi':
+      // Browser can't inject MIDI itself — agent.js handles this
+      // But we echo it so creator sees it in log
+      dlog('🎹 MIDI ' + msg.action + ' note=' + (msg.note||'-') + ' from ' + (msg.fromName||'peer'));
+      break;
   }
 }
 
@@ -1236,16 +1300,60 @@ function renderPeerList() {
 function mkPeerCard(id, name, color, instrument, status, isSelf) {
   const d = document.createElement('div');
   d.className = 'peer-card';
-  const latency = !isSelf && S.peers.has(id) ? S.peers.get(id).latency : null;
-  d.innerHTML = \`
+  d.style.flexDirection = 'column';
+  d.style.alignItems = 'stretch';
+  const p = S.peers.get(id);
+  const latency = p?.latency;
+  const perms = p?.perms || { mouse: true, keyboard: true, midi: true };
+  const isCreator = S.peerNumber === 1; // only creator can manage permissions
+
+  const topRow = document.createElement('div');
+  topRow.style.cssText = 'display:flex;align-items:center;gap:10px;';
+  topRow.innerHTML = \`
     <div class="pc-avatar" style="background:\${color || '#adb5bd'}">\${(name || '?')[0].toUpperCase()}</div>
-    <div class="pc-info">
+    <div class="pc-info" style="flex:1">
       <div class="pc-name">\${name || 'Peer'}\${isSelf ? ' <span class="you-badge">you</span>' : ''}</div>
       <div class="pc-meta">\${instrument || ''} &middot; <span class="pc-status">\${status || 'connecting'}</span></div>
     </div>
-    \${latency !== null ? \`<div class="pc-lat">\${latency || '--'}ms</div>\` : ''}
+    \${latency != null ? \`<div class="pc-lat">\${latency}ms</div>\` : ''}
   \`;
+  d.appendChild(topRow);
+
+  // Permission badges (only show for remote peers, and only creator can toggle)
+  if (!isSelf) {
+    const permRow = document.createElement('div');
+    permRow.className = 'perm-row';
+    permRow.style.paddingLeft = '42px';
+
+    const mkBadge = (key, label, cls) => {
+      const b = document.createElement('span');
+      b.className = 'perm-badge ' + (perms[key] ? cls : '');
+      b.textContent = label;
+      b.title = isCreator ? 'Click to toggle' : '';
+      if (isCreator) {
+        b.style.cursor = 'pointer';
+        b.onclick = () => togglePerm(id, key, b, cls);
+      }
+      return b;
+    };
+
+    permRow.appendChild(mkBadge('mouse',    '🖱 Mouse',    'on'));
+    permRow.appendChild(mkBadge('keyboard', '⌨ Keys',     'on'));
+    permRow.appendChild(mkBadge('midi',     '🎹 MIDI',     'on-green'));
+    d.appendChild(permRow);
+  }
   return d;
+}
+
+function togglePerm(peerId, key, badge, cls) {
+  const p = S.peers.get(peerId);
+  if (!p) return;
+  if (!p.perms) p.perms = { mouse:true, keyboard:true, midi:true };
+  p.perms[key] = !p.perms[key];
+  badge.classList.toggle(cls, p.perms[key]);
+  // Broadcast permission update to all peers
+  broadcast({ type:'perms:update', peerId, perms: p.perms, from: S.cid });
+  toast((p.name || 'Peer') + ': ' + key + ' ' + (p.perms[key] ? 'on' : 'off'), p.perms[key] ? 'g' : '');
 }
 
 function updatePeerStatus(peerId, state) {
@@ -1314,6 +1422,134 @@ async function doShare() {
     }
   } catch(e) { toast('Screen share cancelled', ''); }
 }
+
+// ══════════════════════════════════════════════════════════
+// Virtual Piano + MIDI
+// ══════════════════════════════════════════════════════════
+const PIANO = {
+  octave: 4,   // base octave
+  active: new Set(),
+  // computer keyboard → semitone offset from C (lower row = octave, upper row = octave+1)
+  keyMap: {
+    'z':0,'s':1,'x':2,'d':3,'c':4,'v':5,'g':6,'b':7,'h':8,'n':9,'j':10,'m':11,
+    'q':12,'2':13,'w':14,'3':15,'e':16,'r':17,'5':18,'t':19,'6':20,'y':21,'7':22,'u':23,'i':24
+  }
+};
+
+function togglePiano() {
+  const w = document.getElementById('pianoWrap');
+  const btn = document.getElementById('pianoBtn');
+  if (!w) return;
+  const open = w.classList.toggle('open');
+  if (btn) btn.style.background = open ? 'var(--accentD)' : '';
+  if (open && !w.dataset.built) { buildPianoKeys(); w.dataset.built = '1'; }
+}
+
+function pianoOctave(dir) {
+  PIANO.octave = Math.max(0, Math.min(8, PIANO.octave + dir));
+  document.getElementById('pianoOctLbl').textContent = 'C' + PIANO.octave;
+  buildPianoKeys();
+}
+
+function buildPianoKeys() {
+  const el = document.getElementById('pianoKeys');
+  if (!el) return;
+  el.innerHTML = '';
+  // 2 octaves starting from PIANO.octave
+  const layout = [0,null,1,null,2,3,null,4,null,5,null,6]; // null = black key gap
+  const noteNames = ['C','','D','','E','F','','G','','A','','B'];
+  for (let oct = 0; oct < 2; oct++) {
+    const whites = [0,2,4,5,7,9,11];
+    const blacks = [1,3,-1,6,8,10,-1]; // -1 = no black key after E and B
+    const baseNote = (PIANO.octave + oct) * 12;
+
+    // Build white keys
+    const octEl = document.createElement('div');
+    octEl.style.cssText = 'display:flex;position:relative;';
+    whites.forEach(semi => {
+      const note = baseNote + semi;
+      const key = document.createElement('div');
+      key.className = 'pk-w';
+      key.dataset.note = note;
+      const label = semi === 0 ? \`<span class="pk-label">C\${PIANO.octave+oct}</span>\` : '';
+      key.innerHTML = label;
+      key.onmousedown = () => pianoNoteOn(note, key);
+      key.onmouseup = key.onmouseleave = () => pianoNoteOff(note, key);
+      octEl.appendChild(key);
+    });
+
+    // Overlay black keys
+    const blackOffsets = [0.6, 1.6, -1, 3.6, 4.6, 5.6, -1]; // fractional white key units
+    const blackSemis   = [1,   3,   -1, 6,   8,   10,  -1];
+    blackSemis.forEach((semi, i) => {
+      if (semi === -1) return;
+      const note = baseNote + semi;
+      const bk = document.createElement('div');
+      bk.className = 'pk-b';
+      bk.dataset.note = note;
+      bk.style.position = 'absolute';
+      bk.style.left = (blackOffsets[i] * 32 + 11) + 'px'; // 32px per white key
+      bk.onmousedown = (e) => { e.stopPropagation(); pianoNoteOn(note, bk); };
+      bk.onmouseup = bk.onmouseleave = () => pianoNoteOff(note, bk);
+      octEl.appendChild(bk);
+    });
+    el.appendChild(octEl);
+  }
+
+  // Velocity slider label sync
+  const vel = document.getElementById('pianoVel');
+  const velVal = document.getElementById('pianoVelVal');
+  if (vel && velVal) vel.oninput = () => velVal.textContent = vel.value;
+}
+
+function pianoNoteOn(note, el) {
+  if (PIANO.active.has(note)) return;
+  PIANO.active.add(note);
+  el?.classList.add('on');
+  const vel = Number(document.getElementById('pianoVel')?.value || 100);
+  const ch  = Number(document.getElementById('pianoChSel')?.value || 1) - 1;
+  const msg = { type:'remote:midi', action:'noteon', note, velocity:vel, channel:ch,
+    from:S.cid, fromName:S.name };
+  broadcast(msg);
+}
+
+function pianoNoteOff(note, el) {
+  if (!PIANO.active.has(note)) return;
+  PIANO.active.delete(note);
+  el?.classList.remove('on');
+  const ch = Number(document.getElementById('pianoChSel')?.value || 1) - 1;
+  broadcast({ type:'remote:midi', action:'noteoff', note, velocity:0, channel:ch,
+    from:S.cid, fromName:S.name });
+}
+
+// Computer keyboard → piano
+document.addEventListener('keydown', e => {
+  const tag = document.activeElement?.tagName;
+  const pianoOpen = document.getElementById('pianoWrap')?.classList.contains('open');
+  if (pianoOpen && !e.metaKey && !e.ctrlKey) {
+    const semi = PIANO.keyMap[e.key?.toLowerCase()];
+    if (semi !== undefined && !e.repeat) {
+      const note = PIANO.octave * 12 + semi;
+      const keyEl = document.querySelector(\`[data-note="\${note}"]\`);
+      pianoNoteOn(note, keyEl);
+      return;
+    }
+  }
+  if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+  if (e.code === 'Space' && S.code) { e.preventDefault(); cmd('play'); }
+});
+
+document.addEventListener('keyup', e => {
+  const pianoOpen = document.getElementById('pianoWrap')?.classList.contains('open');
+  if (pianoOpen) {
+    const semi = PIANO.keyMap[e.key?.toLowerCase()];
+    if (semi !== undefined) {
+      const note = PIANO.octave * 12 + semi;
+      const keyEl = document.querySelector(\`[data-note="\${note}"]\`);
+      pianoNoteOff(note, keyEl);
+    }
+  }
+});
 
 // ── Keyboard shortcuts ────────────────────────────────────
 document.addEventListener('keydown', e => {
