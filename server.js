@@ -80,7 +80,7 @@ const VALID_LICENSES = new Set(
   (process.env.VALID_LICENSES || '').split(',').map(k => k.trim()).filter(Boolean)
 );
 const runtimeLicenses = new Map(); // key → { email, createdAt }
-const trialSessions   = new Map(); // ip → { count, date }
+const trialSessions   = new Map(); // fingerprint → { count, date }
 
 function genLicenseKey() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
@@ -94,17 +94,17 @@ function checkLicense(key) {
   return VALID_LICENSES.has(k) || runtimeLicenses.has(k);
 }
 
-function checkTrial(ip) {
+function checkTrial(fp) {
   const today = new Date().toISOString().slice(0, 10);
-  const rec = trialSessions.get(ip);
+  const rec = trialSessions.get(fp);
   if (!rec || rec.date !== today) return true;
   return rec.count < 3;
 }
 
-function useTrial(ip) {
+function useTrial(fp) {
   const today = new Date().toISOString().slice(0, 10);
-  const rec = trialSessions.get(ip);
-  if (!rec || rec.date !== today) { trialSessions.set(ip, { count: 1, date: today }); return; }
+  const rec = trialSessions.get(fp);
+  if (!rec || rec.date !== today) { trialSessions.set(fp, { count: 1, date: today }); return; }
   rec.count++;
 }
 
@@ -263,13 +263,14 @@ const server = http.createServer(async (req, res) => {
   if ((path === '/api/create' || path === '/api/host') && req.method === 'POST') {
     const data = await body(req);
     const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket?.remoteAddress || 'unknown';
+    const fp = (data.fingerprint && data.fingerprint.length > 4) ? data.fingerprint : ip;
     const licensed = checkLicense(data.license);
 
     if (!licensed) {
-      if (!checkTrial(ip)) {
+      if (!checkTrial(fp)) {
         return json(res, { ok: false, error: 'trial_limit', message: 'You have reached 3 free sessions today. Upgrade to Pro to continue.' }, 402);
       }
-      useTrial(ip);
+      useTrial(fp);
     }
 
     const id   = 'p_' + Date.now() + crypto.randomBytes(3).toString('hex');
@@ -288,6 +289,7 @@ const server = http.createServer(async (req, res) => {
   if (path === '/api/join' && req.method === 'POST') {
     const data = await body(req);
     const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket?.remoteAddress || 'unknown';
+    const fp = (data.fingerprint && data.fingerprint.length > 4) ? data.fingerprint : ip;
     const raw  = (data.code || '').replace(/[^A-Z0-9]/gi, '').toUpperCase();
     const code = raw.slice(0, 3) + '-' + raw.slice(3);
     const sess = sessions.get(code);
@@ -296,9 +298,10 @@ const server = http.createServer(async (req, res) => {
 
     const licensed = checkLicense(data.license);
     if (!licensed && !sess.licensed) {
-      if (!checkTrial(ip)) {
+      if (!checkTrial(fp)) {
         return json(res, { ok: false, error: 'trial_limit', message: 'You have reached 3 free sessions today. Upgrade to Pro to continue.' }, 402);
       }
+      useTrial(fp);
     }
 
     const id         = 'p_' + Date.now() + crypto.randomBytes(3).toString('hex');
@@ -617,6 +620,17 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 #toastEl.toast-show { opacity:1; }
 #toastEl.toast-g { background:var(--green); color:#fff; }
 #toastEl.toast-r { background:var(--red); color:#fff; }
+
+/* ── Remote video overlay ────────────────────────────── */
+#remoteVideoWrap { position:fixed; bottom:68px; right:8px; width:320px; background:#000; border-radius:var(--radiusL); box-shadow:var(--shadowM); z-index:100; overflow:hidden; cursor:move; user-select:none; display:none; }
+#remoteVideoWrap.active { display:block; }
+#remoteVideoWrap video { width:100%; display:block; max-height:240px; object-fit:contain; }
+.rvb { display:flex; align-items:center; gap:8px; padding:6px 10px; background:rgba(0,0,0,.7); }
+.rvb-label { flex:1; font-size:12px; font-weight:600; color:#fff; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.rvb-mute { background:none; border:1px solid rgba(255,255,255,.3); color:#fff; border-radius:4px; padding:2px 8px; font-size:11px; cursor:pointer; }
+.rvb-mute:hover { background:rgba(255,255,255,.15); }
+.rvb-close { background:none; border:none; color:rgba(255,255,255,.7); cursor:pointer; font-size:18px; padding:0 2px; line-height:1; }
+.rvb-close:hover { color:#fff; }
 </style>
 </head>
 <body>
@@ -823,6 +837,16 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
   </div>
 </div>
 
+<!-- Remote video overlay (screen share) -->
+<div id="remoteVideoWrap">
+  <div class="rvb">
+    <span class="rvb-label" id="rvLabel">Shared Screen</span>
+    <button class="rvb-mute" id="rvMuteBtn" onclick="toggleRvMute()">🔊</button>
+    <button class="rvb-close" onclick="closeRv()">×</button>
+  </div>
+  <video id="remoteVideoEl" autoplay playsinline></video>
+</div>
+
 <!-- Toast -->
 <div id="toastEl"></div>
 
@@ -840,7 +864,9 @@ const S = {
   markers: [],
   peers: new Map(), // peerId → { name, color, instrument, conn, dc, latency }
   poll: false,
-  activeTab: 'peers'
+  activeTab: 'peers',
+  pingInterval: null,
+  tickInterval: null
 };
 
 const TDEFS = [
@@ -859,6 +885,13 @@ const ICE = { iceServers: [
   { urls:'turn:global.relay.metered.ca:80', username:'open', credential:'open' },
   { urls:'turn:global.relay.metered.ca:443', username:'open', credential:'open' },
 ]};
+
+// ── Browser fingerprint (trial tracking) ─────────────────
+function getFingerprint() {
+  let fp = localStorage.getItem('ss_fp');
+  if (!fp) { fp = 'fp_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8); localStorage.setItem('ss_fp', fp); }
+  return fp;
+}
 
 // ── Screen helpers ────────────────────────────────────────
 function show(id) {
@@ -947,7 +980,7 @@ async function hostStart() {
     const r = await fetch(SERVER + '/api/create', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: S.name, color: S.color, instrument: S.instrument, daw: 'Ableton' })
+      body: JSON.stringify({ name: S.name, color: S.color, instrument: S.instrument, daw: 'Ableton', fingerprint: getFingerprint() })
     });
     const d = await r.json();
     if (!d.ok) { toast('Error: ' + d.error, 'r'); show('lobby'); return; }
@@ -972,7 +1005,7 @@ async function remoteJoin() {
     const r = await fetch(SERVER + '/api/join', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code, name: S.name, color: S.color, instrument: S.instrument })
+      body: JSON.stringify({ code, name: S.name, color: S.color, instrument: S.instrument, fingerprint: getFingerprint() })
     });
     const d = await r.json();
     if (!d.ok) { toast(d.error || 'Session not found', 'r'); show('lobby'); return; }
@@ -994,11 +1027,11 @@ function enterSession() {
   show('session');
   startPoll();
   // Ping loop
-  setInterval(() => {
+  S.pingInterval = setInterval(() => {
     if (S.cid) send({ type: 'ping:req', ts: Date.now() });
   }, 5000);
   // Position tick
-  setInterval(() => {
+  S.tickInterval = setInterval(() => {
     if (!S.playing) return;
     S.pos.tk++;
     if (S.pos.tk > 4) { S.pos.tk = 1; S.pos.bt++; }
@@ -1009,12 +1042,15 @@ function enterSession() {
 
 function leaveSession() {
   S.poll = false;
+  clearInterval(S.pingInterval); S.pingInterval = null;
+  clearInterval(S.tickInterval); S.tickInterval = null;
   for (const [, p] of S.peers) p.conn?.close();
   S.peers.clear();
   S.cid = null; S.code = null;
   S.playing = false; S.rec = false;
   S.pos = { b: 1, bt: 1, tk: 1 };
   S.markers = [];
+  closeRv();
   show('landing');
 }
 
@@ -1054,21 +1090,41 @@ const PeerMesh = {
     pc.ondatachannel = () => {};
     pc.onicecandidate = (e) => { if (e.candidate) send({ type: 'webrtc:ice', peerId, candidate: e.candidate }); };
     pc.onconnectionstatechange = () => { updatePeerStatus(peerId, pc.connectionState); };
+    pc.ontrack = (e) => { if (e.streams[0]) showRemoteStream(e.streams[0], peerId); };
+    pc.onnegotiationneeded = async () => {
+      try {
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+        send({ type: 'webrtc:offer', peerId, offer });
+      } catch(e) {}
+    };
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
     send({ type: 'webrtc:offer', peerId, offer });
   },
   async handleOffer(peerId, offer) {
-    const pc = new RTCPeerConnection(ICE);
-    const peerInfo = S.peers.get(peerId) || {};
-    S.peers.set(peerId, { ...peerInfo, conn: pc });
-    pc.ondatachannel = (e) => {
-      const dc = e.channel;
-      dc.onopen = () => { const p = S.peers.get(peerId); if (p) p.dc = dc; dlog('DC open ← ' + peerId); };
-      dc.onmessage = (ev) => applyRemote(JSON.parse(ev.data), peerId);
-    };
-    pc.onicecandidate = (e) => { if (e.candidate) send({ type: 'webrtc:ice', peerId, candidate: e.candidate }); };
-    pc.onconnectionstatechange = () => { updatePeerStatus(peerId, pc.connectionState); };
+    // Re-negotiation: reuse existing connection if present
+    const existing = S.peers.get(peerId)?.conn;
+    const pc = existing || new RTCPeerConnection(ICE);
+    if (!existing) {
+      const peerInfo = S.peers.get(peerId) || {};
+      S.peers.set(peerId, { ...peerInfo, conn: pc });
+      pc.ondatachannel = (e) => {
+        const dc = e.channel;
+        dc.onopen = () => { const p = S.peers.get(peerId); if (p) p.dc = dc; dlog('DC open ← ' + peerId); };
+        dc.onmessage = (ev) => applyRemote(JSON.parse(ev.data), peerId);
+      };
+      pc.onicecandidate = (e) => { if (e.candidate) send({ type: 'webrtc:ice', peerId, candidate: e.candidate }); };
+      pc.onconnectionstatechange = () => { updatePeerStatus(peerId, pc.connectionState); };
+      pc.onnegotiationneeded = async () => {
+        try {
+          const o = await pc.createOffer();
+          await pc.setLocalDescription(o);
+          send({ type: 'webrtc:offer', peerId, offer: o });
+        } catch(e) {}
+      };
+    }
+    pc.ontrack = (e) => { if (e.streams[0]) showRemoteStream(e.streams[0], peerId); };
     await pc.setRemoteDescription(offer);
     const answer = await pc.createAnswer();
     await pc.setLocalDescription(answer);
@@ -1376,6 +1432,18 @@ function updatePeerStatus(peerId, state) {
   renderPeerList();
   const sc = document.getElementById('spConn');
   if (sc) sc.textContent = state;
+  if (state === 'failed' || state === 'disconnected') {
+    setTimeout(() => {
+      const pp = S.peers.get(peerId);
+      if (!pp || !S.cid) return;
+      if (pp.connState === 'failed' || pp.connState === 'disconnected') {
+        dlog('↩ Reconnecting to ' + (pp.name || peerId));
+        pp.conn?.close();
+        pp.conn = null; pp.dc = null;
+        PeerMesh.createOffer(peerId);
+      }
+    }, 3000);
+  }
 }
 
 // ── Chat ──────────────────────────────────────────────────
@@ -1430,11 +1498,61 @@ function toggleSettings() {
 async function doShare() {
   try {
     const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
-    toast('Screen shared!', 'g');
+    toast('Sharing screen…', 'g');
     for (const [, p] of S.peers) {
       if (p.conn) stream.getTracks().forEach(t => p.conn.addTrack(t, stream));
+      // onnegotiationneeded fires automatically after addTrack and handles re-offer
     }
-  } catch(e) { toast('Screen share cancelled', ''); }
+    stream.getVideoTracks()[0].onended = () => toast('Screen share ended', '');
+  } catch(e) { toast('Share cancelled', ''); }
+}
+
+function showRemoteStream(stream, peerId) {
+  const wrap = document.getElementById('remoteVideoWrap');
+  const vid  = document.getElementById('remoteVideoEl');
+  const lbl  = document.getElementById('rvLabel');
+  if (!wrap || !vid) return;
+  vid.srcObject = stream;
+  const p = S.peers.get(peerId);
+  if (lbl) lbl.textContent = (p?.name || 'Peer') + "'s Screen";
+  wrap.classList.add('active');
+  // Make draggable
+  let ox = 0, oy = 0, mx = 0, my = 0;
+  const bar = wrap.querySelector('.rvb');
+  if (bar && !bar._drag) {
+    bar._drag = true;
+    bar.onmousedown = (e) => {
+      if (e.target.tagName === 'BUTTON') return;
+      mx = e.clientX; my = e.clientY;
+      const rect = wrap.getBoundingClientRect();
+      ox = rect.left; oy = rect.top;
+      wrap.style.right = 'auto';
+      wrap.style.bottom = 'auto';
+      const move = (ev) => {
+        wrap.style.left = (ox + ev.clientX - mx) + 'px';
+        wrap.style.top  = (oy + ev.clientY - my) + 'px';
+      };
+      const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); };
+      document.addEventListener('mousemove', move);
+      document.addEventListener('mouseup', up);
+    };
+  }
+  stream.getTracks().forEach(t => { t.onended = () => closeRv(); });
+}
+
+function closeRv() {
+  const wrap = document.getElementById('remoteVideoWrap');
+  const vid  = document.getElementById('remoteVideoEl');
+  if (vid) vid.srcObject = null;
+  if (wrap) wrap.classList.remove('active');
+}
+
+function toggleRvMute() {
+  const vid = document.getElementById('remoteVideoEl');
+  const btn = document.getElementById('rvMuteBtn');
+  if (!vid) return;
+  vid.muted = !vid.muted;
+  if (btn) btn.textContent = vid.muted ? '🔇' : '🔊';
 }
 
 // ══════════════════════════════════════════════════════════
