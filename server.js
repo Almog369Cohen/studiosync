@@ -570,6 +570,14 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 .piano-vel input[type=range] { width:100px; height:3px; -webkit-appearance:none; appearance:none; background:var(--b1); border-radius:2px; }
 .piano-vel input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:10px; height:10px; border-radius:50%; background:var(--accent); }
 
+/* ── My Controls (self-send toggles in transport bar) ─── */
+.my-controls { display:flex; align-items:center; gap:5px; }
+.my-ctrl-btn { display:flex; align-items:center; gap:3px; padding:4px 9px; border-radius:100px; border:1.5px solid var(--b1); background:var(--s1); color:var(--dim); font-size:12px; font-weight:500; cursor:pointer; user-select:none; transition:all .15s; font-family:var(--sans); }
+.my-ctrl-btn:hover { border-color:var(--accent); color:var(--accent); }
+.my-ctrl-btn.active { background:var(--accentD); border-color:var(--accent); color:var(--accent); font-weight:600; }
+.my-ctrl-btn.active-g { background:var(--gD); border-color:var(--green); color:var(--green); font-weight:600; }
+.my-ctrl-sep { width:1px; height:20px; background:var(--b1); margin:0 2px; }
+
 /* ── Permissions badges in peer card ──────────────────── */
 .perm-row { display:flex; gap:4px; margin-top:4px; }
 .perm-badge { padding:2px 7px; border-radius:10px; font-size:10px; font-weight:600; cursor:pointer; border:1px solid var(--b1); color:var(--mid); background:var(--s1); user-select:none; }
@@ -779,6 +787,12 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
     </div>
     <div class="pos-display" id="posDisp">1.1.1</div>
     <div class="tb-flex"></div>
+    <div class="my-controls" id="myControls" title="What you're sending to the host">
+      <span class="my-ctrl-btn active" id="myMouse" onclick="toggleMyCtrl('mouse')">🖱 Mouse</span>
+      <span class="my-ctrl-btn active" id="myKeys" onclick="toggleMyCtrl('keyboard')">⌨ Keys</span>
+      <span class="my-ctrl-btn active-g" id="myMidi" onclick="toggleMyCtrl('midi')">🎹 MIDI</span>
+    </div>
+    <div class="my-ctrl-sep"></div>
     <div class="latency-pill" id="latPill">-- ms</div>
     <button class="tc" id="pianoBtn" onclick="togglePiano()" title="Virtual Piano / MIDI">🎹</button>
     <button class="tc share-btn" onclick="doShare()">🖥 Share</button>
@@ -1424,6 +1438,20 @@ async function doShare() {
 }
 
 // ══════════════════════════════════════════════════════════
+// My Controls — what THIS peer is sending
+// ══════════════════════════════════════════════════════════
+const MY = { mouse: true, keyboard: true, midi: true };
+
+function toggleMyCtrl(key) {
+  MY[key] = !MY[key];
+  const ids = { mouse:'myMouse', keyboard:'myKeys', midi:'myMidi' };
+  const cls = key === 'midi' ? 'active-g' : 'active';
+  const btn = document.getElementById(ids[key]);
+  if (btn) btn.classList.toggle(cls, MY[key]);
+  toast((MY[key] ? '✓ Sending ' : '✗ Stopped sending ') + key, MY[key] ? 'g' : '');
+}
+
+// ══════════════════════════════════════════════════════════
 // Virtual Piano + MIDI
 // ══════════════════════════════════════════════════════════
 const PIANO = {
@@ -1506,17 +1534,18 @@ function pianoNoteOn(note, el) {
   if (PIANO.active.has(note)) return;
   PIANO.active.add(note);
   el?.classList.add('on');
+  if (!MY.midi) return; // user toggled off MIDI sending
   const vel = Number(document.getElementById('pianoVel')?.value || 100);
   const ch  = Number(document.getElementById('pianoChSel')?.value || 1) - 1;
-  const msg = { type:'remote:midi', action:'noteon', note, velocity:vel, channel:ch,
-    from:S.cid, fromName:S.name };
-  broadcast(msg);
+  broadcast({ type:'remote:midi', action:'noteon', note, velocity:vel, channel:ch,
+    from:S.cid, fromName:S.name });
 }
 
 function pianoNoteOff(note, el) {
   if (!PIANO.active.has(note)) return;
   PIANO.active.delete(note);
   el?.classList.remove('on');
+  if (!MY.midi) return;
   const ch = Number(document.getElementById('pianoChSel')?.value || 1) - 1;
   broadcast({ type:'remote:midi', action:'noteoff', note, velocity:0, channel:ch,
     from:S.cid, fromName:S.name });
