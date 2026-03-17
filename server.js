@@ -640,6 +640,25 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 .main-area-empty-sub { font-size:12px; color:var(--dim); max-width:280px; line-height:1.5; }
 .main-video { width:100%; height:100%; object-fit:contain; border-radius:var(--radiusL); background:#000; display:none; }
 .main-video.active { display:block; }
+
+/* ── Multi-stream container ───────────────────────── */
+.stream-container { display:flex; width:100%; height:100%; gap:6px; }
+.stream-main { flex:1; position:relative; background:#000; border-radius:var(--radiusL); overflow:hidden; min-height:0; }
+.stream-main video { width:100%; height:100%; object-fit:contain; }
+.stream-main .stream-label { position:absolute; top:8px; left:8px; padding:2px 8px; font-size:11px; background:rgba(0,0,0,.65); color:#fff; border-radius:4px; pointer-events:none; }
+.stream-thumbs { width:150px; display:flex; flex-direction:column; gap:6px; padding:4px; overflow-y:auto; flex-shrink:0; }
+.stream-thumb { position:relative; border-radius:8px; overflow:hidden; cursor:pointer; border:2px solid var(--b1); aspect-ratio:16/9; background:#000; transition:border-color .2s, opacity .2s, transform .2s; }
+.stream-thumb:hover { border-color:var(--mid); }
+.stream-thumb.active { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent); }
+.stream-thumb video { width:100%; height:100%; object-fit:cover; pointer-events:none; }
+.stream-thumb .stream-label { position:absolute; bottom:0; left:0; right:0; padding:2px 6px; font-size:10px; background:rgba(0,0,0,.7); color:#fff; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.stream-thumb.dragging { opacity:.4; transform:scale(.95); }
+/* Grid mode */
+.stream-container.grid-mode .stream-main { display:none; }
+.stream-container.grid-mode .stream-thumbs { width:100%; flex-direction:row; flex-wrap:wrap; padding:8px; gap:8px; overflow-y:auto; }
+.stream-container.grid-mode .stream-thumb { flex:1 1 calc(50% - 8px); min-width:200px; max-height:none; aspect-ratio:16/9; border-radius:var(--radiusL); }
+.stream-container.grid-mode .stream-thumb video { object-fit:contain; }
+.stream-container.grid-mode .stream-thumb .stream-label { font-size:12px; padding:4px 8px; }
 .participant-panel { width:260px; border-left:1px solid var(--b1); display:flex; flex-direction:column; flex-shrink:0; }
 .panel-tabs { display:flex; border-bottom:1px solid var(--b1); flex-shrink:0; }
 .ptab { flex:1; padding:10px; background:none; border:none; border-bottom:2px solid transparent; font-size:13px; font-weight:500; cursor:pointer; color:var(--mid); font-family:var(--sans); }
@@ -895,6 +914,11 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 
   .workspace { flex-direction:column; }
   .participant-panel { width:100%; height:auto; max-height:180px; border-left:none; border-top:1px solid var(--b1); }
+  .stream-container { flex-direction:column; }
+  .stream-thumbs { width:100%; flex-direction:row; height:80px; overflow-x:auto; overflow-y:hidden; flex-shrink:0; }
+  .stream-thumb { min-width:110px; height:70px; flex-shrink:0; aspect-ratio:auto; }
+  .stream-container.grid-mode .stream-thumbs { height:auto; flex-direction:row; flex-wrap:wrap; overflow-y:auto; overflow-x:hidden; }
+  .stream-container.grid-mode .stream-thumb { flex:1 1 100%; min-width:unset; height:auto; flex-shrink:1; aspect-ratio:16/9; }
 
   .transport-bar { height:auto; min-height:52px; flex-wrap:wrap; gap:4px; padding:6px 8px; position:relative; }
   .bpm-ctrl { order:10; }
@@ -1082,9 +1106,12 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 
   <!-- Workspace -->
   <div class="workspace">
-    <!-- Main: shared screen video -->
+    <!-- Main: shared screen video(s) -->
     <div class="main-area" id="mainArea">
-      <video id="mainVideo" class="main-video" autoplay playsinline></video>
+      <div class="stream-container" id="streamContainer">
+        <div class="stream-main" id="streamMain"></div>
+        <div class="stream-thumbs" id="streamThumbs"></div>
+      </div>
       <div class="main-area-empty" id="mainEmpty" dir="rtl">
         <div class="main-area-empty-icon">🖥</div>
         <div class="main-area-empty-text">ממתין לשיתוף מסך...</div>
@@ -1171,6 +1198,7 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
     <button class="tc" onclick="toggleFullscreen()" title="מסך מלא">⛶</button>
     <button class="tc" id="clipBtn" onclick="toggleClipBoard()" title="קליפים">📋</button>
     <button class="tc rec-btn-transport" id="recSessionBtn" onclick="toggleSessionRecord()">⏺ הקלט<span class="lock-icon" id="recLock">🔒</span></button>
+    <button class="tc" id="viewToggle" onclick="toggleStreamView()" title="תצוגת גריד">⊞</button>
     <button class="tc share-audio-btn" onclick="doShareAudio()" title="שתף שמע בלבד">🔊</button>
     <button class="tc share-btn" onclick="doShare()">🖥 Share</button>
     <button class="tc cam-btn" onclick="doShareCam()">📷 Cam</button>
@@ -1377,7 +1405,9 @@ const S = {
   metro: false, metroInterval: null, metroBeat: 0,
   clips: [],
   connectedAt: null,
-  analyserIn: null, analyserOut: null, vuAnim: null
+  analyserIn: null, analyserOut: null, vuAnim: null,
+  streams: new Map(),    // peerId → { stream, type:'screen'|'camera'|'audio', name }
+  focusedStream: null    // peerId of focused stream in thumbnail mode
 };
 
 // (track defs removed — not connected to real DAW)
@@ -1746,6 +1776,7 @@ function handleMsg(msg) {
       const lp = S.peers.get(msg.peerId);
       if (lp) {
         const card = document.querySelector('[data-peer="' + msg.peerId + '"]');
+        S.streams.delete(msg.peerId); S.streams.delete(msg.peerId + ':cam'); renderStreams();
         if (card) { card.classList.add('leaving'); setTimeout(() => { lp?.conn?.close(); S.peers.delete(msg.peerId); updatePeerAvatars(); renderPeerList(); }, 300); }
         else { lp.conn?.close(); S.peers.delete(msg.peerId); updatePeerAvatars(); renderPeerList(); }
       }
@@ -2076,15 +2107,13 @@ async function doShare() {
       selfBrowserSurface: 'include', surfaceSwitching: 'include', systemAudio: 'include'
     });
     toast('Sharing screen…', 'g');
-    const vid = document.getElementById('mainVideo');
-    const empty = document.getElementById('mainEmpty');
-    if (vid) { vid.srcObject = stream; vid.classList.add('active'); vid.muted = true; }
-    if (empty) empty.style.display = 'none';
+    S.streams.set(S.cid, { stream, type: 'screen', name: S.name });
+    renderStreams();
     initVU(stream, 'in');
     for (const [, p] of S.peers) {
       if (p.conn) stream.getTracks().forEach(t => p.conn.addTrack(t, stream));
     }
-    stream.getVideoTracks()[0].onended = () => { toast('Screen share ended', ''); closeRv(); stopVU('in'); };
+    stream.getVideoTracks()[0].onended = () => { toast('Screen share ended', ''); S.streams.delete(S.cid); renderStreams(); stopVU('in'); };
   } catch(e) { toast('Share cancelled', ''); }
 }
 
@@ -2092,16 +2121,12 @@ async function doShareCam() {
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
     toast('מצלמה משותפת!', 'g');
-    // Show locally
-    const vid = document.getElementById('mainVideo');
-    const empty = document.getElementById('mainEmpty');
-    if (vid) { vid.srcObject = stream; vid.classList.add('active'); vid.muted = true; }
-    if (empty) empty.style.display = 'none';
-    // Send to peers
+    S.streams.set(S.cid + ':cam', { stream, type: 'camera', name: S.name + ' 📷' });
+    renderStreams();
     for (const [, p] of S.peers) {
       if (p.conn) stream.getTracks().forEach(t => p.conn.addTrack(t, stream));
     }
-    stream.getVideoTracks()[0].onended = () => { toast('המצלמה נעצרה', ''); closeRv(); };
+    stream.getVideoTracks()[0].onended = () => { toast('המצלמה נעצרה', ''); S.streams.delete(S.cid + ':cam'); renderStreams(); };
   } catch(e) { toast('המצלמה לא זמינה או שנדחתה', 'r'); }
 }
 
@@ -2121,23 +2146,113 @@ async function doShareAudio() {
 }
 
 function showRemoteStream(stream, peerId) {
-  const vid   = document.getElementById('mainVideo');
-  const empty = document.getElementById('mainEmpty');
-  if (!vid) return;
-  vid.srcObject = stream;
-  vid.classList.add('active');
-  if (empty) empty.style.display = 'none';
   const p = S.peers.get(peerId);
-  toast((p?.name || 'Peer') + ' is sharing screen', 'g');
+  const name = p?.name || 'Peer';
+  S.streams.set(peerId, { stream, type: 'screen', name });
+  renderStreams();
+  toast(name + ' משתף/ת מסך', 'g');
   initVU(stream, 'out');
-  stream.getTracks().forEach(t => { t.onended = () => { closeRv(); stopVU('out'); }; });
+  stream.getTracks().forEach(t => { t.onended = () => { S.streams.delete(peerId); renderStreams(); stopVU('out'); }; });
 }
 
 function closeRv() {
-  const vid   = document.getElementById('mainVideo');
+  S.streams.delete(S.cid);
+  S.streams.delete(S.cid + ':cam');
+  renderStreams();
+}
+
+// ── Multi-stream rendering ────────────────────────────────
+function createStreamEl(peerId, stream, name) {
+  const wrap = document.createElement('div');
+  wrap.className = 'stream-thumb';
+  wrap.dataset.peerId = peerId;
+  const vid = document.createElement('video');
+  vid.srcObject = stream;
+  vid.autoplay = true;
+  vid.playsInline = true;
+  vid.muted = peerId.startsWith(S.cid);
+  const label = document.createElement('div');
+  label.className = 'stream-label';
+  label.textContent = name || 'Peer';
+  wrap.appendChild(vid);
+  wrap.appendChild(label);
+  // Drag support
+  wrap.draggable = true;
+  wrap.ondragstart = (e) => { wrap._dragSrc = true; wrap.classList.add('dragging'); e.dataTransfer.effectAllowed = 'move'; };
+  wrap.ondragend = () => { wrap.classList.remove('dragging'); wrap._dragSrc = false; };
+  wrap.ondragover = (e) => e.preventDefault();
+  wrap.ondrop = (e) => {
+    e.preventDefault();
+    const parent = wrap.parentNode;
+    const src = parent.querySelector('.dragging');
+    if (src && src !== wrap) {
+      const srcIdx = [...parent.children].indexOf(src);
+      const tgtIdx = [...parent.children].indexOf(wrap);
+      if (srcIdx < tgtIdx) parent.insertBefore(src, wrap.nextSibling);
+      else parent.insertBefore(src, wrap);
+    }
+  };
+  return wrap;
+}
+
+function renderStreams() {
+  const mainEl = document.getElementById('streamMain');
+  const thumbsEl = document.getElementById('streamThumbs');
   const empty = document.getElementById('mainEmpty');
-  if (vid) { vid.srcObject = null; vid.classList.remove('active'); }
-  if (empty) empty.style.display = '';
+  const container = document.getElementById('streamContainer');
+  if (!mainEl || !thumbsEl) return;
+
+  if (S.streams.size === 0) {
+    if (empty) empty.style.display = '';
+    if (container) container.style.display = 'none';
+    mainEl.innerHTML = '';
+    thumbsEl.innerHTML = '';
+    return;
+  }
+  if (empty) empty.style.display = 'none';
+  if (container) container.style.display = '';
+
+  // Pick focused stream
+  if (!S.focusedStream || !S.streams.has(S.focusedStream)) {
+    S.focusedStream = S.streams.keys().next().value;
+  }
+
+  // Main view (only in thumbnail mode)
+  mainEl.innerHTML = '';
+  const focused = S.streams.get(S.focusedStream);
+  if (focused) {
+    const vid = document.createElement('video');
+    vid.srcObject = focused.stream;
+    vid.autoplay = true; vid.playsInline = true;
+    vid.muted = S.focusedStream.startsWith(S.cid);
+    mainEl.appendChild(vid);
+    const lbl = document.createElement('div');
+    lbl.className = 'stream-label';
+    lbl.textContent = focused.name;
+    mainEl.appendChild(lbl);
+  }
+
+  // Thumbnails
+  thumbsEl.innerHTML = '';
+  for (const [pid, s] of S.streams) {
+    const thumb = createStreamEl(pid, s.stream, s.name);
+    if (pid === S.focusedStream) thumb.classList.add('active');
+    thumb.onclick = () => { S.focusedStream = pid; renderStreams(); };
+    thumbsEl.appendChild(thumb);
+  }
+
+  // Hide thumbs sidebar if only 1 stream (in thumbnail mode)
+  const isGrid = container?.classList.contains('grid-mode');
+  thumbsEl.style.display = (!isGrid && S.streams.size <= 1) ? 'none' : '';
+}
+
+function toggleStreamView() {
+  const c = document.getElementById('streamContainer');
+  if (!c) return;
+  c.classList.toggle('grid-mode');
+  const btn = document.getElementById('viewToggle');
+  if (btn) btn.textContent = c.classList.contains('grid-mode') ? '⊡' : '⊞';
+  renderStreams();
 }
 
 // ══════════════════════════════════════════════════════════
@@ -2342,17 +2457,18 @@ let sessionRecorder = null;
 let lastRecBlob = null;
 function toggleSessionRecord() {
   if (!isPremium()) { showUpgradeModal(); return; }
-  const vid = document.getElementById('mainVideo');
   if (sessionRecorder && sessionRecorder.state === 'recording') {
     sessionRecorder.stop();
     sessionRecorder = null;
     document.getElementById('recSessionBtn').style.background = '';
     return;
   }
-  if (!vid || !vid.srcObject) { toast('אין שיתוף מסך להקלטה', 'r'); return; }
+  const focusedEntry = S.focusedStream && S.streams.get(S.focusedStream);
+  const recStream = focusedEntry?.stream;
+  if (!recStream || recStream.getTracks().length === 0) { toast('אין שיתוף מסך להקלטה', 'r'); return; }
   startCountdown(() => {
     const chunks = [];
-    sessionRecorder = new MediaRecorder(vid.srcObject, { mimeType: 'video/webm' });
+    sessionRecorder = new MediaRecorder(recStream, { mimeType: 'video/webm' });
     sessionRecorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
     sessionRecorder.onstop = () => {
       lastRecBlob = new Blob(chunks, { type: 'video/webm' });
