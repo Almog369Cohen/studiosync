@@ -767,6 +767,7 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 .tc:hover { border-color:var(--accent); color:var(--accent); }
 .play-btn { background:var(--accent); border-color:var(--accent); color:#fff; }
 .play-btn:hover { opacity:.9; }
+.play-btn.playing { background:var(--green); border-color:var(--green); }
 .bpm-ctrl { display:flex; align-items:center; gap:2px; background:var(--s1); border:1px solid var(--b1); border-radius:6px; overflow:hidden; }
 .bpm-btn { width:24px; height:34px; border:none; background:none; cursor:pointer; color:var(--mid); font-size:16px; font-family:var(--sans); }
 .bpm-btn:hover { color:var(--accent); background:var(--accentH); }
@@ -777,6 +778,12 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 .share-btn { width:auto; padding:0 14px; font-size:13px; font-family:var(--sans); white-space:nowrap; }
 .cam-btn { width:auto; padding:0 14px; font-size:13px; font-family:var(--sans); white-space:nowrap; }
 .active-share { border:2px solid var(--accent) !important; background:rgba(0,255,136,.15) !important; }
+.muted-state { border:2px solid var(--rD) !important; background:rgba(255,60,60,.15) !important; color:var(--red) !important; }
+.recording { border:2px solid var(--rD) !important; background:rgba(255,60,60,.2) !important; animation:rec-pulse 1s ease infinite; }
+@keyframes rec-pulse { 0%,100%{opacity:1} 50%{opacity:.6} }
+.active-tool { border-color:var(--accent) !important; color:var(--accent) !important; }
+.tb-group-sep { width:1px; height:24px; background:var(--b1); margin:0 4px; flex-shrink:0; }
+.is-guest .host-only { display:none !important; }
 .share-audio-btn { width:auto; padding:0 10px; font-size:12px; font-family:var(--sans); white-space:nowrap; }
 .rec-btn-transport { width:auto; padding:0 10px; font-size:12px; font-family:var(--sans); white-space:nowrap; }
 .tap-tempo { font-size:10px; font-weight:700; }
@@ -967,7 +974,7 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
   .pos-display { order:11; font-size:11px; }
   .my-controls { order:20; width:100%; justify-content:center; padding-top:2px; gap:4px; }
   .my-controls .my-ctrl-btn { font-size:11px; padding:3px 8px; }
-  .my-ctrl-sep { display:none; }
+  .tb-group-sep { display:none; }
   .latency-pill { order:12; font-size:10px; padding:2px 6px; }
 
   #pianoWrap { bottom:90px; }
@@ -1159,7 +1166,7 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
       <div class="main-area-empty" id="mainEmpty" dir="rtl">
         <div class="main-area-empty-icon">🖥</div>
         <div class="main-area-empty-text">ממתין לשיתוף מסך...</div>
-        <div class="main-area-empty-sub">לחץ על <b>"Share"</b> בסרגל למטה כדי לשתף את מסך ה-DAW והשמע.</div>
+        <div class="main-area-empty-sub">לחץ על <b>"שתף מסך"</b> בסרגל למטה כדי לשתף את מסך ה-DAW והשמע.</div>
         <button class="btn-ghost" style="margin-top:12px;font-size:13px" onclick="doShareCam()">📷 או שתף מצלמה</button>
       </div>
     </div>
@@ -1215,38 +1222,46 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 
   <div id="clipPanel" class="clip-panel"></div>
   <div class="transport-bar">
-    <button class="tc" onclick="cmd('stop')">⏹</button>
-    <button class="tc play-btn" id="playBtn" onclick="cmd('play')">▶</button>
-    <button class="tc" id="recBtn" onclick="cmd('rec')">⏺</button>
-    <div class="bpm-ctrl">
+    <!-- DAW Transport — host only -->
+    <button class="tc host-only" onclick="cmd('stop')" title="עצור">⏹</button>
+    <button class="tc play-btn host-only" id="playBtn" onclick="cmd('play')" title="נגן/השהה">▶</button>
+    <button class="tc host-only" id="recBtn" onclick="cmd('rec')" title="הקלט DAW">⏺</button>
+    <div class="bpm-ctrl host-only">
       <button class="bpm-btn tap-tempo" id="tapBtn" onclick="tapTempo()" title="Tap Tempo">TAP</button>
       <button class="bpm-btn" onclick="cmd('bpm',-1)">−</button>
       <div class="bpm-val" id="bpmDisp">128</div>
       <div class="bpm-lbl">BPM</div>
       <button class="bpm-btn" onclick="cmd('bpm',1)">+</button>
     </div>
-    <button class="tc metro-btn" id="metroBtn" onclick="toggleMetro()" title="מטרונום">🔔</button>
-    <div class="pos-display" id="posDisp">1.1.1</div>
-    <div class="vu-wrap"><span class="vu-label">IN</span><div class="vu-meter" id="vuIn"></div></div>
-    <div class="vu-wrap"><span class="vu-label">OUT</span><div class="vu-meter" id="vuOut"></div></div>
+    <button class="tc metro-btn host-only" id="metroBtn" onclick="toggleMetro()" title="מטרונום">🔔</button>
+    <div class="pos-display host-only" id="posDisp">1.1.1</div>
+    <div class="vu-wrap host-only"><span class="vu-label">IN</span><div class="vu-meter" id="vuIn"></div></div>
+    <div class="vu-wrap host-only"><span class="vu-label">OUT</span><div class="vu-meter" id="vuOut"></div></div>
+    <div class="tb-group-sep host-only"></div>
     <div class="tb-flex"></div>
-    <div class="my-controls" id="myControls" title="What you're sending to the host">
-      <span class="my-ctrl-btn active" id="myMouse" onclick="toggleMyCtrl('mouse')">🖱 Mouse</span>
-      <span class="my-ctrl-btn active" id="myKeys" onclick="toggleMyCtrl('keyboard')">⌨ Keys</span>
+    <!-- Mute + Sharing — everyone -->
+    <button class="tc" id="muteBtn" onclick="toggleSelfMute()" title="השתק">🎤</button>
+    <div class="tb-group-sep"></div>
+    <button class="tc share-btn" id="shareBtn" onclick="doShare()">🖥 שתף מסך</button>
+    <button class="tc cam-btn" id="camBtn" onclick="doShareCam()">📷 מצלמה</button>
+    <button class="tc share-audio-btn" id="shareAudioBtn" onclick="doShareAudio()" title="שתף שמע בלבד">🔊 שתף שמע</button>
+    <div class="tb-group-sep"></div>
+    <!-- My Controls — what this peer sends -->
+    <div class="my-controls" id="myControls" title="מה אתה שולח למארח">
+      <span class="my-ctrl-btn active" id="myMouse" onclick="toggleMyCtrl('mouse')">🖱 עכבר</span>
+      <span class="my-ctrl-btn active" id="myKeys" onclick="toggleMyCtrl('keyboard')">⌨ מקלדת</span>
       <span class="my-ctrl-btn active-g" id="myMidi" onclick="toggleMyCtrl('midi')">🎹 MIDI</span>
     </div>
-    <div class="my-ctrl-sep"></div>
+    <div class="tb-group-sep"></div>
+    <!-- Tools -->
+    <button class="tc host-only" id="pianoBtn" onclick="togglePiano()" title="פסנתר וירטואלי">🎹</button>
+    <button class="tc host-only" id="clipBtn" onclick="toggleClipBoard()" title="קליפים">📋</button>
+    <button class="tc rec-btn-transport host-only" id="recSessionBtn" onclick="toggleSessionRecord()">⏺ הקלט<span class="lock-icon" id="recLock">🔒</span></button>
+    <button class="tc" id="viewToggle" onclick="toggleStreamView()" title="תצוגת גריד">⊞</button>
+    <button class="tc" id="fullscreenBtn" onclick="toggleFullscreen()" title="מסך מלא">⛶</button>
+    <div class="tb-group-sep"></div>
     <div class="latency-pill" id="latPill">-- ms</div>
     <span class="uptime-pill" id="uptimePill"></span>
-    <button class="tc" id="pianoBtn" onclick="togglePiano()" title="Virtual Piano / MIDI">🎹</button>
-    <button class="tc" onclick="toggleFullscreen()" title="מסך מלא">⛶</button>
-    <button class="tc" id="clipBtn" onclick="toggleClipBoard()" title="קליפים">📋</button>
-    <button class="tc rec-btn-transport" id="recSessionBtn" onclick="toggleSessionRecord()">⏺ הקלט<span class="lock-icon" id="recLock">🔒</span></button>
-    <button class="tc" id="viewToggle" onclick="toggleStreamView()" title="תצוגת גריד">⊞</button>
-    <button class="tc" id="muteBtn" onclick="toggleSelfMute()" title="השתק/בטל השתקה">🎤</button>
-    <button class="tc share-audio-btn" onclick="doShareAudio()" title="שתף שמע בלבד">🔊</button>
-    <button class="tc share-btn" onclick="doShare()">🖥 Share</button>
-    <button class="tc cam-btn" onclick="doShareCam()">📷 Cam</button>
   </div>
 </div>
 
@@ -1642,7 +1657,13 @@ function enterSession() {
   // Show/hide record lock icon
   const lockEl = document.getElementById('recLock');
   if (lockEl) lockEl.style.display = isPremium() ? 'none' : 'inline';
-  // Listener mode — hide transport controls
+  // Role-based UI: hide host-only controls for guests
+  if (S.peerNumber === 1) {
+    document.body.classList.remove('is-guest');
+  } else {
+    document.body.classList.add('is-guest');
+  }
+  // Listener mode — hide transport controls entirely
   if (S.role === 'listener') {
     document.querySelector('.transport-bar').style.display = 'none';
     toast('מצב מאזין — צפייה בלבד', '');
@@ -1685,6 +1706,7 @@ function leaveSession() {
   S.playing = false; S.rec = false;
   S.pos = { b: 1, bt: 1, tk: 1 };
   closeRv();
+  document.body.classList.remove('is-guest');
   show('landing');
   showRatingModal();
 }
@@ -1946,12 +1968,12 @@ function cmd(action, val) {
   if (action === 'play') {
     S.playing = !S.playing; msg.playing = S.playing;
     const pb = document.getElementById('playBtn');
-    if (pb) pb.textContent = S.playing ? '⏸' : '▶';
+    if (pb) { pb.textContent = S.playing ? '⏸' : '▶'; pb.classList.toggle('playing', S.playing); }
   } else if (action === 'stop') {
     S.playing = false; S.pos = { b:1, bt:1, tk:1 };
     msg.playing = false; msg.pos = S.pos;
     const pb = document.getElementById('playBtn');
-    if (pb) pb.textContent = '▶';
+    if (pb) { pb.textContent = '▶'; pb.classList.remove('playing'); }
     updatePos();
   } else if (action === 'bpm') {
     S.bpm = Math.max(40, Math.min(300, S.bpm + (val || 0)));
@@ -1960,7 +1982,7 @@ function cmd(action, val) {
   } else if (action === 'rec') {
     S.rec = !S.rec; msg.rec = S.rec;
     const rb = document.getElementById('recBtn');
-    if (rb) rb.style.background = S.rec ? 'var(--red)' : '';
+    if (rb) { rb.classList.toggle('recording', S.rec); rb.style.background = ''; }
   }
   broadcast(msg);
 }
@@ -2164,20 +2186,35 @@ function toggleSettings() {
 }
 
 async function doShare() {
+  const existing = S.streams.get(S.cid);
+  if (existing) {
+    existing.stream.getTracks().forEach(t => t.stop());
+    S.streams.delete(S.cid); renderStreams(); stopVU('in');
+    updateShareBtn(false);
+    toast('שיתוף מסך הופסק', '');
+    return;
+  }
   try {
     const stream = await navigator.mediaDevices.getDisplayMedia({
       video: true, audio: true,
       selfBrowserSurface: 'include', surfaceSwitching: 'include', systemAudio: 'include'
     });
-    toast('Sharing screen…', 'g');
+    toast('משתף מסך…', 'g');
     S.streams.set(S.cid, { stream, type: 'screen', name: S.name });
     renderStreams();
     initVU(stream, 'in');
+    updateShareBtn(true);
     for (const [, p] of S.peers) {
       if (p.conn) stream.getTracks().forEach(t => p.conn.addTrack(t, stream));
     }
-    stream.getVideoTracks()[0].onended = () => { toast('Screen share ended', ''); S.streams.delete(S.cid); renderStreams(); stopVU('in'); };
-  } catch(e) { toast('Share cancelled', ''); }
+    stream.getVideoTracks()[0].onended = () => { toast('שיתוף מסך הסתיים', ''); S.streams.delete(S.cid); renderStreams(); stopVU('in'); updateShareBtn(false); };
+  } catch(e) { toast('שיתוף בוטל', ''); }
+}
+function updateShareBtn(active) {
+  const btn = document.getElementById('shareBtn');
+  if (!btn) return;
+  btn.innerHTML = active ? '🖥 הפסק שיתוף' : '🖥 שתף מסך';
+  btn.classList.toggle('active-share', active);
 }
 
 async function doShareCam() {
@@ -2187,8 +2224,7 @@ async function doShareCam() {
     existing.stream.getTracks().forEach(t => t.stop());
     S.streams.delete(camKey);
     renderStreams();
-    const cb = document.querySelector('.cam-btn');
-    if (cb) cb.classList.remove('active-share');
+    updateCamBtn(false);
     toast('מצלמה כבויה', '');
     return;
   }
@@ -2197,28 +2233,50 @@ async function doShareCam() {
     toast('מצלמה משותפת!', 'g');
     S.streams.set(camKey, { stream, type: 'camera', name: S.name + ' 📷' });
     renderStreams();
-    const cb = document.querySelector('.cam-btn');
-    if (cb) cb.classList.add('active-share');
+    updateCamBtn(true);
     for (const [, p] of S.peers) {
       if (p.conn) stream.getTracks().forEach(t => p.conn.addTrack(t, stream));
     }
-    stream.getVideoTracks()[0].onended = () => { toast('המצלמה נעצרה', ''); S.streams.delete(camKey); renderStreams(); const cb = document.querySelector('.cam-btn'); if (cb) cb.classList.remove('active-share'); };
+    stream.getVideoTracks()[0].onended = () => { toast('המצלמה נעצרה', ''); S.streams.delete(camKey); renderStreams(); updateCamBtn(false); };
   } catch(e) { toast('המצלמה לא זמינה או שנדחתה', 'r'); }
+}
+function updateCamBtn(active) {
+  const btn = document.getElementById('camBtn');
+  if (!btn) return;
+  btn.innerHTML = active ? '📷 עצור מצלמה' : '📷 מצלמה';
+  btn.classList.toggle('active-share', active);
 }
 
 async function doShareAudio() {
+  const audioKey = S.cid + ':audio';
+  const existing = S.streams.get(audioKey);
+  if (existing) {
+    existing.stream.getTracks().forEach(t => t.stop());
+    S.streams.delete(audioKey); stopVU('in');
+    updateAudioBtn(false);
+    toast('שיתוף שמע הופסק', '');
+    return;
+  }
   try {
     const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true, systemAudio: 'include' });
     const vt = stream.getVideoTracks()[0];
     if (vt) { stream.removeTrack(vt); vt.stop(); }
     if (stream.getAudioTracks().length === 0) { toast('לא נמצא אודיו', 'r'); return; }
     toast('משתף שמע בלבד…', 'g');
+    S.streams.set(audioKey, { stream, type: 'audio', name: S.name + ' 🔊' });
     initVU(stream, 'in');
+    updateAudioBtn(true);
     for (const [, p] of S.peers) {
       if (p.conn) stream.getAudioTracks().forEach(t => p.conn.addTrack(t, stream));
     }
-    stream.getAudioTracks()[0].onended = () => { toast('שיתוף השמע הסתיים', ''); stopVU('in'); };
+    stream.getAudioTracks()[0].onended = () => { toast('שיתוף השמע הסתיים', ''); S.streams.delete(audioKey); stopVU('in'); updateAudioBtn(false); };
   } catch(e) { toast('שיתוף שמע בוטל', ''); }
+}
+function updateAudioBtn(active) {
+  const btn = document.getElementById('shareAudioBtn');
+  if (!btn) return;
+  btn.innerHTML = active ? '🔇 עצור שמע' : '🔊 שתף שמע';
+  btn.classList.toggle('active-share', active);
 }
 
 function showRemoteStream(stream, peerId) {
@@ -2358,9 +2416,9 @@ function renderStreams() {
 function toggleStreamView() {
   const c = document.getElementById('streamContainer');
   if (!c) return;
-  c.classList.toggle('grid-mode');
+  const isGrid = c.classList.toggle('grid-mode');
   const btn = document.getElementById('viewToggle');
-  if (btn) btn.textContent = c.classList.contains('grid-mode') ? '⊡' : '⊞';
+  if (btn) { btn.textContent = isGrid ? '⊡' : '⊞'; btn.classList.toggle('active-tool', isGrid); }
   renderStreams();
 }
 
@@ -2381,7 +2439,8 @@ function toggleSelfMute() {
   const btn = document.getElementById('muteBtn');
   if (btn) {
     btn.textContent = S.selfMuted ? '🔇' : '🎤';
-    btn.classList.toggle('active-share', S.selfMuted);
+    btn.classList.toggle('muted-state', S.selfMuted);
+    btn.title = S.selfMuted ? 'בטל השתקה' : 'השתק';
   }
   toast(S.selfMuted ? 'מושתק' : 'מיקרופון פעיל', S.selfMuted ? '' : 'g');
 }
@@ -2397,7 +2456,8 @@ function toggleMyCtrl(key) {
   const cls = key === 'midi' ? 'active-g' : 'active';
   const btn = document.getElementById(ids[key]);
   if (btn) btn.classList.toggle(cls, MY[key]);
-  toast((MY[key] ? '✓ Sending ' : '✗ Stopped sending ') + key, MY[key] ? 'g' : '');
+  const labels = { mouse:'עכבר', keyboard:'מקלדת', midi:'MIDI' };
+  toast((MY[key] ? '✓ שולח ' : '✗ הפסקת שליחת ') + (labels[key]||key), MY[key] ? 'g' : '');
 }
 
 // ══════════════════════════════════════════════════════════
@@ -2418,7 +2478,7 @@ function togglePiano() {
   const btn = document.getElementById('pianoBtn');
   if (!w) return;
   const open = w.classList.toggle('open');
-  if (btn) btn.style.background = open ? 'var(--accentD)' : '';
+  if (btn) { btn.classList.toggle('active-tool', open); btn.style.background = ''; }
   if (open && !w.dataset.built) { buildPianoKeys(); w.dataset.built = '1'; }
 }
 
@@ -2591,7 +2651,8 @@ function toggleSessionRecord() {
   if (sessionRecorder && sessionRecorder.state === 'recording') {
     sessionRecorder.stop();
     sessionRecorder = null;
-    document.getElementById('recSessionBtn').style.background = '';
+    const rsb = document.getElementById('recSessionBtn');
+    if (rsb) { rsb.innerHTML = '⏺ הקלט<span class="lock-icon" id="recLock">🔒</span>'; rsb.classList.remove('recording'); rsb.style.background = ''; }
     return;
   }
   const focusedEntry = S.focusedStream && S.streams.get(S.focusedStream);
@@ -2609,7 +2670,8 @@ function toggleSessionRecord() {
       showShareRecModal();
     };
     sessionRecorder.start(1000);
-    document.getElementById('recSessionBtn').style.background = 'var(--rD)';
+    const rsb = document.getElementById('recSessionBtn');
+    if (rsb) { rsb.innerHTML = '⏹ עצור הקלטה'; rsb.classList.add('recording'); rsb.style.background = ''; }
     toast('מקליט את הסשן...', 'g');
   });
 }
@@ -2815,9 +2877,10 @@ function drawVUBars(analyser, elId) {
 function toggleClipBoard() {
   const p = document.getElementById('clipPanel');
   if (!p) return;
-  p.style.display = p.style.display === 'block' ? 'none' : 'block';
+  const isOpen = p.style.display !== 'block';
+  p.style.display = isOpen ? 'block' : 'none';
   const btn = document.getElementById('clipBtn');
-  if (btn) btn.style.background = p.style.display === 'block' ? 'var(--accentD)' : '';
+  if (btn) { btn.classList.toggle('active-tool', isOpen); btn.style.background = ''; }
   renderClips();
 }
 function renderClips() {
@@ -2844,6 +2907,11 @@ function toggleFullscreen() {
   const el = document.getElementById('mainArea');
   if (document.fullscreenElement) document.exitFullscreen();
   else el?.requestFullscreen?.();
+  // Update button state after fullscreen change
+  setTimeout(() => {
+    const btn = document.getElementById('fullscreenBtn');
+    if (btn) btn.classList.toggle('active-tool', !!document.fullscreenElement);
+  }, 200);
 }
 
 // ── Nudge ─────────────────────────────────────────────────
