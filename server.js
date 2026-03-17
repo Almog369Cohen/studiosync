@@ -1832,12 +1832,12 @@ function handleMsg(msg) {
     case 'session:welcome':
       S.connectedAt = Date.now();
       for (const p of (msg.peers || [])) {
-        S.peers.set(p.id, { name: p.name, color: p.color, instrument: p.instrument, dc: null, conn: null, latency: 0 });
+        S.peers.set(p.id, { name: p.name, color: p.color, instrument: p.instrument, dc: null, conn: null, latency: 0, perms: { mouse:true, keyboard:true, midi:true } });
       }
       updatePeerAvatars(); renderPeerList();
       break;
     case 'peer:joined':
-      S.peers.set(msg.peerId, { name: msg.name, color: msg.color, instrument: msg.instrument, dc: null, conn: null, latency: 0, role: msg.role || 'participant', muted: false });
+      S.peers.set(msg.peerId, { name: msg.name, color: msg.color, instrument: msg.instrument, dc: null, conn: null, latency: 0, role: msg.role || 'participant', muted: false, perms: { mouse:true, keyboard:true, midi:true } });
       updatePeerAvatars(); renderPeerList();
       if (!S.dnd) { playJoinSound(); toast(msg.name + ' הצטרף/ה', 'g'); }
       break;
@@ -1853,7 +1853,7 @@ function handleMsg(msg) {
       break;
     }
     case 'webrtc:create-offer':
-      S.peers.set(msg.peerId, { name: msg.name || '', color: msg.color || PEER_COLORS[0], instrument: msg.instrument || '', dc: null, conn: null, latency: 0 });
+      S.peers.set(msg.peerId, { name: msg.name || '', color: msg.color || PEER_COLORS[0], instrument: msg.instrument || '', dc: null, conn: null, latency: 0, perms: { mouse:true, keyboard:true, midi:true } });
       PeerMesh.createOffer(msg.peerId).catch(e => dlog('WebRTC offer err: ' + e.message));
       break;
     case 'webrtc:offer':
@@ -1882,6 +1882,19 @@ function handleMsg(msg) {
     case 'perms:update': {
       const pp = S.peers.get(msg.peerId);
       if (pp) { pp.perms = msg.perms; renderPeerList(); }
+      // If this update is about ME, update MY local send-state
+      if (msg.peerId === S.cid && msg.perms) {
+        MY.mouse = !!msg.perms.mouse;
+        MY.keyboard = !!msg.perms.keyboard;
+        MY.midi = !!msg.perms.midi;
+        const mm = document.getElementById('myMouse');
+        const mk = document.getElementById('myKeys');
+        const mi = document.getElementById('myMidi');
+        if (mm) mm.classList.toggle('active', MY.mouse);
+        if (mk) mk.classList.toggle('active', MY.keyboard);
+        if (mi) mi.classList.toggle('active-g', MY.midi);
+        toast('הרשאות עודכנו: ' + (MY.mouse?'🖱':'') + (MY.keyboard?' ⌨':'') + (MY.midi?' 🎹':''), '');
+      }
       break;
     }
     case 'remote:midi':
@@ -1898,6 +1911,27 @@ function handleMsg(msg) {
     case 'mute:command':
       if (msg.targetId === S.cid) {
         S.mutedByHost = msg.muted;
+        // Actually mute/unmute all outgoing audio tracks
+        for (const [key, entry] of S.streams) {
+          if (key.startsWith(S.cid)) {
+            entry.stream.getAudioTracks().forEach(t => { t.enabled = !msg.muted; });
+          }
+        }
+        for (const [, p] of S.peers) {
+          if (p.conn) {
+            p.conn.getSenders().forEach(sender => {
+              if (sender.track?.kind === 'audio') sender.track.enabled = !msg.muted;
+            });
+          }
+        }
+        // Update mute button UI
+        const muteBtn = document.getElementById('muteBtn');
+        if (muteBtn) {
+          muteBtn.textContent = msg.muted ? '🔇' : '🎤';
+          muteBtn.classList.toggle('muted-state', msg.muted);
+          muteBtn.title = msg.muted ? 'מושתק ע"י המארח' : 'השתק';
+        }
+        S.selfMuted = msg.muted;
         toast(msg.muted ? 'המארח השתיק אותך' : 'המארח ביטל את ההשתקה', msg.muted ? 'r' : 'g');
       }
       break;
@@ -2343,6 +2377,8 @@ function renderStreams() {
     if (container) container.style.display = 'none';
     mainEl.innerHTML = '';
     thumbsEl.innerHTML = '';
+    const mc = document.getElementById('myControls');
+    if (mc) mc.style.display = 'none';
     return;
   }
   if (empty) empty.style.display = 'none';
@@ -2365,16 +2401,20 @@ function renderStreams() {
     mainEl.appendChild(vid);
 
     // Remote control event listeners
+    let remoteMouseDown = false;
     vid.addEventListener('mousedown', (e) => {
       if (!MY.mouse) return;
+      remoteMouseDown = true;
       const rect = vid.getBoundingClientRect();
       broadcast({ type:'remote:input', input:'mouse', action:'click',
         x: (e.clientX - rect.left) / rect.width,
         y: (e.clientY - rect.top) / rect.height,
         button: e.button, from: S.cid, fromName: S.name });
     });
+    vid.addEventListener('mouseup', () => { remoteMouseDown = false; });
+    vid.addEventListener('mouseleave', () => { remoteMouseDown = false; });
     vid.addEventListener('mousemove', throttle((e) => {
-      if (!MY.mouse) return;
+      if (!MY.mouse || !remoteMouseDown) return;
       const rect = vid.getBoundingClientRect();
       broadcast({ type:'remote:input', input:'mouse', action:'move',
         x: (e.clientX - rect.left) / rect.width,
@@ -2411,6 +2451,10 @@ function renderStreams() {
   // Hide thumbs sidebar if only 1 stream (in thumbnail mode)
   const isGrid = container?.classList.contains('grid-mode');
   thumbsEl.style.display = (!isGrid && S.streams.size <= 1) ? 'none' : '';
+
+  // Hide my-controls when no streams are active (remote control is meaningless without video)
+  const mc = document.getElementById('myControls');
+  if (mc) mc.style.display = S.streams.size > 0 ? '' : 'none';
 }
 
 function toggleStreamView() {
