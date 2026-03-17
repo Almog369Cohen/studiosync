@@ -2434,7 +2434,7 @@ function toggleTheme() {
 }
 function initTheme() {
   const saved = localStorage.getItem('ss_theme');
-  const theme = saved || (window.matchMedia('(prefers-color-scheme:dark)').matches ? 'dark' : 'light');
+  const theme = saved || 'dark';
   document.documentElement.dataset.theme = theme;
   const icon = theme === 'dark' ? '☀️' : '🌙';
   const t1 = document.getElementById('themeToggleLand');
