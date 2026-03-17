@@ -500,6 +500,23 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 .tb-btn:hover { border-color:var(--accent); color:var(--accent); }
 .tb-leave { color:var(--red); border-color:var(--rD); }
 .tb-leave:hover { border-color:var(--red); background:var(--rD); }
+.tb-invite-btn { color:var(--accent); border-color:var(--accentD); font-weight:600; }
+.tb-invite-btn:hover { background:var(--accentD); }
+
+/* ── Invite modal ──────────────────────────────────────── */
+.modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:500; display:flex; align-items:center; justify-content:center; }
+.modal-box { background:#fff; border-radius:var(--radiusL); padding:28px 24px; width:min(420px,92vw); max-height:90vh; overflow-y:auto; box-shadow:0 8px 32px rgba(0,0,0,.18); display:flex; flex-direction:column; gap:14px; }
+.modal-title { font-size:18px; font-weight:700; color:var(--hi); }
+.invite-label { font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.06em; color:var(--mid); }
+.invite-code-big { font-family:var(--mono); font-size:28px; font-weight:700; color:var(--accent); letter-spacing:.1em; background:var(--accentD); border-radius:8px; padding:10px 16px; text-align:center; }
+.invite-link-row { display:flex; gap:8px; }
+.invite-link-input { flex:1; border:1px solid var(--b1); border-radius:6px; padding:8px 10px; font-size:12px; color:var(--mid); font-family:var(--mono); background:var(--s1); outline:none; direction:ltr; }
+.invite-share-btns { display:flex; gap:8px; }
+.invite-action-btn { flex:1; padding:10px; border-radius:8px; border:none; font-size:14px; font-weight:600; cursor:pointer; }
+.whatsapp-btn { background:#25d366; color:#fff; }
+.whatsapp-btn:hover { background:#1fbc58; }
+.email-btn { background:var(--s2); color:var(--txt); border:1px solid var(--b1); }
+.email-btn:hover { background:var(--b1); }
 
 /* ── Workspace ───────────────────────────────────────── */
 .workspace { flex:1; display:flex; overflow:hidden; }
@@ -675,32 +692,32 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
   <nav class="land-nav">
     <div class="brand">🎛 <span>Studio</span>Sync</div>
     <div style="flex:1"></div>
-    <button class="tb-btn" onclick="openHelp()">? Help</button>
+    <button class="tb-btn" onclick="openHelp()">? עזרה</button>
   </nav>
-  <div class="hero">
-    <div class="hero-badge">Real-time music collaboration</div>
-    <h1>Make Music Together,<br>In Real Time</h1>
-    <p class="hero-sub">Share your DAW screen, stream studio-quality audio, and let anyone control your session — from anywhere in the world.</p>
+  <div class="hero" dir="rtl">
+    <div class="hero-badge">שיתוף פעולה מוסיקלי בזמן אמת</div>
+    <h1>עשו מוזיקה ביחד,<br>בזמן אמת</h1>
+    <p class="hero-sub">שתפו את מסך ה-DAW שלכם, שדרו אודיו איכותי, ותנו לכולם לשלוט בסשן — מכל מקום בעולם.</p>
     <div class="hero-ctas">
-      <button class="btn-accent" onclick="showLobby('create')">Create Session</button>
-      <button class="btn-ghost" onclick="showLobby('join')">Join Session</button>
+      <button class="btn-accent" onclick="showLobby('create')">צור סשן</button>
+      <button class="btn-ghost" onclick="showLobby('join')">הצטרף לסשן</button>
     </div>
   </div>
   <div class="features">
-    <div class="feat-card">
+    <div class="feat-card" dir="rtl">
       <div class="feat-icon">🔊</div>
-      <div class="feat-title">Studio Audio</div>
-      <div class="feat-desc">Stream DAW audio in real time, not through a microphone</div>
+      <div class="feat-title">אודיו סטודיו</div>
+      <div class="feat-desc">שדר אודיו DAW בזמן אמת, לא דרך מיקרופון</div>
     </div>
-    <div class="feat-card">
+    <div class="feat-card" dir="rtl">
       <div class="feat-icon">🖱</div>
-      <div class="feat-title">Full Control</div>
-      <div class="feat-desc">Any participant can control the DAW — play, stop, edit tracks</div>
+      <div class="feat-title">שליטה מלאה</div>
+      <div class="feat-desc">כל משתתף יכול לשלוט ב-DAW — נגינה, עצירה, עריכה</div>
     </div>
-    <div class="feat-card">
+    <div class="feat-card" dir="rtl">
       <div class="feat-icon">👥</div>
-      <div class="feat-title">Up to 10 People</div>
-      <div class="feat-desc">Collaborate with your whole band or class in one session</div>
+      <div class="feat-title">עד 10 אנשים</div>
+      <div class="feat-desc">שתפו פעולה עם כל הלהקה או הכיתה בסשן אחד</div>
     </div>
   </div>
 </div>
@@ -710,42 +727,42 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
   <div class="lobby-wrap">
     <div class="lobby-brand">🎛 <span>Studio</span>Sync</div>
 
-    <div class="lobby-card" id="createCard">
+    <div class="lobby-card" id="createCard" dir="rtl">
       <div class="lc-header">
         <div class="lc-icon">🎛</div>
         <div>
-          <div class="lc-title">Create a Session</div>
-          <div class="lc-sub">You'll get a code to share with others</div>
+          <div class="lc-title">צור סשן חדש</div>
+          <div class="lc-sub">תקבל קוד לשתף עם המשתתפים</div>
         </div>
       </div>
-      <input id="createName" placeholder="Your name" class="lob-input" />
-      <div class="color-label">Pick your color</div>
+      <input id="createName" placeholder="השם שלך" class="lob-input" dir="rtl" />
+      <div class="color-label">בחר צבע</div>
       <div class="color-picker" id="createColors"></div>
-      <div class="instr-label">Your instrument</div>
+      <div class="instr-label">כלי נגינה</div>
       <div class="instr-grid" id="createInstrs"></div>
-      <button class="btn-accent btn-full" onclick="hostStart()">Create Session →</button>
+      <button class="btn-accent btn-full" onclick="hostStart()">צור סשן ←</button>
     </div>
 
-    <div class="lobby-divider">or join with a code</div>
+    <div class="lobby-divider">או הצטרף עם קוד</div>
 
-    <div class="lobby-card" id="joinCard">
+    <div class="lobby-card" id="joinCard" dir="rtl">
       <div class="lc-header">
         <div class="lc-icon">🎧</div>
         <div>
-          <div class="lc-title">Join a Session</div>
-          <div class="lc-sub">Enter the code from the session creator</div>
+          <div class="lc-title">הצטרף לסשן</div>
+          <div class="lc-sub">הזן את הקוד שקיבלת מיוצר הסשן</div>
         </div>
       </div>
-      <input id="joinNameInput" placeholder="Your name" class="lob-input" />
-      <div class="color-label">Pick your color</div>
+      <input id="joinNameInput" placeholder="השם שלך" class="lob-input" dir="rtl" />
+      <div class="color-label">בחר צבע</div>
       <div class="color-picker" id="joinColors"></div>
-      <div class="instr-label">Your instrument</div>
+      <div class="instr-label">כלי נגינה</div>
       <div class="instr-grid" id="joinInstrs"></div>
-      <input id="joinCode" placeholder="ABC-123" class="lob-input code-input" />
-      <button class="btn-accent btn-full" onclick="remoteJoin()">Join →</button>
+      <input id="joinCode" placeholder="ABC-123" class="lob-input code-input" dir="ltr" />
+      <button class="btn-accent btn-full" onclick="remoteJoin()">הצטרף ←</button>
     </div>
 
-    <button class="btn-link" onclick="show('landing')">← Back</button>
+    <button class="btn-link" onclick="show('landing')">→ חזרה</button>
   </div>
 </div>
 
@@ -761,15 +778,16 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
   <div class="topbar">
     <div class="tb-brand">🎛 <span>Studio</span>Sync</div>
     <div class="tb-sep"></div>
-    <div class="session-code-chip" onclick="copyCode()">
+    <div class="session-code-chip" onclick="openInvite()">
       <span id="codeDisplay">---</span>
       <span class="copy-icon">⎘</span>
     </div>
     <div class="peer-avatars" id="peerAvatars"></div>
     <div class="tb-flex"></div>
     <div class="tb-status" id="tbStatus">0 peers</div>
+    <button class="tb-btn tb-invite-btn" onclick="openInvite()">📨 הזמן</button>
     <button class="tb-btn" onclick="toggleSettings()">⚙</button>
-    <button class="tb-btn tb-leave" onclick="leaveSession()">Leave</button>
+    <button class="tb-btn tb-leave" onclick="leaveSession()">עזוב</button>
   </div>
 
   <!-- Workspace -->
@@ -914,6 +932,25 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 
 <!-- Connection banner -->
 <div id="connBanner"></div>
+
+<!-- Invite modal -->
+<div id="inviteModal" class="modal-overlay" style="display:none" onclick="if(event.target===this)closeInvite()">
+  <div class="modal-box" dir="rtl">
+    <div class="modal-title">📨 הזמן משתתפים</div>
+    <div class="invite-label">קוד הסשן</div>
+    <div class="invite-code-big" id="inviteCodeBig">---</div>
+    <div class="invite-label">קישור להצטרפות</div>
+    <div class="invite-link-row">
+      <input readonly id="inviteLinkInput" class="invite-link-input" />
+      <button class="btn-accent" onclick="copyInviteLink()">העתק</button>
+    </div>
+    <div class="invite-share-btns">
+      <button class="invite-action-btn whatsapp-btn" onclick="shareWhatsApp()">📱 WhatsApp</button>
+      <button class="invite-action-btn email-btn" onclick="shareEmail()">✉️ אימייל</button>
+    </div>
+    <button class="btn-link" onclick="closeInvite()">סגור</button>
+  </div>
+</div>
 
 <!-- Toast -->
 <div id="toastEl"></div>
@@ -1502,7 +1539,36 @@ function updatePos() {
 }
 
 function copyCode() {
-  navigator.clipboard?.writeText(S.code || '').then(() => toast('Code copied!', 'g'));
+  navigator.clipboard?.writeText(S.code || '').then(() => toast('קוד הועתק!', 'g'));
+}
+
+function openInvite() {
+  const modal = document.getElementById('inviteModal');
+  const code  = S.code || '---';
+  const link  = window.location.origin + '?join=' + code;
+  document.getElementById('inviteCodeBig').textContent  = code;
+  document.getElementById('inviteLinkInput').value      = link;
+  modal.style.display = 'flex';
+}
+function closeInvite() {
+  document.getElementById('inviteModal').style.display = 'none';
+}
+function copyInviteLink() {
+  const link = document.getElementById('inviteLinkInput').value;
+  navigator.clipboard?.writeText(link).then(() => toast('קישור הועתק!', 'g'));
+}
+function shareWhatsApp() {
+  const link = document.getElementById('inviteLinkInput').value;
+  const code = S.code || '';
+  const text = encodeURIComponent('הצטרף לסשן שלי ב-StudioSync \\nקוד: ' + code + '\\n' + link);
+  window.open('https://wa.me/?text=' + text, '_blank');
+}
+function shareEmail() {
+  const link = document.getElementById('inviteLinkInput').value;
+  const code = S.code || '';
+  const subj = encodeURIComponent('הוזמנת לסשן StudioSync');
+  const body = encodeURIComponent('הצטרף לסשן שלי ב-StudioSync \\n\\nקוד הסשן: ' + code + '\\n\\nקישור ישיר: ' + link);
+  window.open('mailto:?subject=' + subj + '&body=' + body, '_blank');
 }
 
 function toggleSettings() {
@@ -1715,7 +1781,14 @@ function closeHelp() {
 // ── Boot ──────────────────────────────────────────────────
 window.onload = () => {
   show('landing');
-  if (!localStorage.getItem('ss_help_seen')) {
+  // Auto-join if ?join=CODE in URL
+  const params   = new URLSearchParams(window.location.search);
+  const joinCode = params.get('join');
+  if (joinCode) {
+    showLobby('join');
+    const inp = document.getElementById('joinCode');
+    if (inp) inp.value = joinCode.toUpperCase().replace(/[^A-Z0-9]/g, c => c === '-' ? '-' : '');
+  } else if (!localStorage.getItem('ss_help_seen')) {
     setTimeout(() => openHelp(), 800);
   }
 };
