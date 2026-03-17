@@ -503,8 +503,13 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 
 /* ── Workspace ───────────────────────────────────────── */
 .workspace { flex:1; display:flex; overflow:hidden; }
-.track-panel { flex:1; overflow-y:auto; padding-bottom:56px; display:flex; flex-direction:column; }
-.marker-ruler { height:24px; border-bottom:1px solid var(--b1); position:relative; background:var(--s1); flex-shrink:0; }
+.main-area { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:16px; padding-bottom:72px; overflow:hidden; background:var(--s1); position:relative; }
+.main-area-empty { display:flex; flex-direction:column; align-items:center; gap:12px; color:var(--mid); text-align:center; }
+.main-area-empty-icon { font-size:48px; opacity:.5; }
+.main-area-empty-text { font-size:15px; font-weight:500; }
+.main-area-empty-sub { font-size:12px; color:var(--dim); max-width:280px; line-height:1.5; }
+.main-video { width:100%; height:100%; object-fit:contain; border-radius:var(--radiusL); background:#000; display:none; }
+.main-video.active { display:block; }
 .participant-panel { width:260px; border-left:1px solid var(--b1); display:flex; flex-direction:column; flex-shrink:0; }
 .panel-tabs { display:flex; border-bottom:1px solid var(--b1); flex-shrink:0; }
 .ptab { flex:1; padding:10px; background:none; border:none; border-bottom:2px solid transparent; font-size:13px; font-weight:500; cursor:pointer; color:var(--mid); font-family:var(--sans); }
@@ -532,26 +537,7 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 .chat-input-row input:focus { border-color:var(--accent); }
 .chat-input-row button { background:var(--accent); color:#fff; border:none; border-radius:6px; width:32px; cursor:pointer; font-size:16px; }
 
-/* ── Track rows ──────────────────────────────────────── */
-.track-row { display:flex; align-items:center; gap:10px; padding:8px 12px; border-bottom:1px solid var(--b1); min-height:48px; }
-.track-row:hover { background:var(--s1); }
-.tr-num { width:20px; font-size:11px; color:var(--dim); text-align:right; flex-shrink:0; }
-.tr-color { width:4px; height:32px; border-radius:2px; flex-shrink:0; }
-.tr-info { flex:0 0 140px; }
-.tr-name { font-size:13px; font-weight:500; color:var(--hi); }
-.tr-type { font-size:10px; color:var(--mid); text-transform:uppercase; letter-spacing:.5px; margin-top:1px; }
-.tr-btns { display:flex; gap:4px; flex-shrink:0; }
-.trb { width:26px; height:22px; border:1.5px solid var(--b1); background:none; border-radius:4px; font-size:10px; font-weight:700; cursor:pointer; color:var(--mid); font-family:var(--sans); }
-.trb:hover { border-color:var(--accent); color:var(--accent); }
-.trb.active-mute { background:var(--aD); border-color:var(--amber); color:var(--amber); }
-.trb.active-solo { background:var(--accentD); border-color:var(--accent); color:var(--accent); }
-.trb.active-rec { background:var(--rD); border-color:var(--red); color:var(--red); }
-.tr-fader { flex:1; display:flex; align-items:center; gap:8px; }
-.tr-fader input[type=range] { flex:1; height:3px; -webkit-appearance:none; appearance:none; background:var(--b1); border-radius:2px; outline:none; cursor:pointer; }
-.tr-fader input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:12px; height:12px; border-radius:50%; background:var(--accent); border:none; }
-.tr-db { font-size:10px; color:var(--mid); font-family:var(--mono); width:40px; text-align:right; flex-shrink:0; }
-.add-track-btn { margin:8px 12px; padding:8px; border:1.5px dashed var(--b2); border-radius:var(--radius); background:none; color:var(--mid); cursor:pointer; font-size:13px; font-family:var(--sans); text-align:center; }
-.add-track-btn:hover { border-color:var(--accent); color:var(--accent); background:var(--accentH); }
+/* (tracks removed — not connected to real DAW) */
 
 /* ── Virtual Piano ───────────────────────────────────── */
 #pianoWrap { position:fixed; bottom:56px; left:0; right:0; background:var(--bg); border-top:1px solid var(--b1); z-index:48; display:none; flex-direction:column; }
@@ -601,6 +587,8 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 .pos-display { font-family:var(--mono); font-size:13px; color:var(--mid); min-width:50px; }
 .latency-pill { background:var(--s1); border:1px solid var(--b1); border-radius:100px; padding:3px 10px; font-size:11px; font-family:var(--mono); color:var(--mid); }
 .share-btn { padding:0 14px; font-size:13px; font-family:var(--sans); white-space:nowrap; }
+.cam-btn { padding:0 14px; font-size:13px; font-family:var(--sans); white-space:nowrap; display:none; }
+@media (max-width: 768px) { .cam-btn { display:flex; } }
 
 /* ── Settings panel ──────────────────────────────────── */
 #settingsOverlay { position:fixed; inset:0; background:rgba(0,0,0,.4); z-index:200; display:flex; justify-content:flex-end; }
@@ -620,17 +608,64 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 #toastEl.toast-show { opacity:1; }
 #toastEl.toast-g { background:var(--green); color:#fff; }
 #toastEl.toast-r { background:var(--red); color:#fff; }
-
-/* ── Remote video overlay ────────────────────────────── */
-#remoteVideoWrap { position:fixed; bottom:68px; right:8px; width:320px; background:#000; border-radius:var(--radiusL); box-shadow:var(--shadowM); z-index:100; overflow:hidden; cursor:move; user-select:none; display:none; }
-#remoteVideoWrap.active { display:block; }
-#remoteVideoWrap video { width:100%; display:block; max-height:240px; object-fit:contain; }
-.rvb { display:flex; align-items:center; gap:8px; padding:6px 10px; background:rgba(0,0,0,.7); }
-.rvb-label { flex:1; font-size:12px; font-weight:600; color:#fff; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.rvb-mute { background:none; border:1px solid rgba(255,255,255,.3); color:#fff; border-radius:4px; padding:2px 8px; font-size:11px; cursor:pointer; }
 .rvb-mute:hover { background:rgba(255,255,255,.15); }
 .rvb-close { background:none; border:none; color:rgba(255,255,255,.7); cursor:pointer; font-size:18px; padding:0 2px; line-height:1; }
 .rvb-close:hover { color:#fff; }
+
+/* ── Help overlay ────────────────────────────────────── */
+#helpOverlay { position:fixed; inset:0; background:rgba(0,0,0,.4); z-index:300; display:flex; align-items:center; justify-content:center; }
+#helpPanel { width:min(420px,90vw); max-height:80vh; background:var(--bg); border-radius:var(--radiusL); box-shadow:var(--shadowM); overflow-y:auto; }
+
+/* ── Connection banner ──────────────────────────────── */
+#connBanner { position:fixed; top:0; left:0; right:0; z-index:500; display:none; padding:10px 16px; text-align:center; font-size:13px; font-weight:600; font-family:var(--sans); }
+#connBanner.warn { display:block; background:var(--aD); color:#b25e00; border-bottom:1px solid var(--amber); }
+#connBanner.err { display:block; background:var(--rD); color:var(--red); border-bottom:1px solid var(--red); }
+#connBanner.ok { display:block; background:var(--gD); color:#0a7c42; border-bottom:1px solid var(--green); animation:fadeOut 2s 1s forwards; }
+@keyframes fadeOut { to { opacity:0; display:none; } }
+
+/* ── Mobile responsive ──────────────────────────────── */
+@media (max-width: 768px) {
+  .land-nav { padding:12px 16px; }
+  .hero h1 { font-size:clamp(24px,7vw,36px); }
+  .hero-sub { font-size:14px; }
+  .features { flex-direction:column; align-items:center; }
+  .feat-card { max-width:100%; }
+
+  .topbar { height:44px; gap:6px; padding:0 8px; overflow-x:auto; }
+  .tb-brand { font-size:13px; }
+  .tb-sep { display:none; }
+  .tb-status { display:none; }
+  .tb-btn { padding:4px 8px; font-size:12px; }
+
+  .workspace { flex-direction:column; }
+  .participant-panel { width:100%; height:auto; max-height:180px; border-left:none; border-top:1px solid var(--b1); }
+
+  .transport-bar { height:auto; min-height:52px; flex-wrap:wrap; gap:4px; padding:6px 8px; }
+  .bpm-ctrl { order:10; }
+  .pos-display { order:11; }
+  .my-controls { order:20; width:100%; justify-content:center; padding-top:4px; }
+  .my-ctrl-sep { display:none; }
+  .latency-pill { order:12; }
+
+  #pianoWrap { bottom:104px; }
+  .piano-keys { padding:4px 8px 0; }
+  .pk-w { width:26px; height:60px; }
+  .pk-b { width:18px; height:38px; margin:0 -9px; }
+
+  /* Mobile: hide controls not usable on phone */
+  .share-btn { display:none; }
+  #pianoBtn { display:none; }
+
+  .lobby-wrap { padding:20px 12px; }
+}
+
+@media (max-width: 480px) {
+  .hero-ctas { flex-direction:column; width:100%; padding:0 20px; }
+  .btn-accent, .btn-ghost { width:100%; text-align:center; }
+  .topbar { flex-wrap:nowrap; }
+  .peer-avatars { display:none; }
+  .participant-panel { max-height:140px; }
+}
 </style>
 </head>
 <body>
@@ -639,6 +674,8 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 <div id="landing" class="screen on">
   <nav class="land-nav">
     <div class="brand">🎛 <span>Studio</span>Sync</div>
+    <div style="flex:1"></div>
+    <button class="tb-btn" onclick="openHelp()">? Help</button>
   </nav>
   <div class="hero">
     <div class="hero-badge">Real-time music collaboration</div>
@@ -737,11 +774,14 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 
   <!-- Workspace -->
   <div class="workspace">
-    <!-- Left: tracks -->
-    <div class="track-panel">
-      <div class="marker-ruler" id="mRow"></div>
-      <div id="trackArea"></div>
-      <button class="add-track-btn" onclick="addTrack()">+ Add Track</button>
+    <!-- Main: shared screen video -->
+    <div class="main-area" id="mainArea">
+      <video id="mainVideo" class="main-video" autoplay playsinline></video>
+      <div class="main-area-empty" id="mainEmpty">
+        <div class="main-area-empty-icon">🖥</div>
+        <div class="main-area-empty-text">Waiting for screen share...</div>
+        <div class="main-area-empty-sub">The host should click <b>"Share"</b> in the transport bar to share their DAW screen and audio.</div>
+      </div>
     </div>
 
     <!-- Right: participants + chat -->
@@ -810,6 +850,7 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
     <div class="latency-pill" id="latPill">-- ms</div>
     <button class="tc" id="pianoBtn" onclick="togglePiano()" title="Virtual Piano / MIDI">🎹</button>
     <button class="tc share-btn" onclick="doShare()">🖥 Share</button>
+    <button class="tc cam-btn" onclick="doShareCam()">📷 Cam</button>
   </div>
 </div>
 
@@ -837,15 +878,42 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
   </div>
 </div>
 
-<!-- Remote video overlay (screen share) -->
-<div id="remoteVideoWrap">
-  <div class="rvb">
-    <span class="rvb-label" id="rvLabel">Shared Screen</span>
-    <button class="rvb-mute" id="rvMuteBtn" onclick="toggleRvMute()">🔊</button>
-    <button class="rvb-close" onclick="closeRv()">×</button>
+<!-- (remote video now inline in main-area) -->
+
+<!-- Help overlay (first-time) -->
+<div id="helpOverlay" style="display:none" onclick="if(event.target===this)closeHelp()">
+  <div id="helpPanel">
+    <div class="sp-header">
+      <div class="sp-title">How it works / איך זה עובד</div>
+      <button class="sp-close" onclick="closeHelp()">×</button>
+    </div>
+    <div style="padding:16px;display:flex;flex-direction:column;gap:14px;font-size:13px;color:var(--txt);line-height:1.6;">
+      <!-- Hebrew -->
+      <div dir="rtl" style="text-align:right;">
+        <div style="margin-bottom:10px"><b style="color:var(--accent)">1. צור או הצטרף לסשן</b><br>אחד יוצר סשן ומשתף את הקוד. השאר מצטרפים עם הקוד.</div>
+        <div style="margin-bottom:10px"><b style="color:var(--accent)">2. שתף מסך</b><br>המארח לוחץ <b>"Share"</b> כדי לשתף את מסך ה-DAW והשמע עם כולם.</div>
+        <div style="margin-bottom:10px"><b style="color:var(--accent)">3. שליטה משותפת</b><br>כל המשתתפים יכולים לשלוט ב-DAW — עכבר, מקלדת, ואפילו MIDI דרך הפסנתר הוירטואלי.</div>
+        <div style="margin-bottom:10px"><b style="color:var(--accent)">4. למארח</b><br>הרץ את <b>StudioSync Agent</b> על ה-Mac שלך כדי לקבל לחיצות ומקשים מהמשתתפים.</div>
+        <div style="margin-bottom:10px"><b style="color:var(--accent)">5. מובייל</b><br>במובייל אפשר להצטרף, לצפות, לצ'ט ולשתף מצלמה/מיקרופון. שליטה בעכבר ומקלדת זמינה רק מדסקטופ.</div>
+        <div style="padding:10px;background:var(--s1);border-radius:8px;font-size:12px;color:var(--mid);">
+          <b>טיפים:</b> השתמש בכפתורי <b>MY Controls</b> בסרגל התחתון כדי לבחור מה אתה שולח. יוצר הסשן יכול לנהל הרשאות לכל משתתף.
+        </div>
+      </div>
+      <hr style="border:none;border-top:1px solid var(--b1);">
+      <!-- English -->
+      <div>
+        <div style="margin-bottom:10px"><b style="color:var(--accent)">1. Create or Join</b><br>One person creates the session and shares the code. Others join with that code.</div>
+        <div style="margin-bottom:10px"><b style="color:var(--accent)">2. Share Screen</b><br>The host clicks <b>"Share"</b> to share their DAW screen and audio with everyone.</div>
+        <div style="margin-bottom:10px"><b style="color:var(--accent)">3. Collaborate</b><br>All participants can control the DAW — mouse, keyboard, even MIDI via the virtual piano.</div>
+        <div style="margin-bottom:10px"><b style="color:var(--accent)">4. For the host</b><br>Run the <b>StudioSync Agent</b> on your Mac to receive remote clicks and keystrokes.</div>
+        <div style="margin-bottom:10px"><b style="color:var(--accent)">5. Mobile</b><br>On mobile you can join, watch, chat and share camera/mic. Mouse and keyboard control is desktop only.</div>
+      </div>
+    </div>
   </div>
-  <video id="remoteVideoEl" autoplay playsinline></video>
 </div>
+
+<!-- Connection banner -->
+<div id="connBanner"></div>
 
 <!-- Toast -->
 <div id="toastEl"></div>
@@ -860,8 +928,6 @@ const S = {
   cid: null, code: null, name: 'User', color: PEER_COLORS[0], instrument: 'Producer',
   bpm: 120, playing: false, rec: false,
   pos: { b:1, bt:1, tk:1 },
-  tracks: [],
-  markers: [],
   peers: new Map(), // peerId → { name, color, instrument, conn, dc, latency }
   poll: false,
   activeTab: 'peers',
@@ -869,22 +935,25 @@ const S = {
   tickInterval: null
 };
 
-const TDEFS = [
-  { n:'Kick',    t:'AUDIO', c:'#f04438' },
-  { n:'Snare',   t:'AUDIO', c:'#f79009' },
-  { n:'Hi-Hat',  t:'AUDIO', c:'#f79009' },
-  { n:'Bass 808',t:'MIDI',  c:'#12b76a' },
-  { n:'Melody',  t:'MIDI',  c:'#6c47ff' },
-  { n:'Lead Vox',t:'AUDIO', c:'#8b5cf6' },
-  { n:'Pad',     t:'MIDI',  c:'#6c47ff' },
-  { n:'FX',      t:'AUX',   c:'#6c757d' },
-];
+// (track defs removed — not connected to real DAW)
 
 const ICE = { iceServers: [
   { urls:'stun:stun.l.google.com:19302' },
   { urls:'turn:global.relay.metered.ca:80', username:'open', credential:'open' },
   { urls:'turn:global.relay.metered.ca:443', username:'open', credential:'open' },
 ]};
+
+// ── Mobile detection ──────────────────────────────────────
+const IS_MOBILE = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
+
+// ── Connection banner ─────────────────────────────────────
+function showBanner(msg, type) {
+  const el = document.getElementById('connBanner');
+  if (!el) return;
+  el.textContent = msg;
+  el.className = type; // 'warn' | 'err' | 'ok' | ''
+  if (type === 'ok') setTimeout(() => { el.className = ''; }, 3000);
+}
 
 // ── Browser fingerprint (trial tracking) ─────────────────
 function getFingerprint() {
@@ -987,9 +1056,11 @@ async function hostStart() {
     S.cid = d.clientId;
     S.code = d.code;
     S.peerNumber = d.peerNumber || 1;
-    S.tracks = TDEFS.map(t => ({ ...t, v: 100, m: 0, s: 0, a: 0 }));
     enterSession();
-  } catch(e) { toast('Connection error', 'r'); show('lobby'); }
+  } catch(e) {
+    toast('Cannot reach server — check your connection', 'r');
+    show('lobby');
+  }
 }
 
 async function remoteJoin() {
@@ -1012,20 +1083,27 @@ async function remoteJoin() {
     S.cid = d.clientId;
     S.code = d.code;
     S.peerNumber = d.peerNumber || 2;
-    S.tracks = TDEFS.map(t => ({ ...t, v: 100, m: 0, s: 0, a: 0 }));
     enterSession();
-  } catch(e) { toast('Connection error', 'r'); show('lobby'); }
+  } catch(e) {
+    toast('Cannot reach server — check your connection', 'r');
+    show('lobby');
+  }
 }
 
 function enterSession() {
   document.getElementById('codeDisplay').textContent = S.code;
   document.getElementById('spCode').textContent = S.code;
-  renderTracks();
   updateBPM();
   updatePeerAvatars();
   renderPeerList();
   show('session');
   startPoll();
+  // On mobile, disable mouse/keyboard sending (not useful) and turn off by default
+  if (IS_MOBILE) {
+    MY.mouse = false; MY.keyboard = false;
+    document.getElementById('myMouse')?.classList.remove('active');
+    document.getElementById('myKeys')?.classList.remove('active');
+  }
   // Ping loop
   S.pingInterval = setInterval(() => {
     if (S.cid) send({ type: 'ping:req', ts: Date.now() });
@@ -1049,22 +1127,36 @@ function leaveSession() {
   S.cid = null; S.code = null;
   S.playing = false; S.rec = false;
   S.pos = { b: 1, bt: 1, tk: 1 };
-  S.markers = [];
   closeRv();
   show('landing');
 }
 
-// ── Polling ───────────────────────────────────────────────
+// ── Polling with reconnection ─────────────────────────────
 async function startPoll() {
   S.poll = true;
+  let fails = 0;
   while (S.poll) {
     try {
       const r = await fetch(SERVER + '/api/poll?cid=' + S.cid, { signal: AbortSignal.timeout(30000) });
-      if (!r.ok) { await new Promise(r => setTimeout(r, 2000)); continue; }
+      if (!r.ok) {
+        if (r.status === 404) {
+          showBanner('Session expired — please rejoin', 'err');
+          leaveSession();
+          return;
+        }
+        fails++;
+        if (fails >= 3) showBanner('Connection issues — reconnecting...', 'warn');
+        await new Promise(r => setTimeout(r, Math.min(2000 * fails, 10000)));
+        continue;
+      }
+      if (fails > 0) { showBanner('Reconnected!', 'ok'); fails = 0; }
       const d = await r.json();
       for (const m of (d.messages || [])) handleMsg(m);
     } catch(e) {
-      if (e.name !== 'TimeoutError') await new Promise(r => setTimeout(r, 2000));
+      if (e.name === 'TimeoutError') continue;
+      fails++;
+      if (fails >= 3) showBanner('Connection lost — retrying...', 'err');
+      await new Promise(r => setTimeout(r, Math.min(2000 * fails, 15000)));
     }
   }
 }
@@ -1175,10 +1267,10 @@ function handleMsg(msg) {
       break;
     case 'webrtc:create-offer':
       S.peers.set(msg.peerId, { name: msg.name || '', color: msg.color || PEER_COLORS[0], instrument: msg.instrument || '', dc: null, conn: null, latency: 0 });
-      PeerMesh.createOffer(msg.peerId);
+      PeerMesh.createOffer(msg.peerId).catch(e => dlog('WebRTC offer err: ' + e.message));
       break;
     case 'webrtc:offer':
-      PeerMesh.handleOffer(msg.peerId, msg.offer);
+      PeerMesh.handleOffer(msg.peerId, msg.offer).catch(e => dlog('WebRTC handle-offer err: ' + e.message));
       break;
     case 'webrtc:answer':
       PeerMesh.handleAnswer(msg.peerId, msg.answer);
@@ -1216,29 +1308,14 @@ function handleMsg(msg) {
 // ── DAW state ─────────────────────────────────────────────
 function applyDAW(msg, fromPeer) {
   const a = msg.action;
-  if (a === 'snapshot') {
-    S.tracks = msg.tracks || S.tracks;
-    S.bpm = msg.bpm || S.bpm;
-    S.markers = msg.markers || S.markers;
-    renderTracks(); renderMarkers(); updateBPM();
-  } else if (a === 'play') {
+  if (a === 'play') {
     S.playing = msg.playing; S.rec = msg.rec || false;
     const pb = document.getElementById('playBtn');
     if (pb) pb.textContent = S.playing ? '⏸' : '▶';
   } else if (a === 'bpm') {
     S.bpm = msg.bpm; updateBPM();
-  } else if (a === 'track_toggle') {
-    const tr = S.tracks[msg.i]; if (!tr) return;
-    tr[msg.k] = msg.v; renderTracks();
-  } else if (a === 'track_vol') {
-    const tr = S.tracks[msg.i]; if (!tr) return;
-    tr.v = msg.v; renderTracks();
   } else if (a === 'pos') {
     S.pos = msg.pos; updatePos();
-  } else if (a === 'marker_add') {
-    S.markers.push(msg.marker); renderMarkers();
-  } else if (a === 'track_add') {
-    S.tracks.push(msg.track); renderTracks();
   }
 }
 
@@ -1266,69 +1343,7 @@ function cmd(action, val) {
   broadcast(msg);
 }
 
-// ── Track rendering ───────────────────────────────────────
-function renderTracks() {
-  const area = document.getElementById('trackArea');
-  if (!area) return;
-  area.innerHTML = '';
-  S.tracks.forEach((tr, i) => {
-    const div = document.createElement('div');
-    div.className = 'track-row';
-    const db = tr.v > 0 ? (20 * Math.log10(tr.v / 100)).toFixed(1) : '-\u221e';
-    div.innerHTML = \`
-      <div class="tr-num">\${i + 1}</div>
-      <div class="tr-color" style="background:\${tr.c}"></div>
-      <div class="tr-info">
-        <div class="tr-name">\${tr.n}</div>
-        <div class="tr-type">\${tr.t}</div>
-      </div>
-      <div class="tr-btns">
-        <button class="trb \${tr.m ? 'active-mute' : ''}" onclick="trT(\${i},'m')" title="Mute">M</button>
-        <button class="trb \${tr.s ? 'active-solo' : ''}" onclick="trT(\${i},'s')" title="Solo">S</button>
-        <button class="trb \${tr.a ? 'active-rec' : ''}" onclick="trT(\${i},'a')" title="Record">R</button>
-      </div>
-      <div class="tr-fader">
-        <input type="range" min="0" max="127" value="\${tr.v || 100}"
-          onchange="trV(\${i},+this.value)"
-          oninput="this.nextElementSibling.textContent=(+this.value>0?(20*Math.log10(+this.value/100)).toFixed(1)+'dB':'-\u221e')" />
-        <span class="tr-db">\${db}dB</span>
-      </div>
-    \`;
-    area.appendChild(div);
-  });
-}
-
-function trT(i, k) {
-  S.tracks[i][k] = S.tracks[i][k] ? 0 : 1;
-  renderTracks();
-  broadcast({ type: 'daw:state', action: 'track_toggle', i, k, v: S.tracks[i][k], from: S.cid, ts: Date.now() });
-}
-
-function trV(i, v) {
-  S.tracks[i].v = v;
-  broadcast({ type: 'daw:state', action: 'track_vol', i, v, from: S.cid, ts: Date.now() });
-}
-
-function addTrack() {
-  const colors = ['#f04438','#f79009','#12b76a','#6c47ff','#0ea5e9','#8b5cf6'];
-  const track = { n: 'Track ' + (S.tracks.length + 1), t: 'AUDIO', c: colors[S.tracks.length % colors.length], v: 100, m: 0, s: 0, a: 0 };
-  S.tracks.push(track);
-  renderTracks();
-  broadcast({ type: 'daw:state', action: 'track_add', track, from: S.cid, ts: Date.now() });
-}
-
-// ── Markers ───────────────────────────────────────────────
-function renderMarkers() {
-  const el = document.getElementById('mRow');
-  if (!el) return;
-  el.innerHTML = '';
-  S.markers.forEach((m, i) => {
-    const d = document.createElement('div');
-    d.style.cssText = \`position:absolute;left:\${m.pos || 0}%;top:0;bottom:0;width:2px;background:\${MCOLS[i % 5]};cursor:pointer;\`;
-    d.title = m.label || '';
-    el.appendChild(d);
-  });
-}
+// (track rendering and markers removed — not connected to real DAW)
 
 // ── Peers UI ──────────────────────────────────────────────
 function updatePeerAvatars() {
@@ -1507,52 +1522,34 @@ async function doShare() {
   } catch(e) { toast('Share cancelled', ''); }
 }
 
+async function doShareCam() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+    toast('Camera shared!', 'g');
+    for (const [, p] of S.peers) {
+      if (p.conn) stream.getTracks().forEach(t => p.conn.addTrack(t, stream));
+    }
+    stream.getVideoTracks()[0].onended = () => toast('Camera stopped', '');
+  } catch(e) { toast('Camera cancelled or not available', 'r'); }
+}
+
 function showRemoteStream(stream, peerId) {
-  const wrap = document.getElementById('remoteVideoWrap');
-  const vid  = document.getElementById('remoteVideoEl');
-  const lbl  = document.getElementById('rvLabel');
-  if (!wrap || !vid) return;
+  const vid   = document.getElementById('mainVideo');
+  const empty = document.getElementById('mainEmpty');
+  if (!vid) return;
   vid.srcObject = stream;
+  vid.classList.add('active');
+  if (empty) empty.style.display = 'none';
   const p = S.peers.get(peerId);
-  if (lbl) lbl.textContent = (p?.name || 'Peer') + "'s Screen";
-  wrap.classList.add('active');
-  // Make draggable
-  let ox = 0, oy = 0, mx = 0, my = 0;
-  const bar = wrap.querySelector('.rvb');
-  if (bar && !bar._drag) {
-    bar._drag = true;
-    bar.onmousedown = (e) => {
-      if (e.target.tagName === 'BUTTON') return;
-      mx = e.clientX; my = e.clientY;
-      const rect = wrap.getBoundingClientRect();
-      ox = rect.left; oy = rect.top;
-      wrap.style.right = 'auto';
-      wrap.style.bottom = 'auto';
-      const move = (ev) => {
-        wrap.style.left = (ox + ev.clientX - mx) + 'px';
-        wrap.style.top  = (oy + ev.clientY - my) + 'px';
-      };
-      const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); };
-      document.addEventListener('mousemove', move);
-      document.addEventListener('mouseup', up);
-    };
-  }
+  toast((p?.name || 'Peer') + ' is sharing screen', 'g');
   stream.getTracks().forEach(t => { t.onended = () => closeRv(); });
 }
 
 function closeRv() {
-  const wrap = document.getElementById('remoteVideoWrap');
-  const vid  = document.getElementById('remoteVideoEl');
-  if (vid) vid.srcObject = null;
-  if (wrap) wrap.classList.remove('active');
-}
-
-function toggleRvMute() {
-  const vid = document.getElementById('remoteVideoEl');
-  const btn = document.getElementById('rvMuteBtn');
-  if (!vid) return;
-  vid.muted = !vid.muted;
-  if (btn) btn.textContent = vid.muted ? '🔇' : '🔊';
+  const vid   = document.getElementById('mainVideo');
+  const empty = document.getElementById('mainEmpty');
+  if (vid) { vid.srcObject = null; vid.classList.remove('active'); }
+  if (empty) empty.style.display = '';
 }
 
 // ══════════════════════════════════════════════════════════
@@ -1683,7 +1680,6 @@ document.addEventListener('keydown', e => {
     }
   }
   if (tag === 'INPUT' || tag === 'TEXTAREA') return;
-  if (e.code === 'Space' && S.code) { e.preventDefault(); cmd('play'); }
 });
 
 document.addEventListener('keyup', e => {
@@ -1707,8 +1703,22 @@ document.addEventListener('keydown', e => {
   if (e.code === 'ArrowDown') { e.preventDefault(); cmd('bpm', -1); }
 });
 
+// ── Help ──────────────────────────────────────────────────
+function openHelp() {
+  document.getElementById('helpOverlay').style.display = 'flex';
+}
+function closeHelp() {
+  document.getElementById('helpOverlay').style.display = 'none';
+  localStorage.setItem('ss_help_seen', '1');
+}
+
 // ── Boot ──────────────────────────────────────────────────
-window.onload = () => { show('landing'); };
+window.onload = () => {
+  show('landing');
+  if (!localStorage.getItem('ss_help_seen')) {
+    setTimeout(() => openHelp(), 800);
+  }
+};
 </script>
 </body>
 </html>`;
