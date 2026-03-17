@@ -294,7 +294,9 @@ const server = http.createServer(async (req, res) => {
     const code = raw.slice(0, 3) + '-' + raw.slice(3);
     const sess = sessions.get(code);
     if (!sess) return json(res, { ok: false, error: 'Session not found — check the code and try again' }, 404);
-    if (sess.peers.size >= 10) return json(res, { ok: false, error: 'Session is full (max 10 peers)' }, 403);
+    const isProSession = sess.licensed || checkLicense(data.license);
+    const maxPeers = isProSession ? 10 : 3;
+    if (sess.peers.size >= maxPeers) return json(res, { ok: false, error: isProSession ? 'הסשן מלא (עד 10 משתתפים)' : 'הסשן החינמי מלא (עד 3). שדרג ל-Pro עבור 10 משתתפים.' }, 403);
 
     const licensed = checkLicense(data.license);
     if (!licensed && !sess.licensed) {
@@ -518,6 +520,46 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 .email-btn { background:var(--s2); color:var(--txt); border:1px solid var(--b1); }
 .email-btn:hover { background:var(--b1); }
 
+/* ── Quick join (landing) ──────────────────────────── */
+.quick-join { display:flex; gap:8px; margin-top:12px; width:100%; max-width:320px; }
+.quick-join input { flex:1; border:1px solid var(--b1); border-radius:8px; padding:10px 14px; font-family:var(--mono); font-size:15px; text-align:center; letter-spacing:.12em; text-transform:uppercase; color:var(--hi); outline:none; direction:ltr; }
+.quick-join input:focus { border-color:var(--accent); }
+.quick-join input::placeholder { color:var(--dim); letter-spacing:0; text-transform:none; font-family:var(--sans); font-size:13px; }
+.quick-join button { padding:10px 16px; border-radius:8px; background:var(--accent); color:#fff; border:none; font-weight:600; cursor:pointer; white-space:nowrap; }
+.quick-join-divider { color:var(--dim); font-size:12px; margin-top:16px; }
+
+/* ── Session timer ─────────────────────────────────── */
+.session-timer { display:flex; align-items:center; gap:4px; font-family:var(--mono); font-size:12px; color:var(--mid); background:var(--s1); border:1px solid var(--b1); border-radius:100px; padding:3px 10px; }
+.session-timer.warn { color:var(--amber); border-color:var(--amber); }
+.session-timer.crit { color:var(--red); border-color:var(--red); animation:pulse .8s infinite; }
+@keyframes pulse { 50% { opacity:.6; } }
+
+/* ── Premium / Upgrade modal ──────────────────────── */
+.upgrade-modal-box { background:#fff; border-radius:var(--radiusL); padding:32px 28px; width:min(440px,92vw); max-height:90vh; overflow-y:auto; box-shadow:0 8px 32px rgba(0,0,0,.18); display:flex; flex-direction:column; gap:16px; text-align:center; }
+.upgrade-title { font-size:22px; font-weight:700; color:var(--hi); }
+.upgrade-subtitle { font-size:14px; color:var(--mid); }
+.upgrade-features { display:flex; flex-direction:column; gap:10px; text-align:right; direction:rtl; }
+.upgrade-feat { display:flex; align-items:center; gap:8px; font-size:14px; color:var(--txt); }
+.upgrade-feat .check { color:var(--accent); font-size:16px; }
+.upgrade-feat.locked .check { color:var(--dim); }
+.upgrade-cta { padding:14px; border-radius:10px; background:var(--accent); color:#fff; border:none; font-size:16px; font-weight:700; cursor:pointer; margin-top:8px; }
+.upgrade-cta:hover { background:#5a38e0; }
+.pro-badge { background:linear-gradient(135deg,#6c47ff,#a855f7); color:#fff; font-size:9px; font-weight:700; padding:2px 6px; border-radius:4px; letter-spacing:.05em; margin-left:6px; vertical-align:middle; }
+.rec-btn-transport { position:relative; }
+.rec-btn-transport .lock-icon { position:absolute; top:-4px; right:-4px; font-size:10px; }
+
+/* ── History panel ─────────────────────────────────── */
+.history-panel { position:fixed; top:0; right:-400px; width:min(380px,90vw); height:100vh; background:#fff; box-shadow:-4px 0 24px rgba(0,0,0,.12); z-index:400; transition:right .3s ease; display:flex; flex-direction:column; }
+.history-panel.open { right:0; }
+.hp-header { display:flex; align-items:center; justify-content:space-between; padding:16px 20px; border-bottom:1px solid var(--b1); }
+.hp-title { font-size:16px; font-weight:700; }
+.hp-list { flex:1; overflow-y:auto; padding:12px; display:flex; flex-direction:column; gap:8px; }
+.hp-card { background:var(--s1); border:1px solid var(--b1); border-radius:8px; padding:12px; direction:rtl; }
+.hp-card-blur { filter:blur(3px); pointer-events:none; }
+.hp-date { font-size:11px; color:var(--mid); }
+.hp-code { font-family:var(--mono); font-weight:600; color:var(--accent); }
+.hp-info { font-size:12px; color:var(--txt); margin-top:4px; }
+
 /* ── Workspace ───────────────────────────────────────── */
 .workspace { flex:1; display:flex; overflow:hidden; }
 .main-area { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; padding:16px; padding-bottom:72px; overflow:hidden; background:var(--s1); position:relative; }
@@ -692,6 +734,7 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
   <nav class="land-nav">
     <div class="brand">🎛 <span>Studio</span>Sync</div>
     <div style="flex:1"></div>
+    <button class="tb-btn" onclick="showHistory()">📋 היסטוריה</button>
     <button class="tb-btn" onclick="openHelp()">? עזרה</button>
   </nav>
   <div class="hero" dir="rtl">
@@ -701,6 +744,11 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
     <div class="hero-ctas">
       <button class="btn-accent" onclick="showLobby('create')">צור סשן</button>
       <button class="btn-ghost" onclick="showLobby('join')">הצטרף לסשן</button>
+    </div>
+    <div class="quick-join-divider">── או הכנס קוד ──</div>
+    <div class="quick-join">
+      <input id="quickJoinCode" placeholder="הכנס קוד סשן" maxlength="7" dir="ltr" onkeydown="if(event.key==='Enter')quickJoin()" />
+      <button onclick="quickJoin()">הצטרף</button>
     </div>
   </div>
   <div class="features">
@@ -769,7 +817,8 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 <!-- CONNECTING -->
 <div id="connecting" class="screen">
   <div class="spin"></div>
-  <div style="font-size:14px;color:var(--mid);font-family:var(--sans)">Connecting...</div>
+  <div style="font-size:14px;color:var(--mid);font-family:var(--sans)" dir="rtl">מתחבר לסשן...</div>
+  <div id="connectingCode" style="font-family:var(--mono);font-size:18px;font-weight:700;color:var(--accent);margin-top:8px"></div>
 </div>
 
 <!-- SESSION -->
@@ -784,6 +833,7 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
     </div>
     <div class="peer-avatars" id="peerAvatars"></div>
     <div class="tb-flex"></div>
+    <div class="session-timer" id="sessionTimer">⏱ 00:00</div>
     <div class="tb-status" id="tbStatus">0 peers</div>
     <button class="tb-btn tb-invite-btn" onclick="openInvite()">📨 הזמן</button>
     <button class="tb-btn" onclick="toggleSettings()">⚙</button>
@@ -795,18 +845,19 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
     <!-- Main: shared screen video -->
     <div class="main-area" id="mainArea">
       <video id="mainVideo" class="main-video" autoplay playsinline></video>
-      <div class="main-area-empty" id="mainEmpty">
+      <div class="main-area-empty" id="mainEmpty" dir="rtl">
         <div class="main-area-empty-icon">🖥</div>
-        <div class="main-area-empty-text">Waiting for screen share...</div>
-        <div class="main-area-empty-sub">The host should click <b>"Share"</b> in the transport bar to share their DAW screen and audio.</div>
+        <div class="main-area-empty-text">ממתין לשיתוף מסך...</div>
+        <div class="main-area-empty-sub">לחץ על <b>"Share"</b> בסרגל למטה כדי לשתף את מסך ה-DAW והשמע.</div>
+        <button class="btn-ghost" style="margin-top:12px;font-size:13px" onclick="doShareCam()">📷 או שתף מצלמה</button>
       </div>
     </div>
 
     <!-- Right: participants + chat -->
     <div class="participant-panel">
       <div class="panel-tabs">
-        <button class="ptab active" id="tabPeers" onclick="switchTab('peers')">Peers</button>
-        <button class="ptab" id="tabChat" onclick="switchTab('chat')">Chat</button>
+        <button class="ptab active" id="tabPeers" onclick="switchTab('peers')">משתתפים</button>
+        <button class="ptab" id="tabChat" onclick="switchTab('chat')">צ'אט</button>
       </div>
       <div id="peersTab" class="tab-content">
         <div id="peerList"></div>
@@ -867,6 +918,7 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
     <div class="my-ctrl-sep"></div>
     <div class="latency-pill" id="latPill">-- ms</div>
     <button class="tc" id="pianoBtn" onclick="togglePiano()" title="Virtual Piano / MIDI">🎹</button>
+    <button class="tc rec-btn-transport" id="recSessionBtn" onclick="toggleSessionRecord()">⏺ הקלט<span class="lock-icon" id="recLock">🔒</span></button>
     <button class="tc share-btn" onclick="doShare()">🖥 Share</button>
     <button class="tc cam-btn" onclick="doShareCam()">📷 Cam</button>
   </div>
@@ -952,6 +1004,33 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
   </div>
 </div>
 
+<!-- Upgrade modal -->
+<div id="upgradeModal" class="modal-overlay" style="display:none" onclick="if(event.target===this)closeUpgrade()">
+  <div class="upgrade-modal-box" dir="rtl">
+    <div style="font-size:32px">👑</div>
+    <div class="upgrade-title">שדרג ל-StudioSync Pro</div>
+    <div class="upgrade-subtitle">קח את הסשנים שלך לשלב הבא</div>
+    <div class="upgrade-features">
+      <div class="upgrade-feat"><span class="check">✓</span> עד 10 משתתפים בסשן</div>
+      <div class="upgrade-feat"><span class="check">✓</span> סשנים ללא הגבלת זמן</div>
+      <div class="upgrade-feat"><span class="check">✓</span> הקלטת סשן + הורדה כקובץ</div>
+      <div class="upgrade-feat"><span class="check">✓</span> היסטוריית סשנים מלאה</div>
+      <div class="upgrade-feat"><span class="check">✓</span> סיכום סשן עם AI</div>
+    </div>
+    <button class="upgrade-cta" onclick="window.open('https://studiosync-nxu0.onrender.com/pricing','_blank')">שדרג עכשיו — Pro</button>
+    <button class="btn-link" onclick="closeUpgrade()">אולי אחר כך</button>
+  </div>
+</div>
+
+<!-- History panel -->
+<div id="historyPanel" class="history-panel" dir="rtl">
+  <div class="hp-header">
+    <div class="hp-title">📋 היסטוריית סשנים</div>
+    <button class="sp-close" onclick="closeHistory()">×</button>
+  </div>
+  <div class="hp-list" id="historyList"></div>
+</div>
+
 <!-- Toast -->
 <div id="toastEl"></div>
 
@@ -962,7 +1041,7 @@ const INSTRUMENTS = ['Keys','Drums','Guitar','Bass','Vocals','Producer','Other']
 const MCOLS = ['#6c47ff','#12b76a','#f79009','#f04438','#8b5cf6'];
 
 const S = {
-  cid: null, code: null, name: 'User', color: PEER_COLORS[0], instrument: 'Producer',
+  cid: null, code: null, name: 'User', color: PEER_COLORS[0], instrument: 'Producer', plan: 'trial',
   bpm: 120, playing: false, rec: false,
   pos: { b:1, bt:1, tk:1 },
   peers: new Map(), // peerId → { name, color, instrument, conn, dc, latency }
@@ -1013,6 +1092,15 @@ function showLobby(mode) {
   initInstrGrid('joinInstrs');
   if (mode === 'join') document.getElementById('joinCode')?.focus();
   else document.getElementById('createName')?.focus();
+}
+
+function quickJoin() {
+  const raw = (document.getElementById('quickJoinCode')?.value || '').replace(/[^A-Z0-9-]/gi, '').toUpperCase();
+  if (raw.length < 5) { toast('הכנס קוד סשן תקין', 'r'); return; }
+  showLobby('join');
+  const inp = document.getElementById('joinCode');
+  if (inp) inp.value = raw.includes('-') ? raw : raw.slice(0,3) + '-' + raw.slice(3);
+  document.getElementById('joinNameInput')?.focus();
 }
 
 function initColorPicker(containerId) {
@@ -1093,6 +1181,8 @@ async function hostStart() {
     S.cid = d.clientId;
     S.code = d.code;
     S.peerNumber = d.peerNumber || 1;
+    S.plan = d.plan || 'trial';
+    document.getElementById('connectingCode').textContent = S.code;
     enterSession();
   } catch(e) {
     toast('Cannot reach server — check your connection', 'r');
@@ -1120,6 +1210,8 @@ async function remoteJoin() {
     S.cid = d.clientId;
     S.code = d.code;
     S.peerNumber = d.peerNumber || 2;
+    S.plan = d.plan || 'trial';
+    document.getElementById('connectingCode').textContent = S.code;
     enterSession();
   } catch(e) {
     toast('Cannot reach server — check your connection', 'r');
@@ -1135,6 +1227,10 @@ function enterSession() {
   renderPeerList();
   show('session');
   startPoll();
+  startTimer();
+  // Show/hide record lock icon
+  const lockEl = document.getElementById('recLock');
+  if (lockEl) lockEl.style.display = isPremium() ? 'none' : 'inline';
   // On mobile, disable mouse/keyboard sending (not useful) and turn off by default
   if (IS_MOBILE) {
     MY.mouse = false; MY.keyboard = false;
@@ -1156,6 +1252,10 @@ function enterSession() {
 }
 
 function leaveSession() {
+  saveHistory();
+  stopTimer();
+  if (sessionRecorder && sessionRecorder.state === 'recording') sessionRecorder.stop();
+  sessionRecorder = null;
   S.poll = false;
   clearInterval(S.pingInterval); S.pingInterval = null;
   clearInterval(S.tickInterval); S.tickInterval = null;
@@ -1768,6 +1868,116 @@ document.addEventListener('keydown', e => {
   if (e.code === 'ArrowUp') { e.preventDefault(); cmd('bpm', 1); }
   if (e.code === 'ArrowDown') { e.preventDefault(); cmd('bpm', -1); }
 });
+
+// ── Premium gating ────────────────────────────────────────
+function isPremium() { return S.plan === 'pro'; }
+
+function showUpgradeModal() { document.getElementById('upgradeModal').style.display = 'flex'; }
+function closeUpgrade() { document.getElementById('upgradeModal').style.display = 'none'; }
+
+// ── Session timer ─────────────────────────────────────────
+const TIMER = { interval: null, seconds: 0, warned: false };
+const FREE_LIMIT_SECS = 45 * 60; // 45 min
+
+function startTimer() {
+  TIMER.seconds = 0; TIMER.warned = false;
+  updateTimerDisplay();
+  TIMER.interval = setInterval(() => {
+    TIMER.seconds++;
+    updateTimerDisplay();
+    const remaining = FREE_LIMIT_SECS - TIMER.seconds;
+    if (!isPremium() && remaining === 300 && !TIMER.warned) {
+      TIMER.warned = true;
+      toast('נשארו 5 דקות בסשן החינמי', 'r');
+    }
+    if (!isPremium() && TIMER.seconds >= FREE_LIMIT_SECS) {
+      clearInterval(TIMER.interval);
+      showUpgradeModal();
+    }
+  }, 1000);
+}
+function stopTimer() { clearInterval(TIMER.interval); TIMER.interval = null; }
+function updateTimerDisplay() {
+  const el = document.getElementById('sessionTimer');
+  if (!el) return;
+  const m = Math.floor(TIMER.seconds / 60);
+  const s = TIMER.seconds % 60;
+  el.textContent = String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0');
+  const remaining = FREE_LIMIT_SECS - TIMER.seconds;
+  if (!isPremium() && remaining <= 60) el.className = 'session-timer crit';
+  else if (!isPremium() && remaining <= 300) el.className = 'session-timer warn';
+  else el.className = 'session-timer';
+}
+
+// ── Session recording (premium) ───────────────────────────
+let sessionRecorder = null;
+function toggleSessionRecord() {
+  if (!isPremium()) { showUpgradeModal(); return; }
+  const vid = document.getElementById('mainVideo');
+  if (sessionRecorder && sessionRecorder.state === 'recording') {
+    sessionRecorder.stop();
+    sessionRecorder = null;
+    document.getElementById('recSessionBtn').style.background = '';
+    toast('הקלטה נשמרה!', 'g');
+    return;
+  }
+  if (!vid || !vid.srcObject) { toast('אין שיתוף מסך להקלטה', 'r'); return; }
+  const chunks = [];
+  sessionRecorder = new MediaRecorder(vid.srcObject, { mimeType: 'video/webm' });
+  sessionRecorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
+  sessionRecorder.onstop = () => {
+    const blob = new Blob(chunks, { type: 'video/webm' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'session-' + (S.code || 'rec') + '.webm'; a.click();
+    URL.revokeObjectURL(url);
+  };
+  sessionRecorder.start(1000);
+  document.getElementById('recSessionBtn').style.background = 'var(--rD)';
+  toast('מקליט את הסשן...', 'g');
+}
+
+// ── Session history ───────────────────────────────────────
+function saveHistory() {
+  if (!S.code) return;
+  const history = JSON.parse(localStorage.getItem('ss_history') || '[]');
+  history.unshift({
+    code: S.code,
+    date: new Date().toISOString(),
+    duration: TIMER.seconds,
+    participants: S.peers.size + 1,
+    name: S.name
+  });
+  if (history.length > 20) history.length = 20;
+  localStorage.setItem('ss_history', JSON.stringify(history));
+}
+function showHistory() {
+  const panel = document.getElementById('historyPanel');
+  const list = document.getElementById('historyList');
+  const history = JSON.parse(localStorage.getItem('ss_history') || '[]');
+  list.innerHTML = '';
+  if (history.length === 0) {
+    list.innerHTML = '<div style="text-align:center;color:var(--mid);padding:40px">אין סשנים קודמים</div>';
+  } else {
+    history.forEach((h, i) => {
+      const dur = Math.floor(h.duration / 60);
+      const card = document.createElement('div');
+      card.className = 'hp-card' + (!isPremium() && i >= 2 ? ' hp-card-blur' : '');
+      card.innerHTML = '<div class="hp-date">' + new Date(h.date).toLocaleDateString('he-IL') + '</div>'
+        + '<div class="hp-code">' + h.code + '</div>'
+        + '<div class="hp-info">' + dur + ' דקות · ' + h.participants + ' משתתפים</div>';
+      list.appendChild(card);
+    });
+    if (!isPremium() && history.length > 2) {
+      const up = document.createElement('div');
+      up.style.cssText = 'text-align:center;padding:16px;';
+      up.innerHTML = '<button class="btn-accent" style="font-size:13px" onclick="showUpgradeModal()">שדרג לצפיה בכל ההיסטוריה</button>';
+      list.appendChild(up);
+    }
+  }
+  panel.classList.add('open');
+}
+function closeHistory() { document.getElementById('historyPanel').classList.remove('open'); }
 
 // ── Help ──────────────────────────────────────────────────
 function openHelp() {
