@@ -488,6 +488,36 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 .feat-title { font-weight:600; font-size:14px; margin-bottom:6px; color:var(--hi); }
 .feat-desc { font-size:12px; color:var(--mid); line-height:1.5; }
 
+/* ── Online Indicator ───────────────────────────────── */
+.online-section { max-width:600px; margin:0 auto 24px; padding:0 24px; }
+.online-header { font-size:14px; font-weight:600; color:var(--hi); margin-bottom:10px; }
+.online-list { display:flex; gap:8px; flex-wrap:wrap; }
+.online-avatar { display:flex; align-items:center; gap:6px; background:var(--s1); border:1px solid var(--b1); border-radius:20px; padding:4px 12px 4px 6px; font-size:12px; color:var(--mid); }
+.online-dot { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
+.online-name { font-weight:500; color:var(--hi); }
+.online-instr { font-size:11px; color:var(--dim); }
+
+/* ── Schedule Section ───────────────────────────────── */
+.schedule-section { max-width:600px; margin:0 auto 24px; padding:0 24px; }
+.schedule-header { font-size:14px; font-weight:600; color:var(--hi); margin-bottom:10px; }
+.schedule-list { display:flex; gap:8px; flex-wrap:wrap; }
+.sched-card { background:var(--s1); border:1px solid var(--b1); border-radius:var(--radius); padding:10px 14px; font-size:12px; color:var(--mid); min-width:140px; position:relative; }
+.sched-card .sched-title { font-weight:600; color:var(--hi); margin-bottom:4px; }
+.sched-card .sched-time { font-size:11px; color:var(--dim); }
+.sched-card .sched-del { position:absolute; top:4px; left:4px; cursor:pointer; font-size:14px; color:var(--dim); opacity:.5; }
+.sched-card .sched-del:hover { opacity:1; color:#e74c3c; }
+
+/* ── Feature Voting ─────────────────────────────────── */
+.voting-section { max-width:600px; margin:0 auto 32px; padding:0 24px; }
+.voting-header { font-size:14px; font-weight:600; color:var(--hi); margin-bottom:10px; }
+.voting-list { display:flex; flex-direction:column; gap:6px; }
+.vote-row { display:flex; align-items:center; gap:10px; background:var(--s1); border:1px solid var(--b1); border-radius:var(--radius); padding:8px 14px; font-size:13px; color:var(--mid); direction:rtl; }
+.vote-name { flex:1; color:var(--hi); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:right; }
+.vote-count { font-weight:600; color:var(--accent); min-width:24px; text-align:center; flex-shrink:0; }
+.vote-btn { background:var(--accent); color:#fff; border:none; border-radius:12px; padding:4px 12px; font-size:11px; cursor:pointer; font-family:var(--sans); flex-shrink:0; }
+.vote-btn:hover { opacity:.85; }
+.vote-btn.voted { background:var(--b2); color:var(--dim); cursor:default; }
+
 /* ── Buttons ─────────────────────────────────────────── */
 .btn-accent { background:var(--accent); color:#fff; border:none; border-radius:var(--radius); padding:12px 28px; font-size:15px; font-weight:600; cursor:pointer; font-family:var(--sans); transition:opacity .15s; }
 .btn-accent:hover { opacity:.9; }
@@ -921,6 +951,39 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
       <div class="feat-desc">שתפו פעולה עם כל הלהקה או הכיתה בסשן אחד</div>
     </div>
   </div>
+
+  <!-- Online Now -->
+  <div id="onlineSection" class="online-section" dir="rtl" style="display:none">
+    <div class="online-header">🟢 מחוברים עכשיו</div>
+    <div id="onlineList" class="online-list"></div>
+  </div>
+
+  <!-- Upcoming Scheduled Sessions -->
+  <div id="scheduleSection" class="schedule-section" dir="rtl" style="display:none">
+    <div class="schedule-header">📅 סשנים מתוכננים</div>
+    <div id="scheduleList" class="schedule-list"></div>
+    <button class="btn-ghost" style="margin-top:8px;font-size:13px" onclick="showScheduleModal()">+ תזמן סשן חדש</button>
+  </div>
+
+  <!-- Feature Voting -->
+  <div id="votingSection" class="voting-section" dir="rtl">
+    <div class="voting-header">🗳 הצביעו לפיצ׳ר הבא</div>
+    <div id="votingList" class="voting-list"></div>
+  </div>
+</div>
+
+<!-- Schedule Modal -->
+<div id="scheduleModal" class="modal-overlay" style="display:none" onclick="if(event.target===this)closeScheduleModal()">
+  <div class="modal-box" dir="rtl" style="max-width:360px">
+    <h3 style="margin:0 0 12px">📅 תזמן סשן</h3>
+    <input id="schedTitle" class="lob-input" placeholder="שם הסשן" dir="rtl" />
+    <input id="schedDate" class="lob-input" type="date" />
+    <input id="schedTime" class="lob-input" type="time" />
+    <div style="display:flex;gap:8px;margin-top:12px">
+      <button class="btn-accent" style="flex:1" onclick="addSchedule()">שמור</button>
+      <button class="btn-ghost" style="flex:1" onclick="closeScheduleModal()">ביטול</button>
+    </div>
+  </div>
 </div>
 
 <!-- LOBBY -->
@@ -1266,6 +1329,7 @@ const SERVER = '';
 const PEER_COLORS = ['#6c47ff','#12b76a','#f04438','#f79009','#0ea5e9','#ec4899','#14b8a6','#8b5cf6'];
 const INSTRUMENTS = ['Keys','Drums','Guitar','Bass','Vocals','Producer','Other'];
 const MCOLS = ['#6c47ff','#12b76a','#f79009','#f04438','#8b5cf6'];
+function esc(s) { const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
 
 const S = {
   cid: null, code: null, name: 'User', color: PEER_COLORS[0], instrument: 'Producer', plan: 'trial',
@@ -1977,12 +2041,18 @@ async function doShare() {
 async function doShareCam() {
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-    toast('Camera shared!', 'g');
+    toast('מצלמה משותפת!', 'g');
+    // Show locally
+    const vid = document.getElementById('mainVideo');
+    const empty = document.getElementById('mainEmpty');
+    if (vid) { vid.srcObject = stream; vid.classList.add('active'); vid.muted = true; }
+    if (empty) empty.style.display = 'none';
+    // Send to peers
     for (const [, p] of S.peers) {
       if (p.conn) stream.getTracks().forEach(t => p.conn.addTrack(t, stream));
     }
-    stream.getVideoTracks()[0].onended = () => toast('Camera stopped', '');
-  } catch(e) { toast('Camera cancelled or not available', 'r'); }
+    stream.getVideoTracks()[0].onended = () => { toast('המצלמה נעצרה', ''); closeRv(); };
+  } catch(e) { toast('המצלמה לא זמינה או שנדחתה', 'r'); }
 }
 
 function showRemoteStream(stream, peerId) {
@@ -2516,10 +2586,132 @@ function closeHelp() {
   localStorage.setItem('ss_help_seen', '1');
 }
 
+// ── Online Indicator ──────────────────────────────────────
+let heartbeatTimer = null;
+function startHeartbeat() {
+  const send = () => {
+    const name = S.name || localStorage.getItem('ss_name');
+    if (!name) return;
+    fetch('/api/heartbeat', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ name, color: S.color, instrument: S.instrument }) }).catch(()=>{});
+  };
+  send();
+  heartbeatTimer = setInterval(send, 30000);
+}
+function stopHeartbeat() { if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; } }
+async function fetchOnline() {
+  try {
+    const r = await fetch('/api/online');
+    const d = await r.json();
+    if (!d.ok) return;
+    const el = document.getElementById('onlineList');
+    const sec = document.getElementById('onlineSection');
+    if (!el || !sec) return;
+    if (d.users.length === 0) { sec.style.display = 'none'; return; }
+    sec.style.display = '';
+    el.innerHTML = d.users.map(u => '<div class="online-avatar"><div class="online-dot" style="background:' + u.color + '"></div><span class="online-name">' + esc(u.name) + '</span>' + (u.instrument ? '<span class="online-instr">' + esc(u.instrument) + '</span>' : '') + '</div>').join('');
+  } catch(e) {}
+}
+let onlineTimer = null;
+function startOnlinePolling() { fetchOnline(); onlineTimer = setInterval(fetchOnline, 15000); }
+function stopOnlinePolling() { if (onlineTimer) { clearInterval(onlineTimer); onlineTimer = null; } }
+
+// ── Schedule Session ─────────────────────────────────────
+function showScheduleModal() { document.getElementById('scheduleModal').style.display = 'flex'; }
+function closeScheduleModal() { document.getElementById('scheduleModal').style.display = 'none'; }
+function addSchedule() {
+  const title = document.getElementById('schedTitle').value.trim();
+  const date = document.getElementById('schedDate').value;
+  const time = document.getElementById('schedTime').value;
+  if (!title || !date || !time) { toast('נא למלא את כל השדות', 'r'); return; }
+  const schedules = JSON.parse(localStorage.getItem('ss_schedules') || '[]');
+  schedules.push({ title, date, time, ts: new Date(date + 'T' + time).getTime(), id: Date.now() });
+  localStorage.setItem('ss_schedules', JSON.stringify(schedules));
+  closeScheduleModal();
+  document.getElementById('schedTitle').value = '';
+  document.getElementById('schedDate').value = '';
+  document.getElementById('schedTime').value = '';
+  renderSchedules();
+  toast('סשן תוזמן!', 'g');
+}
+function deleteSchedule(id) {
+  let schedules = JSON.parse(localStorage.getItem('ss_schedules') || '[]');
+  schedules = schedules.filter(s => s.id !== id);
+  localStorage.setItem('ss_schedules', JSON.stringify(schedules));
+  renderSchedules();
+}
+function renderSchedules() {
+  const schedules = JSON.parse(localStorage.getItem('ss_schedules') || '[]');
+  const now = Date.now();
+  const upcoming = schedules.filter(s => s.ts > now).sort((a, b) => a.ts - b.ts);
+  const sec = document.getElementById('scheduleSection');
+  const el = document.getElementById('scheduleList');
+  if (!sec || !el) return;
+  if (upcoming.length === 0) { sec.style.display = 'none'; return; }
+  sec.style.display = '';
+  el.innerHTML = upcoming.map(s => {
+    const d = new Date(s.ts);
+    const dateStr = d.toLocaleDateString('he-IL', { day:'numeric', month:'short' });
+    const timeStr = d.toLocaleTimeString('he-IL', { hour:'2-digit', minute:'2-digit' });
+    return '<div class="sched-card"><span class="sched-del" onclick="deleteSchedule(' + s.id + ')">×</span><div class="sched-title">' + esc(s.title) + '</div><div class="sched-time">' + dateStr + ' | ' + timeStr + '</div></div>';
+  }).join('');
+}
+function checkScheduleReminders() {
+  const schedules = JSON.parse(localStorage.getItem('ss_schedules') || '[]');
+  const now = Date.now();
+  schedules.forEach(s => {
+    const diff = s.ts - now;
+    if (diff > 0 && diff < 60000 && !s.reminded) {
+      s.reminded = true;
+      toast('תזכורת: ' + s.title + ' מתחיל בעוד דקה!', 'g');
+      if ('Notification' in window && Notification.permission === 'granted') {
+        new Notification('StudioSync', { body: s.title + ' מתחיל בעוד דקה!' });
+      }
+    }
+  });
+  localStorage.setItem('ss_schedules', JSON.stringify(schedules));
+}
+
+// ── Feature Voting ───────────────────────────────────────
+const votedFeatures = new Set(JSON.parse(localStorage.getItem('ss_voted') || '[]'));
+async function loadFeatures() {
+  try {
+    const r = await fetch('/api/features');
+    const d = await r.json();
+    if (!d.ok) return;
+    const el = document.getElementById('votingList');
+    if (!el) return;
+    el.innerHTML = d.features.map(f => {
+      const voted = votedFeatures.has(f.id);
+      return '<div class="vote-row"><span class="vote-name">' + esc(f.name) + '</span><span class="vote-count">' + f.votes + '</span><button class="vote-btn' + (voted ? ' voted' : '') + '" onclick="voteFeature(this,&#39;'+f.id+'&#39;)">' + (voted ? '✓' : '👍') + '</button></div>';
+    }).join('');
+  } catch(e) {}
+}
+async function voteFeature(btn, fid) {
+  if (votedFeatures.has(fid)) return;
+  const fp = S.name || 'user_' + Math.random().toString(36).slice(2, 8);
+  try {
+    const r = await fetch('/api/features/vote', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ featureId: fid, fingerprint: fp }) });
+    const d = await r.json();
+    if (d.ok) {
+      votedFeatures.add(fid);
+      localStorage.setItem('ss_voted', JSON.stringify([...votedFeatures]));
+      loadFeatures();
+    }
+  } catch(e) {}
+}
+
 // ── Boot ──────────────────────────────────────────────────
 window.onload = () => {
   initTheme();
   show('landing');
+  startHeartbeat();
+  startOnlinePolling();
+  renderSchedules();
+  loadFeatures();
+  setInterval(checkScheduleReminders, 30000);
+  if ('Notification' in window && Notification.permission === 'default') {
+    Notification.requestPermission();
+  }
   // Auto-join if ?join=CODE in URL
   const params   = new URLSearchParams(window.location.search);
   const joinCode = params.get('join');
