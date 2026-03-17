@@ -719,6 +719,21 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 .share-btn { padding:0 14px; font-size:13px; font-family:var(--sans); white-space:nowrap; }
 .cam-btn { padding:0 14px; font-size:13px; font-family:var(--sans); white-space:nowrap; display:none; }
 @media (max-width: 768px) { .cam-btn { display:flex; } }
+.tap-tempo { font-size:10px; font-weight:700; }
+.tap-tempo:active { background:var(--accentD); color:var(--accent); }
+.metro-btn.on { background:var(--green); border-color:var(--green); color:#fff; }
+.vu-wrap { display:flex; align-items:center; gap:4px; background:var(--s1); border:1px solid var(--b1); border-radius:6px; padding:0 6px; height:34px; }
+.vu-label { font-size:9px; color:var(--dim); }
+.vu-meter { display:flex; align-items:flex-end; gap:1px; height:24px; }
+.vu-bar { width:3px; border-radius:1px; background:var(--green); transition:height 60ms linear; min-height:2px; }
+.vu-bar.warn { background:#f79009; }
+.vu-bar.clip { background:var(--red); }
+.uptime-pill { font-size:10px; color:var(--dim); font-family:var(--mono); }
+.clip-panel { position:fixed; bottom:60px; right:16px; width:280px; max-height:240px; overflow-y:auto; background:var(--s1); border:1px solid var(--b1); border-radius:var(--radiusL); padding:8px; display:none; z-index:51; }
+.clip-card { display:flex; align-items:center; gap:8px; padding:6px 8px; background:var(--bg); border:1px solid var(--b1); border-radius:6px; margin-bottom:4px; }
+.clip-name { flex:1; font-size:12px; font-family:var(--mono); color:var(--txt); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.clip-dl { font-size:12px; color:var(--accent); cursor:pointer; text-decoration:none; }
+.share-audio-btn { padding:0 10px; font-size:12px; font-family:var(--sans); white-space:nowrap; }
 
 /* ── Settings panel ──────────────────────────────────── */
 #settingsOverlay { position:fixed; inset:0; background:rgba(0,0,0,.4); z-index:200; display:flex; justify-content:flex-end; }
@@ -896,6 +911,10 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
   /* Mobile: hide controls not usable on phone */
   .share-btn { display:none; }
   #pianoBtn { display:none; }
+  .vu-wrap { display:none; }
+  .share-audio-btn { display:none; }
+  .uptime-pill { display:none; }
+  .clip-panel { width:100%; right:0; left:0; bottom:52px; border-radius:12px 12px 0 0; }
 
   .lobby-wrap { padding:20px 12px; }
 }
@@ -1123,17 +1142,22 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
     </div>
   </div>
 
+  <div id="clipPanel" class="clip-panel"></div>
   <div class="transport-bar">
     <button class="tc" onclick="cmd('stop')">⏹</button>
     <button class="tc play-btn" id="playBtn" onclick="cmd('play')">▶</button>
     <button class="tc" id="recBtn" onclick="cmd('rec')">⏺</button>
     <div class="bpm-ctrl">
+      <button class="bpm-btn tap-tempo" id="tapBtn" onclick="tapTempo()" title="Tap Tempo">TAP</button>
       <button class="bpm-btn" onclick="cmd('bpm',-1)">−</button>
       <div class="bpm-val" id="bpmDisp">128</div>
       <div class="bpm-lbl">BPM</div>
       <button class="bpm-btn" onclick="cmd('bpm',1)">+</button>
     </div>
+    <button class="tc metro-btn" id="metroBtn" onclick="toggleMetro()" title="מטרונום">🔔</button>
     <div class="pos-display" id="posDisp">1.1.1</div>
+    <div class="vu-wrap"><span class="vu-label">IN</span><div class="vu-meter" id="vuIn"></div></div>
+    <div class="vu-wrap"><span class="vu-label">OUT</span><div class="vu-meter" id="vuOut"></div></div>
     <div class="tb-flex"></div>
     <div class="my-controls" id="myControls" title="What you're sending to the host">
       <span class="my-ctrl-btn active" id="myMouse" onclick="toggleMyCtrl('mouse')">🖱 Mouse</span>
@@ -1142,9 +1166,12 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
     </div>
     <div class="my-ctrl-sep"></div>
     <div class="latency-pill" id="latPill">-- ms</div>
+    <span class="uptime-pill" id="uptimePill"></span>
     <button class="tc" id="pianoBtn" onclick="togglePiano()" title="Virtual Piano / MIDI">🎹</button>
     <button class="tc" onclick="toggleFullscreen()" title="מסך מלא">⛶</button>
+    <button class="tc" id="clipBtn" onclick="toggleClipBoard()" title="קליפים">📋</button>
     <button class="tc rec-btn-transport" id="recSessionBtn" onclick="toggleSessionRecord()">⏺ הקלט<span class="lock-icon" id="recLock">🔒</span></button>
+    <button class="tc share-audio-btn" onclick="doShareAudio()" title="שתף שמע בלבד">🔊</button>
     <button class="tc share-btn" onclick="doShare()">🖥 Share</button>
     <button class="tc cam-btn" onclick="doShareCam()">📷 Cam</button>
   </div>
@@ -1345,7 +1372,12 @@ const S = {
   role: 'participant', // 'participant' | 'listener'
   stageMode: false,
   stageHolder: null, // peerId of who is on stage
-  lastNudge: 0
+  lastNudge: 0,
+  tapTimes: [],
+  metro: false, metroInterval: null, metroBeat: 0,
+  clips: [],
+  connectedAt: null,
+  analyserIn: null, analyserOut: null, vuAnim: null
 };
 
 // (track defs removed — not connected to real DAW)
@@ -1698,6 +1730,7 @@ function applyRemote(msg, fromPeerId) {
 function handleMsg(msg) {
   switch (msg.type) {
     case 'session:welcome':
+      S.connectedAt = Date.now();
       for (const p of (msg.peers || [])) {
         S.peers.set(p.id, { name: p.name, color: p.color, instrument: p.instrument, dc: null, conn: null, latency: 0 });
       }
@@ -1785,6 +1818,15 @@ function handleMsg(msg) {
       if (msg.from !== S.cid) {
         const ta = document.getElementById('sharedNotes');
         if (ta) ta.value = msg.text;
+      }
+      break;
+    case 'metro:toggle':
+      if (msg.from !== S.cid) {
+        S.metro = msg.on;
+        if (S.metro) startMetronome(msg.bpm || S.bpm);
+        else stopMetronome();
+        const mb = document.getElementById('metroBtn');
+        if (mb) mb.classList.toggle('on', S.metro);
       }
       break;
   }
@@ -2028,13 +2070,20 @@ function toggleSettings() {
 
 async function doShare() {
   try {
-    const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+    const stream = await navigator.mediaDevices.getDisplayMedia({
+      video: true, audio: true,
+      selfBrowserSurface: 'include', surfaceSwitching: 'include', systemAudio: 'include'
+    });
     toast('Sharing screen…', 'g');
+    const vid = document.getElementById('mainVideo');
+    const empty = document.getElementById('mainEmpty');
+    if (vid) { vid.srcObject = stream; vid.classList.add('active'); vid.muted = true; }
+    if (empty) empty.style.display = 'none';
+    initVU(stream, 'in');
     for (const [, p] of S.peers) {
       if (p.conn) stream.getTracks().forEach(t => p.conn.addTrack(t, stream));
-      // onnegotiationneeded fires automatically after addTrack and handles re-offer
     }
-    stream.getVideoTracks()[0].onended = () => toast('Screen share ended', '');
+    stream.getVideoTracks()[0].onended = () => { toast('Screen share ended', ''); closeRv(); stopVU('in'); };
   } catch(e) { toast('Share cancelled', ''); }
 }
 
@@ -2055,6 +2104,21 @@ async function doShareCam() {
   } catch(e) { toast('המצלמה לא זמינה או שנדחתה', 'r'); }
 }
 
+async function doShareAudio() {
+  try {
+    const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true, systemAudio: 'include' });
+    const vt = stream.getVideoTracks()[0];
+    if (vt) { stream.removeTrack(vt); vt.stop(); }
+    if (stream.getAudioTracks().length === 0) { toast('לא נמצא אודיו', 'r'); return; }
+    toast('משתף שמע בלבד…', 'g');
+    initVU(stream, 'in');
+    for (const [, p] of S.peers) {
+      if (p.conn) stream.getAudioTracks().forEach(t => p.conn.addTrack(t, stream));
+    }
+    stream.getAudioTracks()[0].onended = () => { toast('שיתוף השמע הסתיים', ''); stopVU('in'); };
+  } catch(e) { toast('שיתוף שמע בוטל', ''); }
+}
+
 function showRemoteStream(stream, peerId) {
   const vid   = document.getElementById('mainVideo');
   const empty = document.getElementById('mainEmpty');
@@ -2064,7 +2128,8 @@ function showRemoteStream(stream, peerId) {
   if (empty) empty.style.display = 'none';
   const p = S.peers.get(peerId);
   toast((p?.name || 'Peer') + ' is sharing screen', 'g');
-  stream.getTracks().forEach(t => { t.onended = () => closeRv(); });
+  initVU(stream, 'out');
+  stream.getTracks().forEach(t => { t.onended = () => { closeRv(); stopVU('out'); }; });
 }
 
 function closeRv() {
@@ -2241,6 +2306,12 @@ function startTimer() {
   TIMER.interval = setInterval(() => {
     TIMER.seconds++;
     updateTimerDisplay();
+    if (S.connectedAt) {
+      const secs = Math.floor((Date.now() - S.connectedAt) / 1000);
+      const h = Math.floor(secs / 3600); const m = Math.floor((secs % 3600) / 60);
+      const up = document.getElementById('uptimePill');
+      if (up) up.textContent = (h ? h + 'h ' : '') + m + 'm';
+    }
     const remaining = FREE_LIMIT_SECS - TIMER.seconds;
     if (!isPremium() && remaining === 300 && !TIMER.warned) {
       TIMER.warned = true;
@@ -2284,6 +2355,9 @@ function toggleSessionRecord() {
     sessionRecorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
     sessionRecorder.onstop = () => {
       lastRecBlob = new Blob(chunks, { type: 'video/webm' });
+      S.clips.push({ blob: lastRecBlob, name: 'clip-' + new Date().toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit'}), ts: Date.now() });
+      if (S.clips.length > 10) S.clips.shift();
+      renderClips();
       showShareRecModal();
     };
     sessionRecorder.start(1000);
@@ -2368,10 +2442,18 @@ function initTheme() {
   if (t2) t2.textContent = icon;
 }
 
+// ── Shared AudioContext ───────────────────────────────────
+let _audioCtx = null;
+function getAudioCtx() {
+  if (!_audioCtx) _audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  if (_audioCtx.state === 'suspended') _audioCtx.resume();
+  return _audioCtx;
+}
+
 // ── Sound effects ─────────────────────────────────────────
 function playTone(freq, dur, type) {
   try {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const ctx = getAudioCtx();
     const osc = ctx.createOscillator(); const gain = ctx.createGain();
     osc.type = type || 'sine'; osc.frequency.value = freq;
     gain.gain.setValueAtTime(0.12, ctx.currentTime);
@@ -2382,6 +2464,124 @@ function playTone(freq, dur, type) {
 }
 function playJoinSound() { playTone(880, .12); setTimeout(() => playTone(1108, .12), 80); }
 function playLeaveSound() { playTone(660, .18, 'triangle'); }
+
+// ── Tap Tempo ────────────────────────────────────────────
+function tapTempo() {
+  const now = Date.now();
+  if (S.tapTimes.length && now - S.tapTimes[S.tapTimes.length - 1] > 2000) S.tapTimes = [];
+  S.tapTimes.push(now);
+  if (S.tapTimes.length >= 2) {
+    let sum = 0;
+    for (let i = 1; i < S.tapTimes.length; i++) sum += S.tapTimes[i] - S.tapTimes[i - 1];
+    const avg = sum / (S.tapTimes.length - 1);
+    const bpm = Math.round(Math.max(40, Math.min(300, 60000 / avg)));
+    S.bpm = bpm;
+    const disp = document.getElementById('bpmDisp');
+    if (disp) disp.textContent = bpm;
+    broadcast({ type: 'daw:state', action: 'bpm', bpm, from: S.cid });
+    send({ type: 'daw:state', action: 'bpm', bpm, from: S.cid });
+    if (S.metro) { stopMetronome(); startMetronome(bpm); }
+  }
+  if (S.tapTimes.length > 8) S.tapTimes = S.tapTimes.slice(-8);
+  const btn = document.getElementById('tapBtn');
+  if (btn) { btn.style.color = 'var(--accent)'; setTimeout(() => btn.style.color = '', 100); }
+}
+
+// ── Metronome ────────────────────────────────────────────
+function toggleMetro() {
+  S.metro = !S.metro;
+  const btn = document.getElementById('metroBtn');
+  if (btn) btn.classList.toggle('on', S.metro);
+  if (S.metro) startMetronome(S.bpm);
+  else stopMetronome();
+  broadcast({ type: 'metro:toggle', on: S.metro, bpm: S.bpm, from: S.cid });
+  send({ type: 'metro:toggle', on: S.metro, bpm: S.bpm, from: S.cid });
+}
+function startMetronome(bpm) {
+  stopMetronome();
+  S.metroBeat = 0;
+  metroBeat();
+  S.metroInterval = setInterval(metroBeat, 60000 / bpm);
+}
+function stopMetronome() {
+  if (S.metroInterval) { clearInterval(S.metroInterval); S.metroInterval = null; }
+}
+function metroBeat() {
+  const ctx = getAudioCtx();
+  const freq = S.metroBeat === 0 ? 1000 : 800;
+  const osc = ctx.createOscillator(); const g = ctx.createGain();
+  osc.type = 'square'; osc.frequency.value = freq;
+  g.gain.setValueAtTime(0.08, ctx.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.03);
+  osc.connect(g); g.connect(ctx.destination);
+  osc.start(); osc.stop(ctx.currentTime + 0.03);
+  S.metroBeat = (S.metroBeat + 1) % 4;
+}
+
+// ── VU Meter ─────────────────────────────────────────────
+function initVU(stream, type) {
+  const ctx = getAudioCtx();
+  const analyser = ctx.createAnalyser();
+  analyser.fftSize = 64;
+  try {
+    const src = ctx.createMediaStreamSource(stream);
+    src.connect(analyser);
+  } catch(e) { return; }
+  if (type === 'in') S.analyserIn = analyser;
+  else S.analyserOut = analyser;
+  const el = document.getElementById(type === 'in' ? 'vuIn' : 'vuOut');
+  if (el && !el.children.length) {
+    el.innerHTML = Array(8).fill('<div class="vu-bar"></div>').join('');
+  }
+  if (!S.vuAnim) S.vuAnim = requestAnimationFrame(updateVU);
+}
+function stopVU(type) {
+  if (type === 'in') S.analyserIn = null;
+  else S.analyserOut = null;
+  const el = document.getElementById(type === 'in' ? 'vuIn' : 'vuOut');
+  if (el) Array.from(el.children).forEach(b => b.style.height = '2px');
+  if (!S.analyserIn && !S.analyserOut && S.vuAnim) { cancelAnimationFrame(S.vuAnim); S.vuAnim = null; }
+}
+function updateVU() {
+  drawVUBars(S.analyserIn, 'vuIn');
+  drawVUBars(S.analyserOut, 'vuOut');
+  S.vuAnim = requestAnimationFrame(updateVU);
+}
+function drawVUBars(analyser, elId) {
+  const el = document.getElementById(elId);
+  if (!analyser || !el || !el.children.length) return;
+  const data = new Uint8Array(analyser.frequencyBinCount);
+  analyser.getByteFrequencyData(data);
+  const bars = el.children;
+  const step = Math.floor(data.length / bars.length);
+  for (let i = 0; i < bars.length; i++) {
+    let val = 0;
+    for (let j = 0; j < step; j++) val += data[i * step + j];
+    val = val / step / 255;
+    bars[i].style.height = Math.max(2, val * 24) + 'px';
+    bars[i].className = 'vu-bar' + (val > 0.95 ? ' clip' : val > 0.75 ? ' warn' : '');
+  }
+}
+
+// ── Clip Board ───────────────────────────────────────────
+function toggleClipBoard() {
+  const p = document.getElementById('clipPanel');
+  if (!p) return;
+  p.style.display = p.style.display === 'block' ? 'none' : 'block';
+  const btn = document.getElementById('clipBtn');
+  if (btn) btn.style.background = p.style.display === 'block' ? 'var(--accentD)' : '';
+  renderClips();
+}
+function renderClips() {
+  const el = document.getElementById('clipPanel');
+  if (!el) return;
+  if (S.clips.length === 0) { el.innerHTML = '<div style="font-size:12px;color:var(--dim);text-align:center;padding:12px" dir="rtl">אין קליפים עדיין. הקלט סשן כדי ליצור קליפ.</div>'; return; }
+  el.innerHTML = S.clips.slice().reverse().map((c, i) => {
+    const url = URL.createObjectURL(c.blob);
+    const size = (c.blob.size / 1024 / 1024).toFixed(1) + 'MB';
+    return '<div class="clip-card"><span class="clip-name">🎵 ' + esc(c.name) + ' (' + size + ')</span><a class="clip-dl" href="' + url + '" download="' + c.name + '.webm">⬇</a></div>';
+  }).join('');
+}
 
 // ── DND mode ──────────────────────────────────────────────
 function toggleDND() {
@@ -2402,7 +2602,7 @@ function toggleFullscreen() {
 function nudgePeer(peerId) {
   if (Date.now() - S.lastNudge < 10000) { toast('חכה כמה שניות', 'r'); return; }
   S.lastNudge = Date.now();
-  PeerMesh.broadcast({ type: 'nudge', targetId: peerId, from: S.cid, fromName: S.name });
+  broadcast({ type: 'nudge', targetId: peerId, from: S.cid, fromName: S.name });
   send({ type: 'nudge', targetId: peerId, from: S.cid, fromName: S.name });
   toast('נאדג נשלח!', 'g');
 }
@@ -2412,7 +2612,7 @@ function muteParticipant(peerId) {
   const peer = S.peers.get(peerId);
   if (!peer) return;
   peer.muted = !peer.muted;
-  PeerMesh.broadcast({ type: 'mute:command', targetId: peerId, muted: peer.muted, from: S.cid });
+  broadcast({ type: 'mute:command', targetId: peerId, muted: peer.muted, from: S.cid });
   send({ type: 'mute:command', targetId: peerId, muted: peer.muted });
   renderPeerList();
 }
@@ -2422,13 +2622,13 @@ function toggleStageMode() {
   if (S.peerNumber !== 1) { toast('רק המארח יכול לשלוט בבמה', 'r'); return; }
   S.stageMode = !S.stageMode;
   S.stageHolder = S.stageMode ? S.cid : null;
-  PeerMesh.broadcast({ type: 'stage:toggle', enabled: S.stageMode, stageHolder: S.stageHolder });
+  broadcast({ type: 'stage:toggle', enabled: S.stageMode, stageHolder: S.stageHolder });
   send({ type: 'stage:toggle', enabled: S.stageMode, stageHolder: S.stageHolder });
   renderPeerList();
 }
 function grantStage(peerId) {
   S.stageHolder = peerId;
-  PeerMesh.broadcast({ type: 'stage:grant', peerId });
+  broadcast({ type: 'stage:grant', peerId });
   send({ type: 'stage:grant', peerId });
   renderPeerList();
 }
@@ -2443,7 +2643,7 @@ function onNotesInput() {
   clearTimeout(notesDebounce);
   notesDebounce = setTimeout(() => {
     const text = document.getElementById('sharedNotes')?.value || '';
-    PeerMesh.broadcast({ type: 'notes:update', text, from: S.cid });
+    broadcast({ type: 'notes:update', text, from: S.cid });
     send({ type: 'notes:update', text, from: S.cid });
   }, 300);
 }
