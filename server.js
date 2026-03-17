@@ -735,9 +735,10 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 .bpm-lbl { font-size:10px; color:var(--mid); padding-right:8px; }
 .pos-display { font-family:var(--mono); font-size:13px; color:var(--mid); min-width:50px; }
 .latency-pill { background:var(--s1); border:1px solid var(--b1); border-radius:100px; padding:3px 10px; font-size:11px; font-family:var(--mono); color:var(--mid); }
-.share-btn { padding:0 14px; font-size:13px; font-family:var(--sans); white-space:nowrap; }
-.cam-btn { padding:0 14px; font-size:13px; font-family:var(--sans); white-space:nowrap; display:none; }
-@media (max-width: 768px) { .cam-btn { display:flex; } }
+.share-btn { width:auto; padding:0 14px; font-size:13px; font-family:var(--sans); white-space:nowrap; }
+.cam-btn { width:auto; padding:0 14px; font-size:13px; font-family:var(--sans); white-space:nowrap; }
+.share-audio-btn { width:auto; padding:0 10px; font-size:12px; font-family:var(--sans); white-space:nowrap; }
+.rec-btn-transport { width:auto; padding:0 10px; font-size:12px; font-family:var(--sans); white-space:nowrap; }
 .tap-tempo { font-size:10px; font-weight:700; }
 .tap-tempo:active { background:var(--accentD); color:var(--accent); }
 .metro-btn.on { background:var(--green); border-color:var(--green); color:#fff; }
@@ -752,7 +753,6 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 .clip-card { display:flex; align-items:center; gap:8px; padding:6px 8px; background:var(--bg); border:1px solid var(--b1); border-radius:6px; margin-bottom:4px; }
 .clip-name { flex:1; font-size:12px; font-family:var(--mono); color:var(--txt); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .clip-dl { font-size:12px; color:var(--accent); cursor:pointer; text-decoration:none; }
-.share-audio-btn { padding:0 10px; font-size:12px; font-family:var(--sans); white-space:nowrap; }
 
 /* ── Settings panel ──────────────────────────────────── */
 #settingsOverlay { position:fixed; inset:0; background:rgba(0,0,0,.4); z-index:200; display:flex; justify-content:flex-end; }
@@ -920,24 +920,28 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
   .stream-container.grid-mode .stream-thumbs { height:auto; flex-direction:row; flex-wrap:wrap; overflow-y:auto; overflow-x:hidden; }
   .stream-container.grid-mode .stream-thumb { flex:1 1 100%; min-width:unset; height:auto; flex-shrink:1; aspect-ratio:16/9; }
 
-  .transport-bar { height:auto; min-height:52px; flex-wrap:wrap; gap:4px; padding:6px 8px; position:relative; }
-  .bpm-ctrl { order:10; }
-  .pos-display { order:11; }
-  .my-controls { order:20; width:100%; justify-content:center; padding-top:4px; }
+  .transport-bar { height:auto; min-height:40px; flex-wrap:wrap; gap:2px; padding:4px 6px; position:relative; }
+  .transport-bar .tc { width:28px; height:28px; font-size:12px; }
+  .bpm-ctrl { order:10; font-size:11px; }
+  .bpm-ctrl .bpm-val { font-size:14px; }
+  .pos-display { order:11; font-size:11px; }
+  .my-controls { order:20; width:100%; justify-content:center; padding-top:2px; gap:4px; }
+  .my-controls .my-ctrl-btn { font-size:11px; padding:3px 8px; }
   .my-ctrl-sep { display:none; }
-  .latency-pill { order:12; }
+  .latency-pill { order:12; font-size:10px; padding:2px 6px; }
 
-  #pianoWrap { bottom:104px; }
+  #pianoWrap { bottom:90px; }
   .piano-keys { padding:4px 8px 0; }
   .pk-w { width:26px; height:60px; }
   .pk-b { width:18px; height:38px; margin:0 -9px; }
 
-  /* Mobile: hide controls not usable on phone */
-  .share-btn { display:none; }
+  /* Mobile: compact action buttons, hide non-essential */
   #pianoBtn { display:none; }
   .vu-wrap { display:none; }
-  .share-audio-btn { display:none; }
   .uptime-pill { display:none; }
+  .transport-bar .share-btn, .transport-bar .cam-btn { width:auto; padding:0 8px; font-size:11px; height:28px; }
+  .transport-bar .share-audio-btn { width:auto; padding:0 6px; font-size:11px; height:28px; }
+  .transport-bar .rec-btn-transport { width:auto; padding:0 6px; font-size:10px; height:28px; }
   .clip-panel { width:100%; right:0; left:0; bottom:52px; border-radius:12px 12px 0 0; }
 
   .lobby-wrap { padding:20px 12px; }
