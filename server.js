@@ -3,6 +3,24 @@ const https = require('https');
 const os    = require('os');
 const crypto = require('crypto');
 
+// Optional: robotjs for remote mouse/keyboard control
+let robot = null;
+try { robot = require('robotjs'); } catch(e) { /* robotjs not available — remote control will be limited */ }
+
+function mapKeyToRobot(webKey) {
+  const map = {
+    ' ': 'space', Enter: 'enter', Escape: 'escape', Tab: 'tab',
+    Backspace: 'backspace', Delete: 'delete',
+    ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right',
+    Home: 'home', End: 'end', PageUp: 'pageup', PageDown: 'pagedown',
+    F1:'f1',F2:'f2',F3:'f3',F4:'f4',F5:'f5',F6:'f6',F7:'f7',F8:'f8',F9:'f9',F10:'f10',F11:'f11',F12:'f12',
+    Control: 'control', Shift: 'shift', Alt: 'alt', Meta: 'command',
+  };
+  if (map[webKey]) return map[webKey];
+  if (webKey.length === 1) return webKey.toLowerCase();
+  return null;
+}
+
 // ── Morning (Green Invoice) API ────────────────────────────
 const MORNING_API_ID     = process.env.MORNING_API_ID     || '';
 const MORNING_API_SECRET = process.env.MORNING_API_SECRET || '';
@@ -371,6 +389,27 @@ const server = http.createServer(async (req, res) => {
     return json(res, { ok: true });
   }
 
+  // ── Local input execution (robotjs) ──
+  if (path === '/api/local-input' && req.method === 'POST') {
+    const data = await body(req);
+    if (!robot) return json(res, { ok: false, error: 'robotjs not available' });
+    try {
+      const screenSize = robot.getScreenSize();
+      if (data.input === 'mouse') {
+        const x = Math.round(data.x * screenSize.width);
+        const y = Math.round(data.y * screenSize.height);
+        if (data.action === 'move') robot.moveMouse(x, y);
+        else if (data.action === 'click') { robot.moveMouse(x, y); robot.mouseClick(data.button === 2 ? 'right' : 'left'); }
+      } else if (data.input === 'keyboard') {
+        if (data.action === 'keydown') {
+          const key = mapKeyToRobot(data.key);
+          if (key) robot.keyTap(key);
+        }
+      }
+      return json(res, { ok: true });
+    } catch(e) { return json(res, { ok: false, error: e.message }); }
+  }
+
   // ── Long-poll ──
   if (path === '/api/poll') {
     const cid = url.searchParams.get('cid');
@@ -737,6 +776,7 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 .latency-pill { background:var(--s1); border:1px solid var(--b1); border-radius:100px; padding:3px 10px; font-size:11px; font-family:var(--mono); color:var(--mid); }
 .share-btn { width:auto; padding:0 14px; font-size:13px; font-family:var(--sans); white-space:nowrap; }
 .cam-btn { width:auto; padding:0 14px; font-size:13px; font-family:var(--sans); white-space:nowrap; }
+.active-share { border:2px solid var(--accent) !important; background:rgba(0,255,136,.15) !important; }
 .share-audio-btn { width:auto; padding:0 10px; font-size:12px; font-family:var(--sans); white-space:nowrap; }
 .rec-btn-transport { width:auto; padding:0 10px; font-size:12px; font-family:var(--sans); white-space:nowrap; }
 .tap-tempo { font-size:10px; font-weight:700; }
@@ -1203,6 +1243,7 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
     <button class="tc" id="clipBtn" onclick="toggleClipBoard()" title="קליפים">📋</button>
     <button class="tc rec-btn-transport" id="recSessionBtn" onclick="toggleSessionRecord()">⏺ הקלט<span class="lock-icon" id="recLock">🔒</span></button>
     <button class="tc" id="viewToggle" onclick="toggleStreamView()" title="תצוגת גריד">⊞</button>
+    <button class="tc" id="muteBtn" onclick="toggleSelfMute()" title="השתק/בטל השתקה">🎤</button>
     <button class="tc share-audio-btn" onclick="doShareAudio()" title="שתף שמע בלבד">🔊</button>
     <button class="tc share-btn" onclick="doShare()">🖥 Share</button>
     <button class="tc cam-btn" onclick="doShareCam()">📷 Cam</button>
@@ -1411,7 +1452,8 @@ const S = {
   connectedAt: null,
   analyserIn: null, analyserOut: null, vuAnim: null,
   streams: new Map(),    // peerId → { stream, type:'screen'|'camera'|'audio', name }
-  focusedStream: null    // peerId of focused stream in thumbnail mode
+  focusedStream: null,   // peerId of focused stream in thumbnail mode
+  selfMuted: false
 };
 
 // (track defs removed — not connected to real DAW)
@@ -1759,6 +1801,7 @@ function broadcast(msg, skipPeer) {
 function applyRemote(msg, fromPeerId) {
   if (msg.type === 'daw:state') applyDAW(msg, fromPeerId);
   if (msg.type === 'chat:msg') appendChat(msg.name || 'Peer', msg.text, msg.color);
+  if (msg.type === 'remote:input') handleMsg(msg);
 }
 
 // ── Message router ────────────────────────────────────────
@@ -1865,6 +1908,22 @@ function handleMsg(msg) {
         if (mb) mb.classList.toggle('on', S.metro);
       }
       break;
+    case 'remote:input': {
+      // Only the host (peerNumber 1) processes remote inputs
+      if (S.peerNumber !== 1) break;
+      if (msg.from === S.cid) break; // ignore own inputs
+      const rPeer = S.peers.get(msg.from);
+      if (msg.input === 'mouse' && !rPeer?.perms?.mouse) break;
+      if (msg.input === 'keyboard' && !rPeer?.perms?.keyboard) break;
+      // Forward to server's local execution endpoint
+      fetch(SERVER + '/api/local-input', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(msg)
+      }).catch(() => {});
+      if (msg.action === 'click') toast('🖱 ' + (msg.fromName||'Peer') + ' clicked', '', 1000);
+      break;
+    }
   }
 }
 
@@ -2122,15 +2181,28 @@ async function doShare() {
 }
 
 async function doShareCam() {
+  const camKey = S.cid + ':cam';
+  const existing = S.streams.get(camKey);
+  if (existing) {
+    existing.stream.getTracks().forEach(t => t.stop());
+    S.streams.delete(camKey);
+    renderStreams();
+    const cb = document.querySelector('.cam-btn');
+    if (cb) cb.classList.remove('active-share');
+    toast('מצלמה כבויה', '');
+    return;
+  }
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
     toast('מצלמה משותפת!', 'g');
-    S.streams.set(S.cid + ':cam', { stream, type: 'camera', name: S.name + ' 📷' });
+    S.streams.set(camKey, { stream, type: 'camera', name: S.name + ' 📷' });
     renderStreams();
+    const cb = document.querySelector('.cam-btn');
+    if (cb) cb.classList.add('active-share');
     for (const [, p] of S.peers) {
       if (p.conn) stream.getTracks().forEach(t => p.conn.addTrack(t, stream));
     }
-    stream.getVideoTracks()[0].onended = () => { toast('המצלמה נעצרה', ''); S.streams.delete(S.cid + ':cam'); renderStreams(); };
+    stream.getVideoTracks()[0].onended = () => { toast('המצלמה נעצרה', ''); S.streams.delete(camKey); renderStreams(); const cb = document.querySelector('.cam-btn'); if (cb) cb.classList.remove('active-share'); };
   } catch(e) { toast('המצלמה לא זמינה או שנדחתה', 'r'); }
 }
 
@@ -2199,6 +2271,8 @@ function createStreamEl(peerId, stream, name) {
   return wrap;
 }
 
+function throttle(fn, ms) { let last = 0; return function(...a) { const now = Date.now(); if (now - last >= ms) { last = now; fn.apply(this, a); } }; }
+
 function renderStreams() {
   const mainEl = document.getElementById('streamMain');
   const thumbsEl = document.getElementById('streamThumbs');
@@ -2229,7 +2303,38 @@ function renderStreams() {
     vid.srcObject = focused.stream;
     vid.autoplay = true; vid.playsInline = true;
     vid.muted = S.focusedStream.startsWith(S.cid);
+    vid.tabIndex = 0; // make focusable for keyboard events
     mainEl.appendChild(vid);
+
+    // Remote control event listeners
+    vid.addEventListener('mousedown', (e) => {
+      if (!MY.mouse) return;
+      const rect = vid.getBoundingClientRect();
+      broadcast({ type:'remote:input', input:'mouse', action:'click',
+        x: (e.clientX - rect.left) / rect.width,
+        y: (e.clientY - rect.top) / rect.height,
+        button: e.button, from: S.cid, fromName: S.name });
+    });
+    vid.addEventListener('mousemove', throttle((e) => {
+      if (!MY.mouse) return;
+      const rect = vid.getBoundingClientRect();
+      broadcast({ type:'remote:input', input:'mouse', action:'move',
+        x: (e.clientX - rect.left) / rect.width,
+        y: (e.clientY - rect.top) / rect.height,
+        from: S.cid });
+    }, 50));
+    vid.addEventListener('keydown', (e) => {
+      if (!MY.keyboard) return;
+      e.preventDefault();
+      broadcast({ type:'remote:input', input:'keyboard', action:'keydown',
+        key: e.key, code: e.code, from: S.cid, fromName: S.name });
+    });
+    vid.addEventListener('keyup', (e) => {
+      if (!MY.keyboard) return;
+      broadcast({ type:'remote:input', input:'keyboard', action:'keyup',
+        key: e.key, code: e.code, from: S.cid });
+    });
+
     const lbl = document.createElement('div');
     lbl.className = 'stream-label';
     lbl.textContent = focused.name;
@@ -2257,6 +2362,28 @@ function toggleStreamView() {
   const btn = document.getElementById('viewToggle');
   if (btn) btn.textContent = c.classList.contains('grid-mode') ? '⊡' : '⊞';
   renderStreams();
+}
+
+function toggleSelfMute() {
+  S.selfMuted = !S.selfMuted;
+  for (const [key, entry] of S.streams) {
+    if (key.startsWith(S.cid)) {
+      entry.stream.getAudioTracks().forEach(t => { t.enabled = !S.selfMuted; });
+    }
+  }
+  for (const [, p] of S.peers) {
+    if (p.conn) {
+      p.conn.getSenders().forEach(sender => {
+        if (sender.track?.kind === 'audio') sender.track.enabled = !S.selfMuted;
+      });
+    }
+  }
+  const btn = document.getElementById('muteBtn');
+  if (btn) {
+    btn.textContent = S.selfMuted ? '🔇' : '🎤';
+    btn.classList.toggle('active-share', S.selfMuted);
+  }
+  toast(S.selfMuted ? 'מושתק' : 'מיקרופון פעיל', S.selfMuted ? '' : 'g');
 }
 
 // ══════════════════════════════════════════════════════════
