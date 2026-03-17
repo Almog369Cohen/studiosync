@@ -1554,6 +1554,7 @@ async function remoteJoin() {
 }
 
 function enterSession() {
+  S.connectedAt = Date.now();
   document.getElementById('codeDisplay').textContent = S.code;
   document.getElementById('spCode').textContent = S.code;
   updateBPM();
