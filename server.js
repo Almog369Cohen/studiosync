@@ -896,7 +896,7 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
   .workspace { flex-direction:column; }
   .participant-panel { width:100%; height:auto; max-height:180px; border-left:none; border-top:1px solid var(--b1); }
 
-  .transport-bar { height:auto; min-height:52px; flex-wrap:wrap; gap:4px; padding:6px 8px; }
+  .transport-bar { height:auto; min-height:52px; flex-wrap:wrap; gap:4px; padding:6px 8px; position:relative; }
   .bpm-ctrl { order:10; }
   .pos-display { order:11; }
   .my-controls { order:20; width:100%; justify-content:center; padding-top:4px; }
