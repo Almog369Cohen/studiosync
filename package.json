@@ -21,7 +21,8 @@
     "url": "https://github.com/Almog369Cohen/studiosync/issues"
   },
   "homepage": "https://github.com/Almog369Cohen/studiosync#readme",
-  "dependencies": {
+  "dependencies": {},
+  "optionalDependencies": {
     "robotjs": "^0.7.0"
   }
 }
