@@ -401,9 +401,10 @@ const server = http.createServer(async (req, res) => {
         if (data.action === 'move') robot.moveMouse(x, y);
         else if (data.action === 'click') { robot.moveMouse(x, y); robot.mouseClick(data.button === 2 ? 'right' : 'left'); }
       } else if (data.input === 'keyboard') {
-        if (data.action === 'keydown') {
-          const key = mapKeyToRobot(data.key);
-          if (key) robot.keyTap(key);
+        const key = mapKeyToRobot(data.key);
+        if (key) {
+          if (data.action === 'keydown') robot.keyToggle(key, 'down');
+          else if (data.action === 'keyup') robot.keyToggle(key, 'up');
         }
       }
       return json(res, { ok: true });
@@ -1691,6 +1692,11 @@ function enterSession() {
 }
 
 function leaveSession() {
+  // Notify server immediately so peers see instant disconnect
+  if (S.cid) {
+    send({ type: 'peer:left', peerId: S.cid, name: S.name });
+    broadcast({ type: 'peer:left', peerId: S.cid, name: S.name });
+  }
   saveHistory();
   stopTimer();
   if (sessionRecorder && sessionRecorder.state === 'recording') sessionRecorder.stop();
@@ -1832,12 +1838,12 @@ function handleMsg(msg) {
     case 'session:welcome':
       S.connectedAt = Date.now();
       for (const p of (msg.peers || [])) {
-        S.peers.set(p.id, { name: p.name, color: p.color, instrument: p.instrument, dc: null, conn: null, latency: 0, perms: { mouse:true, keyboard:true, midi:true } });
+        S.peers.set(p.id, { name: p.name, color: p.color, instrument: p.instrument, dc: null, conn: null, latency: 0, perms: { mouse:false, keyboard:false, midi:true } });
       }
       updatePeerAvatars(); renderPeerList();
       break;
     case 'peer:joined':
-      S.peers.set(msg.peerId, { name: msg.name, color: msg.color, instrument: msg.instrument, dc: null, conn: null, latency: 0, role: msg.role || 'participant', muted: false, perms: { mouse:true, keyboard:true, midi:true } });
+      S.peers.set(msg.peerId, { name: msg.name, color: msg.color, instrument: msg.instrument, dc: null, conn: null, latency: 0, role: msg.role || 'participant', muted: false, perms: { mouse:false, keyboard:false, midi:true } });
       updatePeerAvatars(); renderPeerList();
       if (!S.dnd) { playJoinSound(); toast(msg.name + ' הצטרף/ה', 'g'); }
       break;
@@ -1853,7 +1859,7 @@ function handleMsg(msg) {
       break;
     }
     case 'webrtc:create-offer':
-      S.peers.set(msg.peerId, { name: msg.name || '', color: msg.color || PEER_COLORS[0], instrument: msg.instrument || '', dc: null, conn: null, latency: 0, perms: { mouse:true, keyboard:true, midi:true } });
+      S.peers.set(msg.peerId, { name: msg.name || '', color: msg.color || PEER_COLORS[0], instrument: msg.instrument || '', dc: null, conn: null, latency: 0, perms: { mouse:false, keyboard:false, midi:true } });
       PeerMesh.createOffer(msg.peerId).catch(e => dlog('WebRTC offer err: ' + e.message));
       break;
     case 'webrtc:offer':
@@ -2973,7 +2979,6 @@ function muteParticipant(peerId) {
   if (!peer) return;
   peer.muted = !peer.muted;
   broadcast({ type: 'mute:command', targetId: peerId, muted: peer.muted, from: S.cid });
-  send({ type: 'mute:command', targetId: peerId, muted: peer.muted });
   renderPeerList();
 }
 
