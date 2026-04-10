@@ -766,15 +766,6 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 .transport-bar { height:56px; border-top:1px solid var(--b1); display:flex; align-items:center; gap:8px; padding:0 16px; background:var(--bg); flex-shrink:0; position:fixed; bottom:0; left:0; right:0; z-index:50; }
 .tc { width:34px; height:34px; border:1.5px solid var(--b1); border-radius:6px; background:none; cursor:pointer; font-size:14px; display:flex; align-items:center; justify-content:center; color:var(--txt); }
 .tc:hover { border-color:var(--accent); color:var(--accent); }
-.play-btn { background:var(--accent); border-color:var(--accent); color:#fff; }
-.play-btn:hover { opacity:.9; }
-.play-btn.playing { background:var(--green); border-color:var(--green); }
-.bpm-ctrl { display:flex; align-items:center; gap:2px; background:var(--s1); border:1px solid var(--b1); border-radius:6px; overflow:hidden; }
-.bpm-btn { width:24px; height:34px; border:none; background:none; cursor:pointer; color:var(--mid); font-size:16px; font-family:var(--sans); }
-.bpm-btn:hover { color:var(--accent); background:var(--accentH); }
-.bpm-val { font-size:16px; font-weight:700; color:var(--hi); min-width:36px; text-align:center; font-family:var(--mono); }
-.bpm-lbl { font-size:10px; color:var(--mid); padding-right:8px; }
-.pos-display { font-family:var(--mono); font-size:13px; color:var(--mid); min-width:50px; }
 .latency-pill { background:var(--s1); border:1px solid var(--b1); border-radius:100px; padding:3px 10px; font-size:11px; font-family:var(--mono); color:var(--mid); }
 .share-btn { width:auto; padding:0 14px; font-size:13px; font-family:var(--sans); white-space:nowrap; }
 .cam-btn { width:auto; padding:0 14px; font-size:13px; font-family:var(--sans); white-space:nowrap; }
@@ -785,22 +776,10 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 .active-tool { border-color:var(--accent) !important; color:var(--accent) !important; }
 .tb-group-sep { width:1px; height:24px; background:var(--b1); margin:0 4px; flex-shrink:0; }
 .is-guest .host-only { display:none !important; }
+.guest-only { display:none !important; }
+.is-guest .guest-only { display:flex !important; }
 .share-audio-btn { width:auto; padding:0 10px; font-size:12px; font-family:var(--sans); white-space:nowrap; }
 .rec-btn-transport { width:auto; padding:0 10px; font-size:12px; font-family:var(--sans); white-space:nowrap; }
-.tap-tempo { font-size:10px; font-weight:700; }
-.tap-tempo:active { background:var(--accentD); color:var(--accent); }
-.metro-btn.on { background:var(--green); border-color:var(--green); color:#fff; }
-.vu-wrap { display:flex; align-items:center; gap:4px; background:var(--s1); border:1px solid var(--b1); border-radius:6px; padding:0 6px; height:34px; }
-.vu-label { font-size:9px; color:var(--dim); }
-.vu-meter { display:flex; align-items:flex-end; gap:1px; height:24px; }
-.vu-bar { width:3px; border-radius:1px; background:var(--green); transition:height 60ms linear; min-height:2px; }
-.vu-bar.warn { background:#f79009; }
-.vu-bar.clip { background:var(--red); }
-.uptime-pill { font-size:10px; color:var(--dim); font-family:var(--mono); }
-.clip-panel { position:fixed; bottom:60px; right:16px; width:280px; max-height:240px; overflow-y:auto; background:var(--s1); border:1px solid var(--b1); border-radius:var(--radiusL); padding:8px; display:none; z-index:51; }
-.clip-card { display:flex; align-items:center; gap:8px; padding:6px 8px; background:var(--bg); border:1px solid var(--b1); border-radius:6px; margin-bottom:4px; }
-.clip-name { flex:1; font-size:12px; font-family:var(--mono); color:var(--txt); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.clip-dl { font-size:12px; color:var(--accent); cursor:pointer; text-decoration:none; }
 
 /* ── Settings panel ──────────────────────────────────── */
 #settingsOverlay { position:fixed; inset:0; background:rgba(0,0,0,.4); z-index:200; display:flex; justify-content:flex-end; }
@@ -970,9 +949,6 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 
   .transport-bar { height:auto; min-height:40px; flex-wrap:wrap; gap:2px; padding:4px 6px; position:relative; }
   .transport-bar .tc { width:28px; height:28px; font-size:12px; }
-  .bpm-ctrl { order:10; font-size:11px; }
-  .bpm-ctrl .bpm-val { font-size:14px; }
-  .pos-display { order:11; font-size:11px; }
   .my-controls { order:20; width:100%; justify-content:center; padding-top:2px; gap:4px; }
   .my-controls .my-ctrl-btn { font-size:11px; padding:3px 8px; }
   .tb-group-sep { display:none; }
@@ -983,14 +959,10 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
   .pk-w { width:26px; height:60px; }
   .pk-b { width:18px; height:38px; margin:0 -9px; }
 
-  /* Mobile: compact action buttons, hide non-essential */
-  #pianoBtn { display:none; }
-  .vu-wrap { display:none; }
-  .uptime-pill { display:none; }
+  /* Mobile: compact action buttons */
   .transport-bar .share-btn, .transport-bar .cam-btn { width:auto; padding:0 8px; font-size:11px; height:28px; }
   .transport-bar .share-audio-btn { width:auto; padding:0 6px; font-size:11px; height:28px; }
   .transport-bar .rec-btn-transport { width:auto; padding:0 6px; font-size:10px; height:28px; }
-  .clip-panel { width:100%; right:0; left:0; bottom:52px; border-radius:12px 12px 0 0; }
 
   .lobby-wrap { padding:20px 12px; }
 }
@@ -1221,48 +1193,26 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
     </div>
   </div>
 
-  <div id="clipPanel" class="clip-panel"></div>
   <div class="transport-bar">
-    <!-- DAW Transport — host only -->
-    <button class="tc host-only" onclick="cmd('stop')" title="עצור">⏹</button>
-    <button class="tc play-btn host-only" id="playBtn" onclick="cmd('play')" title="נגן/השהה">▶</button>
-    <button class="tc host-only" id="recBtn" onclick="cmd('rec')" title="הקלט DAW">⏺</button>
-    <div class="bpm-ctrl host-only">
-      <button class="bpm-btn tap-tempo" id="tapBtn" onclick="tapTempo()" title="Tap Tempo">TAP</button>
-      <button class="bpm-btn" onclick="cmd('bpm',-1)">−</button>
-      <div class="bpm-val" id="bpmDisp">128</div>
-      <div class="bpm-lbl">BPM</div>
-      <button class="bpm-btn" onclick="cmd('bpm',1)">+</button>
-    </div>
-    <button class="tc metro-btn host-only" id="metroBtn" onclick="toggleMetro()" title="מטרונום">🔔</button>
-    <div class="pos-display host-only" id="posDisp">1.1.1</div>
-    <div class="vu-wrap host-only"><span class="vu-label">IN</span><div class="vu-meter" id="vuIn"></div></div>
-    <div class="vu-wrap host-only"><span class="vu-label">OUT</span><div class="vu-meter" id="vuOut"></div></div>
-    <div class="tb-group-sep host-only"></div>
-    <div class="tb-flex"></div>
-    <!-- Mute + Sharing — everyone -->
+    <!-- Mute — everyone -->
     <button class="tc" id="muteBtn" onclick="toggleSelfMute()" title="השתק">🎤</button>
     <div class="tb-group-sep"></div>
+    <!-- Sharing — everyone -->
     <button class="tc share-btn" id="shareBtn" onclick="doShare()">🖥 שתף מסך</button>
     <button class="tc cam-btn" id="camBtn" onclick="doShareCam()">📷 מצלמה</button>
-    <button class="tc share-audio-btn" id="shareAudioBtn" onclick="doShareAudio()" title="שתף שמע בלבד">🔊 שתף שמע</button>
+    <button class="tc share-audio-btn host-only" id="shareAudioBtn" onclick="doShareAudio()" title="שתף שמע בלבד">🔊 שתף שמע</button>
     <div class="tb-group-sep"></div>
-    <!-- My Controls — what this peer sends -->
-    <div class="my-controls" id="myControls" title="מה אתה שולח למארח">
-      <span class="my-ctrl-btn active" id="myMouse" onclick="toggleMyCtrl('mouse')">🖱 עכבר</span>
-      <span class="my-ctrl-btn active" id="myKeys" onclick="toggleMyCtrl('keyboard')">⌨ מקלדת</span>
-      <span class="my-ctrl-btn active-g" id="myMidi" onclick="toggleMyCtrl('midi')">🎹 MIDI</span>
+    <!-- Remote Controls — guest only (host doesn't send remote:input to self) -->
+    <div class="my-controls guest-only" id="myControls" title="שליטה מרחוק">
+      <span class="my-ctrl-btn" id="myMouse" onclick="toggleMyCtrl('mouse')">🖱 עכבר</span>
+      <span class="my-ctrl-btn" id="myKeys" onclick="toggleMyCtrl('keyboard')">⌨ מקלדת</span>
     </div>
-    <div class="tb-group-sep"></div>
+    <div class="tb-flex"></div>
     <!-- Tools -->
-    <button class="tc host-only" id="pianoBtn" onclick="togglePiano()" title="פסנתר וירטואלי">🎹</button>
-    <button class="tc host-only" id="clipBtn" onclick="toggleClipBoard()" title="קליפים">📋</button>
     <button class="tc rec-btn-transport host-only" id="recSessionBtn" onclick="toggleSessionRecord()">⏺ הקלט<span class="lock-icon" id="recLock">🔒</span></button>
     <button class="tc" id="viewToggle" onclick="toggleStreamView()" title="תצוגת גריד">⊞</button>
     <button class="tc" id="fullscreenBtn" onclick="toggleFullscreen()" title="מסך מלא">⛶</button>
-    <div class="tb-group-sep"></div>
     <div class="latency-pill" id="latPill">-- ms</div>
-    <span class="uptime-pill" id="uptimePill"></span>
   </div>
 </div>
 
@@ -2498,7 +2448,7 @@ function toggleSelfMute() {
 // ══════════════════════════════════════════════════════════
 // My Controls — what THIS peer is sending
 // ══════════════════════════════════════════════════════════
-const MY = { mouse: true, keyboard: true, midi: true };
+const MY = { mouse: false, keyboard: false, midi: true };
 
 function toggleMyCtrl(key) {
   MY[key] = !MY[key];
