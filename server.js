@@ -983,8 +983,6 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
   <nav class="land-nav">
     <div class="brand">🎛 <span>Studio</span>Sync</div>
     <div style="flex:1"></div>
-    <button class="tb-btn" onclick="showHistory()">📋 היסטוריה</button>
-    <button class="tb-btn" onclick="openHelp()">? עזרה</button>
     <button class="tb-btn" id="themeToggleLand" onclick="toggleTheme()">🌙</button>
   </nav>
   <div class="hero" dir="rtl">
@@ -1019,38 +1017,7 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
     </div>
   </div>
 
-  <!-- Online Now -->
-  <div id="onlineSection" class="online-section" dir="rtl" style="display:none">
-    <div class="online-header">🟢 מחוברים עכשיו</div>
-    <div id="onlineList" class="online-list"></div>
-  </div>
 
-  <!-- Upcoming Scheduled Sessions -->
-  <div id="scheduleSection" class="schedule-section" dir="rtl" style="display:none">
-    <div class="schedule-header">📅 סשנים מתוכננים</div>
-    <div id="scheduleList" class="schedule-list"></div>
-    <button class="btn-ghost" style="margin-top:8px;font-size:13px" onclick="showScheduleModal()">+ תזמן סשן חדש</button>
-  </div>
-
-  <!-- Feature Voting -->
-  <div id="votingSection" class="voting-section" dir="rtl">
-    <div class="voting-header">🗳 הצביעו לפיצ׳ר הבא</div>
-    <div id="votingList" class="voting-list"></div>
-  </div>
-</div>
-
-<!-- Schedule Modal -->
-<div id="scheduleModal" class="modal-overlay" style="display:none" onclick="if(event.target===this)closeScheduleModal()">
-  <div class="modal-box" dir="rtl" style="max-width:360px">
-    <h3 style="margin:0 0 12px">📅 תזמן סשן</h3>
-    <input id="schedTitle" class="lob-input" placeholder="שם הסשן" dir="rtl" />
-    <input id="schedDate" class="lob-input" type="date" />
-    <input id="schedTime" class="lob-input" type="time" />
-    <div style="display:flex;gap:8px;margin-top:12px">
-      <button class="btn-accent" style="flex:1" onclick="addSchedule()">שמור</button>
-      <button class="btn-ghost" style="flex:1" onclick="closeScheduleModal()">ביטול</button>
-    </div>
-  </div>
 </div>
 
 <!-- LOBBY -->
@@ -1067,12 +1034,9 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
         </div>
       </div>
       <input id="createName" placeholder="השם שלך" class="lob-input" dir="rtl" />
-      <div class="color-label">בחר צבע</div>
-      <div class="color-picker" id="createColors"></div>
-      <div class="instr-label">כלי נגינה</div>
-      <div class="instr-grid" id="createInstrs"></div>
-      <input id="createPassword" placeholder="סיסמה (אופציונלי)" class="lob-input" dir="rtl" type="password" />
-      <button class="btn-accent btn-full" onclick="hostStart()">צור סשן ←</button>
+      <div class="color-picker" id="createColors" style="display:none"></div>
+      <div class="instr-grid" id="createInstrs" style="display:none"></div>
+      <button class="btn-accent btn-full" onclick="hostStart()">צור סשן</button>
     </div>
 
     <div class="lobby-divider">או הצטרף עם קוד</div>
@@ -1086,14 +1050,10 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
         </div>
       </div>
       <input id="joinNameInput" placeholder="השם שלך" class="lob-input" dir="rtl" />
-      <div class="color-label">בחר צבע</div>
-      <div class="color-picker" id="joinColors"></div>
-      <div class="instr-label">כלי נגינה</div>
-      <div class="instr-grid" id="joinInstrs"></div>
+      <div class="color-picker" id="joinColors" style="display:none"></div>
+      <div class="instr-grid" id="joinInstrs" style="display:none"></div>
       <input id="joinCode" placeholder="ABC-123" class="lob-input code-input" dir="ltr" />
-      <input id="joinPassword" placeholder="סיסמה (אם נדרשת)" class="lob-input" dir="rtl" type="password" style="display:none" />
-      <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--mid);margin-top:4px;cursor:pointer"><input type="checkbox" id="joinAsListener" /> הצטרף כמאזין בלבד</label>
-      <button class="btn-accent btn-full" onclick="remoteJoin()">הצטרף ←</button>
+      <button class="btn-accent btn-full" onclick="remoteJoin()">הצטרף</button>
     </div>
 
     <button class="btn-link" onclick="show('landing')">→ חזרה</button>
@@ -1119,12 +1079,8 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
     </div>
     <div class="peer-avatars" id="peerAvatars"></div>
     <div class="tb-flex"></div>
-    <div class="session-timer" id="sessionTimer">⏱ 00:00</div>
     <div class="tb-status" id="tbStatus">0 peers</div>
     <button class="tb-btn tb-invite-btn" onclick="openInvite()">📨 הזמן</button>
-    <button class="tb-btn" id="dndBtn" onclick="toggleDND()" title="מצב שקט">🔔</button>
-    <button class="tb-btn" id="themeToggleSession" onclick="toggleTheme()">🌙</button>
-    <button class="tb-btn" onclick="toggleSettings()">⚙</button>
     <button class="tb-btn tb-leave" onclick="leaveSession()">עזוב</button>
   </div>
 
@@ -1149,7 +1105,6 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
       <div class="panel-tabs">
         <button class="ptab active" id="tabPeers" onclick="switchTab('peers')">משתתפים</button>
         <button class="ptab" id="tabChat" onclick="switchTab('chat')">צ'אט</button>
-        <button class="ptab" id="tabNotes" onclick="switchTab('notes')">📝 הערות</button>
       </div>
       <div id="peersTab" class="tab-content">
         <div id="peerList"></div>
@@ -1157,39 +1112,10 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
       <div id="chatTab" class="tab-content" style="display:none">
         <div id="chatArea"></div>
         <div class="chat-input-row">
-          <input id="chatIn" placeholder="Send a message..." onkeydown="if(event.key==='Enter')sendChat()" />
+          <input id="chatIn" placeholder="כתוב הודעה..." dir="rtl" onkeydown="if(event.key==='Enter')sendChat()" />
           <button onclick="sendChat()">↑</button>
         </div>
       </div>
-      <div id="notesTab" class="tab-content">
-        <textarea id="sharedNotes" placeholder="הערות משותפות..." oninput="onNotesInput()"></textarea>
-      </div>
-    </div>
-  </div>
-
-  <!-- Transport bar (fixed bottom) -->
-  <!-- Virtual Piano (hidden by default) -->
-  <div id="pianoWrap">
-    <div class="piano-header">
-      <span class="piano-header-label">🎹 Virtual Piano — MIDI to host</span>
-      <button class="piano-oct" onclick="pianoOctave(-1)">Oct −</button>
-      <span id="pianoOctLbl" style="font-size:11px;color:var(--mid)">C4</span>
-      <button class="piano-oct" onclick="pianoOctave(1)">Oct +</button>
-      <span style="font-size:11px;color:var(--dim);margin-left:8px">CH</span>
-      <select id="pianoChSel" style="font-size:11px;border:1px solid var(--b1);border-radius:4px;padding:2px 4px;color:var(--txt);background:var(--bg)">
-        <option>1</option><option>2</option><option>3</option><option>4</option>
-        <option>5</option><option>6</option><option>7</option><option>8</option>
-        <option>9</option><option>10</option><option>11</option><option>12</option>
-        <option>13</option><option>14</option><option>15</option><option>16</option>
-      </select>
-      <button class="piano-close" onclick="togglePiano()">×</button>
-    </div>
-    <div class="piano-keys" id="pianoKeys"></div>
-    <div class="piano-vel">
-      <span>Velocity</span>
-      <input type="range" id="pianoVel" min="1" max="127" value="100" />
-      <span id="pianoVelVal">100</span>
-      <span style="margin-left:16px;color:var(--dim)">Keyboard: Z-M (low) · Q-I (high)</span>
     </div>
   </div>
 
@@ -1216,29 +1142,8 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
   </div>
 </div>
 
-<!-- Settings slide-in -->
-<div id="settingsOverlay" style="display:none" onclick="if(event.target===this)toggleSettings()">
-  <div id="settingsPanel">
-    <div class="sp-header">
-      <div class="sp-title">Settings</div>
-      <button class="sp-close" onclick="toggleSettings()">×</button>
-    </div>
-    <div class="sp-section">
-      <div class="sp-section-title">Session</div>
-      <div class="sp-row"><span>Session Code</span><span id="spCode" style="font-family:var(--mono)">---</span></div>
-      <div class="sp-row"><span>Peers Connected</span><span id="spPeers">0</span></div>
-    </div>
-    <div class="sp-section">
-      <div class="sp-section-title">Network</div>
-      <div class="sp-row"><span>Latency</span><span id="spLatency">-- ms</span></div>
-      <div class="sp-row"><span>Connection</span><span id="spConn">--</span></div>
-    </div>
-    <div class="sp-section">
-      <div class="sp-section-title">DAW Log</div>
-      <div id="dawLog"></div>
-    </div>
-  </div>
-</div>
+<!-- Settings (hidden - kept for JS compatibility) -->
+<div id="settingsOverlay" style="display:none"></div>
 
 <!-- (remote video now inline in main-area) -->
 
@@ -1598,8 +1503,8 @@ async function remoteJoin() {
 function enterSession() {
   S.connectedAt = Date.now();
   document.getElementById('codeDisplay').textContent = S.code;
-  document.getElementById('spCode').textContent = S.code;
-  updateBPM();
+  const spCode = document.getElementById('spCode');
+  if (spCode) spCode.textContent = S.code;
   updatePeerAvatars();
   renderPeerList();
   show('session');
@@ -2100,10 +2005,12 @@ function switchTab(tab) {
   S.activeTab = tab;
   document.getElementById('peersTab').style.display = tab === 'peers' ? 'flex' : 'none';
   document.getElementById('chatTab').style.display = tab === 'chat' ? 'flex' : 'none';
-  document.getElementById('notesTab').style.display = tab === 'notes' ? 'flex' : 'none';
-  document.getElementById('tabPeers').classList.toggle('active', tab === 'peers');
-  document.getElementById('tabChat').classList.toggle('active', tab === 'chat');
-  document.getElementById('tabNotes').classList.toggle('active', tab === 'notes');
+  const nt = document.getElementById('notesTab');
+  if (nt) nt.style.display = tab === 'notes' ? 'flex' : 'none';
+  document.getElementById('tabPeers')?.classList.toggle('active', tab === 'peers');
+  document.getElementById('tabChat')?.classList.toggle('active', tab === 'chat');
+  const tnb = document.getElementById('tabNotes');
+  if (tnb) tnb.classList.toggle('active', tab === 'notes');
 }
 
 function sendChat() {
