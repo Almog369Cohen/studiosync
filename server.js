@@ -3,6 +3,24 @@ const https = require('https');
 const os    = require('os');
 const crypto = require('crypto');
 
+// Optional: robotjs for remote mouse/keyboard control
+let robot = null;
+try { robot = require('robotjs'); } catch(e) { /* robotjs not available — remote control will be limited */ }
+
+function mapKeyToRobot(webKey) {
+  const map = {
+    ' ': 'space', Enter: 'enter', Escape: 'escape', Tab: 'tab',
+    Backspace: 'backspace', Delete: 'delete',
+    ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right',
+    Home: 'home', End: 'end', PageUp: 'pageup', PageDown: 'pagedown',
+    F1:'f1',F2:'f2',F3:'f3',F4:'f4',F5:'f5',F6:'f6',F7:'f7',F8:'f8',F9:'f9',F10:'f10',F11:'f11',F12:'f12',
+    Control: 'control', Shift: 'shift', Alt: 'alt', Meta: 'command',
+  };
+  if (map[webKey]) return map[webKey];
+  if (webKey.length === 1) return webKey.toLowerCase();
+  return null;
+}
+
 // ── Morning (Green Invoice) API ────────────────────────────
 const MORNING_API_ID     = process.env.MORNING_API_ID     || '';
 const MORNING_API_SECRET = process.env.MORNING_API_SECRET || '';
@@ -371,6 +389,28 @@ const server = http.createServer(async (req, res) => {
     return json(res, { ok: true });
   }
 
+  // ── Local input execution (robotjs) ──
+  if (path === '/api/local-input' && req.method === 'POST') {
+    const data = await body(req);
+    if (!robot) return json(res, { ok: false, error: 'robotjs not available' });
+    try {
+      const screenSize = robot.getScreenSize();
+      if (data.input === 'mouse') {
+        const x = Math.round(data.x * screenSize.width);
+        const y = Math.round(data.y * screenSize.height);
+        if (data.action === 'move') robot.moveMouse(x, y);
+        else if (data.action === 'click') { robot.moveMouse(x, y); robot.mouseClick(data.button === 2 ? 'right' : 'left'); }
+      } else if (data.input === 'keyboard') {
+        const key = mapKeyToRobot(data.key);
+        if (key) {
+          if (data.action === 'keydown') robot.keyToggle(key, 'down');
+          else if (data.action === 'keyup') robot.keyToggle(key, 'up');
+        }
+      }
+      return json(res, { ok: true });
+    } catch(e) { return json(res, { ok: false, error: e.message }); }
+  }
+
   // ── Long-poll ──
   if (path === '/api/poll') {
     const cid = url.searchParams.get('cid');
@@ -428,6 +468,12 @@ const server = http.createServer(async (req, res) => {
   res.writeHead(200, hdrs({ 'Content-Type': 'text/html; charset=utf-8' }));
   res.end(APP_HTML);
 });
+
+// ── Keep-alive: prevent Render free tier cold starts ──────
+setInterval(() => {
+  const url = APP_URL + '/api/ice';
+  https.get(url, () => {}).on('error', () => {});
+}, 13 * 60 * 1000); // every 13 minutes
 
 // ── Start ─────────────────────────────────────────────────
 const PORT = process.env.PORT || 4444;
@@ -640,6 +686,25 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 .main-area-empty-sub { font-size:12px; color:var(--dim); max-width:280px; line-height:1.5; }
 .main-video { width:100%; height:100%; object-fit:contain; border-radius:var(--radiusL); background:#000; display:none; }
 .main-video.active { display:block; }
+
+/* ── Multi-stream container ───────────────────────── */
+.stream-container { display:flex; width:100%; height:100%; gap:6px; }
+.stream-main { flex:1; position:relative; background:#000; border-radius:var(--radiusL); overflow:hidden; min-height:0; }
+.stream-main video { width:100%; height:100%; object-fit:contain; }
+.stream-main .stream-label { position:absolute; top:8px; left:8px; padding:2px 8px; font-size:11px; background:rgba(0,0,0,.65); color:#fff; border-radius:4px; pointer-events:none; }
+.stream-thumbs { width:150px; display:flex; flex-direction:column; gap:6px; padding:4px; overflow-y:auto; flex-shrink:0; }
+.stream-thumb { position:relative; border-radius:8px; overflow:hidden; cursor:pointer; border:2px solid var(--b1); aspect-ratio:16/9; background:#000; transition:border-color .2s, opacity .2s, transform .2s; }
+.stream-thumb:hover { border-color:var(--mid); }
+.stream-thumb.active { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent); }
+.stream-thumb video { width:100%; height:100%; object-fit:cover; pointer-events:none; }
+.stream-thumb .stream-label { position:absolute; bottom:0; left:0; right:0; padding:2px 6px; font-size:10px; background:rgba(0,0,0,.7); color:#fff; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.stream-thumb.dragging { opacity:.4; transform:scale(.95); }
+/* Grid mode */
+.stream-container.grid-mode .stream-main { display:none; }
+.stream-container.grid-mode .stream-thumbs { width:100%; flex-direction:row; flex-wrap:wrap; padding:8px; gap:8px; overflow-y:auto; }
+.stream-container.grid-mode .stream-thumb { flex:1 1 calc(50% - 8px); min-width:200px; max-height:none; aspect-ratio:16/9; border-radius:var(--radiusL); }
+.stream-container.grid-mode .stream-thumb video { object-fit:contain; }
+.stream-container.grid-mode .stream-thumb .stream-label { font-size:12px; padding:4px 8px; }
 .participant-panel { width:260px; border-left:1px solid var(--b1); display:flex; flex-direction:column; flex-shrink:0; }
 .panel-tabs { display:flex; border-bottom:1px solid var(--b1); flex-shrink:0; }
 .ptab { flex:1; padding:10px; background:none; border:none; border-bottom:2px solid transparent; font-size:13px; font-weight:500; cursor:pointer; color:var(--mid); font-family:var(--sans); }
@@ -707,33 +772,20 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 .transport-bar { height:56px; border-top:1px solid var(--b1); display:flex; align-items:center; gap:8px; padding:0 16px; background:var(--bg); flex-shrink:0; position:fixed; bottom:0; left:0; right:0; z-index:50; }
 .tc { width:34px; height:34px; border:1.5px solid var(--b1); border-radius:6px; background:none; cursor:pointer; font-size:14px; display:flex; align-items:center; justify-content:center; color:var(--txt); }
 .tc:hover { border-color:var(--accent); color:var(--accent); }
-.play-btn { background:var(--accent); border-color:var(--accent); color:#fff; }
-.play-btn:hover { opacity:.9; }
-.bpm-ctrl { display:flex; align-items:center; gap:2px; background:var(--s1); border:1px solid var(--b1); border-radius:6px; overflow:hidden; }
-.bpm-btn { width:24px; height:34px; border:none; background:none; cursor:pointer; color:var(--mid); font-size:16px; font-family:var(--sans); }
-.bpm-btn:hover { color:var(--accent); background:var(--accentH); }
-.bpm-val { font-size:16px; font-weight:700; color:var(--hi); min-width:36px; text-align:center; font-family:var(--mono); }
-.bpm-lbl { font-size:10px; color:var(--mid); padding-right:8px; }
-.pos-display { font-family:var(--mono); font-size:13px; color:var(--mid); min-width:50px; }
 .latency-pill { background:var(--s1); border:1px solid var(--b1); border-radius:100px; padding:3px 10px; font-size:11px; font-family:var(--mono); color:var(--mid); }
-.share-btn { padding:0 14px; font-size:13px; font-family:var(--sans); white-space:nowrap; }
-.cam-btn { padding:0 14px; font-size:13px; font-family:var(--sans); white-space:nowrap; display:none; }
-@media (max-width: 768px) { .cam-btn { display:flex; } }
-.tap-tempo { font-size:10px; font-weight:700; }
-.tap-tempo:active { background:var(--accentD); color:var(--accent); }
-.metro-btn.on { background:var(--green); border-color:var(--green); color:#fff; }
-.vu-wrap { display:flex; align-items:center; gap:4px; background:var(--s1); border:1px solid var(--b1); border-radius:6px; padding:0 6px; height:34px; }
-.vu-label { font-size:9px; color:var(--dim); }
-.vu-meter { display:flex; align-items:flex-end; gap:1px; height:24px; }
-.vu-bar { width:3px; border-radius:1px; background:var(--green); transition:height 60ms linear; min-height:2px; }
-.vu-bar.warn { background:#f79009; }
-.vu-bar.clip { background:var(--red); }
-.uptime-pill { font-size:10px; color:var(--dim); font-family:var(--mono); }
-.clip-panel { position:fixed; bottom:60px; right:16px; width:280px; max-height:240px; overflow-y:auto; background:var(--s1); border:1px solid var(--b1); border-radius:var(--radiusL); padding:8px; display:none; z-index:51; }
-.clip-card { display:flex; align-items:center; gap:8px; padding:6px 8px; background:var(--bg); border:1px solid var(--b1); border-radius:6px; margin-bottom:4px; }
-.clip-name { flex:1; font-size:12px; font-family:var(--mono); color:var(--txt); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.clip-dl { font-size:12px; color:var(--accent); cursor:pointer; text-decoration:none; }
-.share-audio-btn { padding:0 10px; font-size:12px; font-family:var(--sans); white-space:nowrap; }
+.share-btn { width:auto; padding:0 14px; font-size:13px; font-family:var(--sans); white-space:nowrap; }
+.cam-btn { width:auto; padding:0 14px; font-size:13px; font-family:var(--sans); white-space:nowrap; }
+.active-share { border:2px solid var(--accent) !important; background:rgba(0,255,136,.15) !important; }
+.muted-state { border:2px solid var(--rD) !important; background:rgba(255,60,60,.15) !important; color:var(--red) !important; }
+.recording { border:2px solid var(--rD) !important; background:rgba(255,60,60,.2) !important; animation:rec-pulse 1s ease infinite; }
+@keyframes rec-pulse { 0%,100%{opacity:1} 50%{opacity:.6} }
+.active-tool { border-color:var(--accent) !important; color:var(--accent) !important; }
+.tb-group-sep { width:1px; height:24px; background:var(--b1); margin:0 4px; flex-shrink:0; }
+.is-guest .host-only { display:none !important; }
+.guest-only { display:none !important; }
+.is-guest .guest-only { display:flex !important; }
+.share-audio-btn { width:auto; padding:0 10px; font-size:12px; font-family:var(--sans); white-space:nowrap; }
+.rec-btn-transport { width:auto; padding:0 10px; font-size:12px; font-family:var(--sans); white-space:nowrap; }
 
 /* ── Settings panel ──────────────────────────────────── */
 #settingsOverlay { position:fixed; inset:0; background:rgba(0,0,0,.4); z-index:200; display:flex; justify-content:flex-end; }
@@ -895,26 +947,28 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 
   .workspace { flex-direction:column; }
   .participant-panel { width:100%; height:auto; max-height:180px; border-left:none; border-top:1px solid var(--b1); }
+  .stream-container { flex-direction:column; }
+  .stream-thumbs { width:100%; flex-direction:row; height:80px; overflow-x:auto; overflow-y:hidden; flex-shrink:0; }
+  .stream-thumb { min-width:110px; height:70px; flex-shrink:0; aspect-ratio:auto; }
+  .stream-container.grid-mode .stream-thumbs { height:auto; flex-direction:row; flex-wrap:wrap; overflow-y:auto; overflow-x:hidden; }
+  .stream-container.grid-mode .stream-thumb { flex:1 1 100%; min-width:unset; height:auto; flex-shrink:1; aspect-ratio:16/9; }
 
-  .transport-bar { height:auto; min-height:52px; flex-wrap:wrap; gap:4px; padding:6px 8px; position:relative; }
-  .bpm-ctrl { order:10; }
-  .pos-display { order:11; }
-  .my-controls { order:20; width:100%; justify-content:center; padding-top:4px; }
-  .my-ctrl-sep { display:none; }
-  .latency-pill { order:12; }
+  .transport-bar { height:auto; min-height:40px; flex-wrap:wrap; gap:2px; padding:4px 6px; position:relative; }
+  .transport-bar .tc { width:28px; height:28px; font-size:12px; }
+  .my-controls { order:20; width:100%; justify-content:center; padding-top:2px; gap:4px; }
+  .my-controls .my-ctrl-btn { font-size:11px; padding:3px 8px; }
+  .tb-group-sep { display:none; }
+  .latency-pill { order:12; font-size:10px; padding:2px 6px; }
 
-  #pianoWrap { bottom:104px; }
+  #pianoWrap { bottom:90px; }
   .piano-keys { padding:4px 8px 0; }
   .pk-w { width:26px; height:60px; }
   .pk-b { width:18px; height:38px; margin:0 -9px; }
 
-  /* Mobile: hide controls not usable on phone */
-  .share-btn { display:none; }
-  #pianoBtn { display:none; }
-  .vu-wrap { display:none; }
-  .share-audio-btn { display:none; }
-  .uptime-pill { display:none; }
-  .clip-panel { width:100%; right:0; left:0; bottom:52px; border-radius:12px 12px 0 0; }
+  /* Mobile: compact action buttons */
+  .transport-bar .share-btn, .transport-bar .cam-btn { width:auto; padding:0 8px; font-size:11px; height:28px; }
+  .transport-bar .share-audio-btn { width:auto; padding:0 6px; font-size:11px; height:28px; }
+  .transport-bar .rec-btn-transport { width:auto; padding:0 6px; font-size:10px; height:28px; }
 
   .lobby-wrap { padding:20px 12px; }
 }
@@ -935,8 +989,6 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
   <nav class="land-nav">
     <div class="brand">🎛 <span>Studio</span>Sync</div>
     <div style="flex:1"></div>
-    <button class="tb-btn" onclick="showHistory()">📋 היסטוריה</button>
-    <button class="tb-btn" onclick="openHelp()">? עזרה</button>
     <button class="tb-btn" id="themeToggleLand" onclick="toggleTheme()">🌙</button>
   </nav>
   <div class="hero" dir="rtl">
@@ -971,38 +1023,7 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
     </div>
   </div>
 
-  <!-- Online Now -->
-  <div id="onlineSection" class="online-section" dir="rtl" style="display:none">
-    <div class="online-header">🟢 מחוברים עכשיו</div>
-    <div id="onlineList" class="online-list"></div>
-  </div>
 
-  <!-- Upcoming Scheduled Sessions -->
-  <div id="scheduleSection" class="schedule-section" dir="rtl" style="display:none">
-    <div class="schedule-header">📅 סשנים מתוכננים</div>
-    <div id="scheduleList" class="schedule-list"></div>
-    <button class="btn-ghost" style="margin-top:8px;font-size:13px" onclick="showScheduleModal()">+ תזמן סשן חדש</button>
-  </div>
-
-  <!-- Feature Voting -->
-  <div id="votingSection" class="voting-section" dir="rtl">
-    <div class="voting-header">🗳 הצביעו לפיצ׳ר הבא</div>
-    <div id="votingList" class="voting-list"></div>
-  </div>
-</div>
-
-<!-- Schedule Modal -->
-<div id="scheduleModal" class="modal-overlay" style="display:none" onclick="if(event.target===this)closeScheduleModal()">
-  <div class="modal-box" dir="rtl" style="max-width:360px">
-    <h3 style="margin:0 0 12px">📅 תזמן סשן</h3>
-    <input id="schedTitle" class="lob-input" placeholder="שם הסשן" dir="rtl" />
-    <input id="schedDate" class="lob-input" type="date" />
-    <input id="schedTime" class="lob-input" type="time" />
-    <div style="display:flex;gap:8px;margin-top:12px">
-      <button class="btn-accent" style="flex:1" onclick="addSchedule()">שמור</button>
-      <button class="btn-ghost" style="flex:1" onclick="closeScheduleModal()">ביטול</button>
-    </div>
-  </div>
 </div>
 
 <!-- LOBBY -->
@@ -1019,12 +1040,9 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
         </div>
       </div>
       <input id="createName" placeholder="השם שלך" class="lob-input" dir="rtl" />
-      <div class="color-label">בחר צבע</div>
-      <div class="color-picker" id="createColors"></div>
-      <div class="instr-label">כלי נגינה</div>
-      <div class="instr-grid" id="createInstrs"></div>
-      <input id="createPassword" placeholder="סיסמה (אופציונלי)" class="lob-input" dir="rtl" type="password" />
-      <button class="btn-accent btn-full" onclick="hostStart()">צור סשן ←</button>
+      <div class="color-picker" id="createColors" style="display:none"></div>
+      <div class="instr-grid" id="createInstrs" style="display:none"></div>
+      <button class="btn-accent btn-full" onclick="hostStart()">צור סשן</button>
     </div>
 
     <div class="lobby-divider">או הצטרף עם קוד</div>
@@ -1038,14 +1056,10 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
         </div>
       </div>
       <input id="joinNameInput" placeholder="השם שלך" class="lob-input" dir="rtl" />
-      <div class="color-label">בחר צבע</div>
-      <div class="color-picker" id="joinColors"></div>
-      <div class="instr-label">כלי נגינה</div>
-      <div class="instr-grid" id="joinInstrs"></div>
+      <div class="color-picker" id="joinColors" style="display:none"></div>
+      <div class="instr-grid" id="joinInstrs" style="display:none"></div>
       <input id="joinCode" placeholder="ABC-123" class="lob-input code-input" dir="ltr" />
-      <input id="joinPassword" placeholder="סיסמה (אם נדרשת)" class="lob-input" dir="rtl" type="password" style="display:none" />
-      <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--mid);margin-top:4px;cursor:pointer"><input type="checkbox" id="joinAsListener" /> הצטרף כמאזין בלבד</label>
-      <button class="btn-accent btn-full" onclick="remoteJoin()">הצטרף ←</button>
+      <button class="btn-accent btn-full" onclick="remoteJoin()">הצטרף</button>
     </div>
 
     <button class="btn-link" onclick="show('landing')">→ חזרה</button>
@@ -1071,24 +1085,23 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
     </div>
     <div class="peer-avatars" id="peerAvatars"></div>
     <div class="tb-flex"></div>
-    <div class="session-timer" id="sessionTimer">⏱ 00:00</div>
     <div class="tb-status" id="tbStatus">0 peers</div>
     <button class="tb-btn tb-invite-btn" onclick="openInvite()">📨 הזמן</button>
-    <button class="tb-btn" id="dndBtn" onclick="toggleDND()" title="מצב שקט">🔔</button>
-    <button class="tb-btn" id="themeToggleSession" onclick="toggleTheme()">🌙</button>
-    <button class="tb-btn" onclick="toggleSettings()">⚙</button>
     <button class="tb-btn tb-leave" onclick="leaveSession()">עזוב</button>
   </div>
 
   <!-- Workspace -->
   <div class="workspace">
-    <!-- Main: shared screen video -->
+    <!-- Main: shared screen video(s) -->
     <div class="main-area" id="mainArea">
-      <video id="mainVideo" class="main-video" autoplay playsinline></video>
+      <div class="stream-container" id="streamContainer">
+        <div class="stream-main" id="streamMain"></div>
+        <div class="stream-thumbs" id="streamThumbs"></div>
+      </div>
       <div class="main-area-empty" id="mainEmpty" dir="rtl">
         <div class="main-area-empty-icon">🖥</div>
         <div class="main-area-empty-text">ממתין לשיתוף מסך...</div>
-        <div class="main-area-empty-sub">לחץ על <b>"Share"</b> בסרגל למטה כדי לשתף את מסך ה-DAW והשמע.</div>
+        <div class="main-area-empty-sub">לחץ על <b>"שתף מסך"</b> בסרגל למטה כדי לשתף את מסך ה-DAW והשמע.</div>
         <button class="btn-ghost" style="margin-top:12px;font-size:13px" onclick="doShareCam()">📷 או שתף מצלמה</button>
       </div>
     </div>
@@ -1098,7 +1111,6 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
       <div class="panel-tabs">
         <button class="ptab active" id="tabPeers" onclick="switchTab('peers')">משתתפים</button>
         <button class="ptab" id="tabChat" onclick="switchTab('chat')">צ'אט</button>
-        <button class="ptab" id="tabNotes" onclick="switchTab('notes')">📝 הערות</button>
       </div>
       <div id="peersTab" class="tab-content">
         <div id="peerList"></div>
@@ -1106,100 +1118,38 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
       <div id="chatTab" class="tab-content" style="display:none">
         <div id="chatArea"></div>
         <div class="chat-input-row">
-          <input id="chatIn" placeholder="Send a message..." onkeydown="if(event.key==='Enter')sendChat()" />
+          <input id="chatIn" placeholder="כתוב הודעה..." dir="rtl" onkeydown="if(event.key==='Enter')sendChat()" />
           <button onclick="sendChat()">↑</button>
         </div>
       </div>
-      <div id="notesTab" class="tab-content">
-        <textarea id="sharedNotes" placeholder="הערות משותפות..." oninput="onNotesInput()"></textarea>
-      </div>
     </div>
   </div>
 
-  <!-- Transport bar (fixed bottom) -->
-  <!-- Virtual Piano (hidden by default) -->
-  <div id="pianoWrap">
-    <div class="piano-header">
-      <span class="piano-header-label">🎹 Virtual Piano — MIDI to host</span>
-      <button class="piano-oct" onclick="pianoOctave(-1)">Oct −</button>
-      <span id="pianoOctLbl" style="font-size:11px;color:var(--mid)">C4</span>
-      <button class="piano-oct" onclick="pianoOctave(1)">Oct +</button>
-      <span style="font-size:11px;color:var(--dim);margin-left:8px">CH</span>
-      <select id="pianoChSel" style="font-size:11px;border:1px solid var(--b1);border-radius:4px;padding:2px 4px;color:var(--txt);background:var(--bg)">
-        <option>1</option><option>2</option><option>3</option><option>4</option>
-        <option>5</option><option>6</option><option>7</option><option>8</option>
-        <option>9</option><option>10</option><option>11</option><option>12</option>
-        <option>13</option><option>14</option><option>15</option><option>16</option>
-      </select>
-      <button class="piano-close" onclick="togglePiano()">×</button>
-    </div>
-    <div class="piano-keys" id="pianoKeys"></div>
-    <div class="piano-vel">
-      <span>Velocity</span>
-      <input type="range" id="pianoVel" min="1" max="127" value="100" />
-      <span id="pianoVelVal">100</span>
-      <span style="margin-left:16px;color:var(--dim)">Keyboard: Z-M (low) · Q-I (high)</span>
-    </div>
-  </div>
-
-  <div id="clipPanel" class="clip-panel"></div>
   <div class="transport-bar">
-    <button class="tc" onclick="cmd('stop')">⏹</button>
-    <button class="tc play-btn" id="playBtn" onclick="cmd('play')">▶</button>
-    <button class="tc" id="recBtn" onclick="cmd('rec')">⏺</button>
-    <div class="bpm-ctrl">
-      <button class="bpm-btn tap-tempo" id="tapBtn" onclick="tapTempo()" title="Tap Tempo">TAP</button>
-      <button class="bpm-btn" onclick="cmd('bpm',-1)">−</button>
-      <div class="bpm-val" id="bpmDisp">128</div>
-      <div class="bpm-lbl">BPM</div>
-      <button class="bpm-btn" onclick="cmd('bpm',1)">+</button>
+    <!-- Mute — everyone -->
+    <button class="tc" id="muteBtn" onclick="toggleSelfMute()" title="השתק">🎤</button>
+    <div class="tb-group-sep"></div>
+    <!-- Sharing — everyone -->
+    <button class="tc share-btn" id="shareBtn" onclick="doShare()">🖥 שתף מסך</button>
+    <button class="tc cam-btn" id="camBtn" onclick="doShareCam()">📷 מצלמה</button>
+    <button class="tc share-audio-btn host-only" id="shareAudioBtn" onclick="doShareAudio()" title="שתף שמע בלבד">🔊 שתף שמע</button>
+    <div class="tb-group-sep"></div>
+    <!-- Remote Controls — guest only (host doesn't send remote:input to self) -->
+    <div class="my-controls guest-only" id="myControls" title="שליטה מרחוק">
+      <span class="my-ctrl-btn" id="myMouse" onclick="toggleMyCtrl('mouse')">🖱 עכבר</span>
+      <span class="my-ctrl-btn" id="myKeys" onclick="toggleMyCtrl('keyboard')">⌨ מקלדת</span>
     </div>
-    <button class="tc metro-btn" id="metroBtn" onclick="toggleMetro()" title="מטרונום">🔔</button>
-    <div class="pos-display" id="posDisp">1.1.1</div>
-    <div class="vu-wrap"><span class="vu-label">IN</span><div class="vu-meter" id="vuIn"></div></div>
-    <div class="vu-wrap"><span class="vu-label">OUT</span><div class="vu-meter" id="vuOut"></div></div>
     <div class="tb-flex"></div>
-    <div class="my-controls" id="myControls" title="What you're sending to the host">
-      <span class="my-ctrl-btn active" id="myMouse" onclick="toggleMyCtrl('mouse')">🖱 Mouse</span>
-      <span class="my-ctrl-btn active" id="myKeys" onclick="toggleMyCtrl('keyboard')">⌨ Keys</span>
-      <span class="my-ctrl-btn active-g" id="myMidi" onclick="toggleMyCtrl('midi')">🎹 MIDI</span>
-    </div>
-    <div class="my-ctrl-sep"></div>
+    <!-- Tools -->
+    <button class="tc rec-btn-transport host-only" id="recSessionBtn" onclick="toggleSessionRecord()">⏺ הקלט<span class="lock-icon" id="recLock">🔒</span></button>
+    <button class="tc" id="viewToggle" onclick="toggleStreamView()" title="תצוגת גריד">⊞</button>
+    <button class="tc" id="fullscreenBtn" onclick="toggleFullscreen()" title="מסך מלא">⛶</button>
     <div class="latency-pill" id="latPill">-- ms</div>
-    <span class="uptime-pill" id="uptimePill"></span>
-    <button class="tc" id="pianoBtn" onclick="togglePiano()" title="Virtual Piano / MIDI">🎹</button>
-    <button class="tc" onclick="toggleFullscreen()" title="מסך מלא">⛶</button>
-    <button class="tc" id="clipBtn" onclick="toggleClipBoard()" title="קליפים">📋</button>
-    <button class="tc rec-btn-transport" id="recSessionBtn" onclick="toggleSessionRecord()">⏺ הקלט<span class="lock-icon" id="recLock">🔒</span></button>
-    <button class="tc share-audio-btn" onclick="doShareAudio()" title="שתף שמע בלבד">🔊</button>
-    <button class="tc share-btn" onclick="doShare()">🖥 Share</button>
-    <button class="tc cam-btn" onclick="doShareCam()">📷 Cam</button>
   </div>
 </div>
 
-<!-- Settings slide-in -->
-<div id="settingsOverlay" style="display:none" onclick="if(event.target===this)toggleSettings()">
-  <div id="settingsPanel">
-    <div class="sp-header">
-      <div class="sp-title">Settings</div>
-      <button class="sp-close" onclick="toggleSettings()">×</button>
-    </div>
-    <div class="sp-section">
-      <div class="sp-section-title">Session</div>
-      <div class="sp-row"><span>Session Code</span><span id="spCode" style="font-family:var(--mono)">---</span></div>
-      <div class="sp-row"><span>Peers Connected</span><span id="spPeers">0</span></div>
-    </div>
-    <div class="sp-section">
-      <div class="sp-section-title">Network</div>
-      <div class="sp-row"><span>Latency</span><span id="spLatency">-- ms</span></div>
-      <div class="sp-row"><span>Connection</span><span id="spConn">--</span></div>
-    </div>
-    <div class="sp-section">
-      <div class="sp-section-title">DAW Log</div>
-      <div id="dawLog"></div>
-    </div>
-  </div>
-</div>
+<!-- Settings (hidden - kept for JS compatibility) -->
+<div id="settingsOverlay" style="display:none"></div>
 
 <!-- (remote video now inline in main-area) -->
 
@@ -1377,7 +1327,10 @@ const S = {
   metro: false, metroInterval: null, metroBeat: 0,
   clips: [],
   connectedAt: null,
-  analyserIn: null, analyserOut: null, vuAnim: null
+  analyserIn: null, analyserOut: null, vuAnim: null,
+  streams: new Map(),    // peerId → { stream, type:'screen'|'camera'|'audio', name }
+  focusedStream: null,   // peerId of focused stream in thumbnail mode
+  selfMuted: false
 };
 
 // (track defs removed — not connected to real DAW)
@@ -1556,8 +1509,8 @@ async function remoteJoin() {
 function enterSession() {
   S.connectedAt = Date.now();
   document.getElementById('codeDisplay').textContent = S.code;
-  document.getElementById('spCode').textContent = S.code;
-  updateBPM();
+  const spCode = document.getElementById('spCode');
+  if (spCode) spCode.textContent = S.code;
   updatePeerAvatars();
   renderPeerList();
   show('session');
@@ -1566,7 +1519,13 @@ function enterSession() {
   // Show/hide record lock icon
   const lockEl = document.getElementById('recLock');
   if (lockEl) lockEl.style.display = isPremium() ? 'none' : 'inline';
-  // Listener mode — hide transport controls
+  // Role-based UI: hide host-only controls for guests
+  if (S.peerNumber === 1) {
+    document.body.classList.remove('is-guest');
+  } else {
+    document.body.classList.add('is-guest');
+  }
+  // Listener mode — hide transport controls entirely
   if (S.role === 'listener') {
     document.querySelector('.transport-bar').style.display = 'none';
     toast('מצב מאזין — צפייה בלבד', '');
@@ -1594,6 +1553,11 @@ function enterSession() {
 }
 
 function leaveSession() {
+  // Notify server immediately so peers see instant disconnect
+  if (S.cid) {
+    send({ type: 'peer:left', peerId: S.cid, name: S.name });
+    broadcast({ type: 'peer:left', peerId: S.cid, name: S.name });
+  }
   saveHistory();
   stopTimer();
   if (sessionRecorder && sessionRecorder.state === 'recording') sessionRecorder.stop();
@@ -1609,6 +1573,7 @@ function leaveSession() {
   S.playing = false; S.rec = false;
   S.pos = { b: 1, bt: 1, tk: 1 };
   closeRv();
+  document.body.classList.remove('is-guest');
   show('landing');
   showRatingModal();
 }
@@ -1725,6 +1690,7 @@ function broadcast(msg, skipPeer) {
 function applyRemote(msg, fromPeerId) {
   if (msg.type === 'daw:state') applyDAW(msg, fromPeerId);
   if (msg.type === 'chat:msg') appendChat(msg.name || 'Peer', msg.text, msg.color);
+  if (msg.type === 'remote:input') handleMsg(msg);
 }
 
 // ── Message router ────────────────────────────────────────
@@ -1733,12 +1699,12 @@ function handleMsg(msg) {
     case 'session:welcome':
       S.connectedAt = Date.now();
       for (const p of (msg.peers || [])) {
-        S.peers.set(p.id, { name: p.name, color: p.color, instrument: p.instrument, dc: null, conn: null, latency: 0 });
+        S.peers.set(p.id, { name: p.name, color: p.color, instrument: p.instrument, dc: null, conn: null, latency: 0, perms: { mouse:false, keyboard:false, midi:true } });
       }
       updatePeerAvatars(); renderPeerList();
       break;
     case 'peer:joined':
-      S.peers.set(msg.peerId, { name: msg.name, color: msg.color, instrument: msg.instrument, dc: null, conn: null, latency: 0, role: msg.role || 'participant', muted: false });
+      S.peers.set(msg.peerId, { name: msg.name, color: msg.color, instrument: msg.instrument, dc: null, conn: null, latency: 0, role: msg.role || 'participant', muted: false, perms: { mouse:false, keyboard:false, midi:true } });
       updatePeerAvatars(); renderPeerList();
       if (!S.dnd) { playJoinSound(); toast(msg.name + ' הצטרף/ה', 'g'); }
       break;
@@ -1746,6 +1712,7 @@ function handleMsg(msg) {
       const lp = S.peers.get(msg.peerId);
       if (lp) {
         const card = document.querySelector('[data-peer="' + msg.peerId + '"]');
+        S.streams.delete(msg.peerId); S.streams.delete(msg.peerId + ':cam'); renderStreams();
         if (card) { card.classList.add('leaving'); setTimeout(() => { lp?.conn?.close(); S.peers.delete(msg.peerId); updatePeerAvatars(); renderPeerList(); }, 300); }
         else { lp.conn?.close(); S.peers.delete(msg.peerId); updatePeerAvatars(); renderPeerList(); }
       }
@@ -1753,7 +1720,7 @@ function handleMsg(msg) {
       break;
     }
     case 'webrtc:create-offer':
-      S.peers.set(msg.peerId, { name: msg.name || '', color: msg.color || PEER_COLORS[0], instrument: msg.instrument || '', dc: null, conn: null, latency: 0 });
+      S.peers.set(msg.peerId, { name: msg.name || '', color: msg.color || PEER_COLORS[0], instrument: msg.instrument || '', dc: null, conn: null, latency: 0, perms: { mouse:false, keyboard:false, midi:true } });
       PeerMesh.createOffer(msg.peerId).catch(e => dlog('WebRTC offer err: ' + e.message));
       break;
     case 'webrtc:offer':
@@ -1782,6 +1749,19 @@ function handleMsg(msg) {
     case 'perms:update': {
       const pp = S.peers.get(msg.peerId);
       if (pp) { pp.perms = msg.perms; renderPeerList(); }
+      // If this update is about ME, update MY local send-state
+      if (msg.peerId === S.cid && msg.perms) {
+        MY.mouse = !!msg.perms.mouse;
+        MY.keyboard = !!msg.perms.keyboard;
+        MY.midi = !!msg.perms.midi;
+        const mm = document.getElementById('myMouse');
+        const mk = document.getElementById('myKeys');
+        const mi = document.getElementById('myMidi');
+        if (mm) mm.classList.toggle('active', MY.mouse);
+        if (mk) mk.classList.toggle('active', MY.keyboard);
+        if (mi) mi.classList.toggle('active-g', MY.midi);
+        toast('הרשאות עודכנו: ' + (MY.mouse?'🖱':'') + (MY.keyboard?' ⌨':'') + (MY.midi?' 🎹':''), '');
+      }
       break;
     }
     case 'remote:midi':
@@ -1798,6 +1778,27 @@ function handleMsg(msg) {
     case 'mute:command':
       if (msg.targetId === S.cid) {
         S.mutedByHost = msg.muted;
+        // Actually mute/unmute all outgoing audio tracks
+        for (const [key, entry] of S.streams) {
+          if (key.startsWith(S.cid)) {
+            entry.stream.getAudioTracks().forEach(t => { t.enabled = !msg.muted; });
+          }
+        }
+        for (const [, p] of S.peers) {
+          if (p.conn) {
+            p.conn.getSenders().forEach(sender => {
+              if (sender.track?.kind === 'audio') sender.track.enabled = !msg.muted;
+            });
+          }
+        }
+        // Update mute button UI
+        const muteBtn = document.getElementById('muteBtn');
+        if (muteBtn) {
+          muteBtn.textContent = msg.muted ? '🔇' : '🎤';
+          muteBtn.classList.toggle('muted-state', msg.muted);
+          muteBtn.title = msg.muted ? 'מושתק ע"י המארח' : 'השתק';
+        }
+        S.selfMuted = msg.muted;
         toast(msg.muted ? 'המארח השתיק אותך' : 'המארח ביטל את ההשתקה', msg.muted ? 'r' : 'g');
       }
       break;
@@ -1830,6 +1831,22 @@ function handleMsg(msg) {
         if (mb) mb.classList.toggle('on', S.metro);
       }
       break;
+    case 'remote:input': {
+      // Only the host (peerNumber 1) processes remote inputs
+      if (S.peerNumber !== 1) break;
+      if (msg.from === S.cid) break; // ignore own inputs
+      const rPeer = S.peers.get(msg.from);
+      if (msg.input === 'mouse' && !rPeer?.perms?.mouse) break;
+      if (msg.input === 'keyboard' && !rPeer?.perms?.keyboard) break;
+      // Forward to server's local execution endpoint
+      fetch(SERVER + '/api/local-input', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(msg)
+      }).catch(() => {});
+      if (msg.action === 'click') toast('🖱 ' + (msg.fromName||'Peer') + ' clicked', '', 1000);
+      break;
+    }
   }
 }
 
@@ -1852,12 +1869,12 @@ function cmd(action, val) {
   if (action === 'play') {
     S.playing = !S.playing; msg.playing = S.playing;
     const pb = document.getElementById('playBtn');
-    if (pb) pb.textContent = S.playing ? '⏸' : '▶';
+    if (pb) { pb.textContent = S.playing ? '⏸' : '▶'; pb.classList.toggle('playing', S.playing); }
   } else if (action === 'stop') {
     S.playing = false; S.pos = { b:1, bt:1, tk:1 };
     msg.playing = false; msg.pos = S.pos;
     const pb = document.getElementById('playBtn');
-    if (pb) pb.textContent = '▶';
+    if (pb) { pb.textContent = '▶'; pb.classList.remove('playing'); }
     updatePos();
   } else if (action === 'bpm') {
     S.bpm = Math.max(40, Math.min(300, S.bpm + (val || 0)));
@@ -1866,7 +1883,7 @@ function cmd(action, val) {
   } else if (action === 'rec') {
     S.rec = !S.rec; msg.rec = S.rec;
     const rb = document.getElementById('recBtn');
-    if (rb) rb.style.background = S.rec ? 'var(--red)' : '';
+    if (rb) { rb.classList.toggle('recording', S.rec); rb.style.background = ''; }
   }
   broadcast(msg);
 }
@@ -1994,10 +2011,12 @@ function switchTab(tab) {
   S.activeTab = tab;
   document.getElementById('peersTab').style.display = tab === 'peers' ? 'flex' : 'none';
   document.getElementById('chatTab').style.display = tab === 'chat' ? 'flex' : 'none';
-  document.getElementById('notesTab').style.display = tab === 'notes' ? 'flex' : 'none';
-  document.getElementById('tabPeers').classList.toggle('active', tab === 'peers');
-  document.getElementById('tabChat').classList.toggle('active', tab === 'chat');
-  document.getElementById('tabNotes').classList.toggle('active', tab === 'notes');
+  const nt = document.getElementById('notesTab');
+  if (nt) nt.style.display = tab === 'notes' ? 'flex' : 'none';
+  document.getElementById('tabPeers')?.classList.toggle('active', tab === 'peers');
+  document.getElementById('tabChat')?.classList.toggle('active', tab === 'chat');
+  const tnb = document.getElementById('tabNotes');
+  if (tnb) tnb.classList.toggle('active', tab === 'notes');
 }
 
 function sendChat() {
@@ -2070,80 +2089,279 @@ function toggleSettings() {
 }
 
 async function doShare() {
+  const existing = S.streams.get(S.cid);
+  if (existing) {
+    existing.stream.getTracks().forEach(t => t.stop());
+    S.streams.delete(S.cid); renderStreams(); stopVU('in');
+    updateShareBtn(false);
+    toast('שיתוף מסך הופסק', '');
+    return;
+  }
   try {
     const stream = await navigator.mediaDevices.getDisplayMedia({
       video: true, audio: true,
       selfBrowserSurface: 'include', surfaceSwitching: 'include', systemAudio: 'include'
     });
-    toast('Sharing screen…', 'g');
-    const vid = document.getElementById('mainVideo');
-    const empty = document.getElementById('mainEmpty');
-    if (vid) { vid.srcObject = stream; vid.classList.add('active'); vid.muted = true; }
-    if (empty) empty.style.display = 'none';
+    toast('משתף מסך…', 'g');
+    S.streams.set(S.cid, { stream, type: 'screen', name: S.name });
+    renderStreams();
     initVU(stream, 'in');
+    updateShareBtn(true);
     for (const [, p] of S.peers) {
       if (p.conn) stream.getTracks().forEach(t => p.conn.addTrack(t, stream));
     }
-    stream.getVideoTracks()[0].onended = () => { toast('Screen share ended', ''); closeRv(); stopVU('in'); };
-  } catch(e) { toast('Share cancelled', ''); }
+    stream.getVideoTracks()[0].onended = () => { toast('שיתוף מסך הסתיים', ''); S.streams.delete(S.cid); renderStreams(); stopVU('in'); updateShareBtn(false); };
+  } catch(e) { toast('שיתוף בוטל', ''); }
+}
+function updateShareBtn(active) {
+  const btn = document.getElementById('shareBtn');
+  if (!btn) return;
+  btn.innerHTML = active ? '🖥 הפסק שיתוף' : '🖥 שתף מסך';
+  btn.classList.toggle('active-share', active);
 }
 
 async function doShareCam() {
+  const camKey = S.cid + ':cam';
+  const existing = S.streams.get(camKey);
+  if (existing) {
+    existing.stream.getTracks().forEach(t => t.stop());
+    S.streams.delete(camKey);
+    renderStreams();
+    updateCamBtn(false);
+    toast('מצלמה כבויה', '');
+    return;
+  }
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
     toast('מצלמה משותפת!', 'g');
-    // Show locally
-    const vid = document.getElementById('mainVideo');
-    const empty = document.getElementById('mainEmpty');
-    if (vid) { vid.srcObject = stream; vid.classList.add('active'); vid.muted = true; }
-    if (empty) empty.style.display = 'none';
-    // Send to peers
+    S.streams.set(camKey, { stream, type: 'camera', name: S.name + ' 📷' });
+    renderStreams();
+    updateCamBtn(true);
     for (const [, p] of S.peers) {
       if (p.conn) stream.getTracks().forEach(t => p.conn.addTrack(t, stream));
     }
-    stream.getVideoTracks()[0].onended = () => { toast('המצלמה נעצרה', ''); closeRv(); };
+    stream.getVideoTracks()[0].onended = () => { toast('המצלמה נעצרה', ''); S.streams.delete(camKey); renderStreams(); updateCamBtn(false); };
   } catch(e) { toast('המצלמה לא זמינה או שנדחתה', 'r'); }
+}
+function updateCamBtn(active) {
+  const btn = document.getElementById('camBtn');
+  if (!btn) return;
+  btn.innerHTML = active ? '📷 עצור מצלמה' : '📷 מצלמה';
+  btn.classList.toggle('active-share', active);
 }
 
 async function doShareAudio() {
+  const audioKey = S.cid + ':audio';
+  const existing = S.streams.get(audioKey);
+  if (existing) {
+    existing.stream.getTracks().forEach(t => t.stop());
+    S.streams.delete(audioKey); stopVU('in');
+    updateAudioBtn(false);
+    toast('שיתוף שמע הופסק', '');
+    return;
+  }
   try {
     const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true, systemAudio: 'include' });
     const vt = stream.getVideoTracks()[0];
     if (vt) { stream.removeTrack(vt); vt.stop(); }
     if (stream.getAudioTracks().length === 0) { toast('לא נמצא אודיו', 'r'); return; }
     toast('משתף שמע בלבד…', 'g');
+    S.streams.set(audioKey, { stream, type: 'audio', name: S.name + ' 🔊' });
     initVU(stream, 'in');
+    updateAudioBtn(true);
     for (const [, p] of S.peers) {
       if (p.conn) stream.getAudioTracks().forEach(t => p.conn.addTrack(t, stream));
     }
-    stream.getAudioTracks()[0].onended = () => { toast('שיתוף השמע הסתיים', ''); stopVU('in'); };
+    stream.getAudioTracks()[0].onended = () => { toast('שיתוף השמע הסתיים', ''); S.streams.delete(audioKey); stopVU('in'); updateAudioBtn(false); };
   } catch(e) { toast('שיתוף שמע בוטל', ''); }
+}
+function updateAudioBtn(active) {
+  const btn = document.getElementById('shareAudioBtn');
+  if (!btn) return;
+  btn.innerHTML = active ? '🔇 עצור שמע' : '🔊 שתף שמע';
+  btn.classList.toggle('active-share', active);
 }
 
 function showRemoteStream(stream, peerId) {
-  const vid   = document.getElementById('mainVideo');
-  const empty = document.getElementById('mainEmpty');
-  if (!vid) return;
-  vid.srcObject = stream;
-  vid.classList.add('active');
-  if (empty) empty.style.display = 'none';
   const p = S.peers.get(peerId);
-  toast((p?.name || 'Peer') + ' is sharing screen', 'g');
+  const name = p?.name || 'Peer';
+  S.streams.set(peerId, { stream, type: 'screen', name });
+  renderStreams();
+  toast(name + ' משתף/ת מסך', 'g');
   initVU(stream, 'out');
-  stream.getTracks().forEach(t => { t.onended = () => { closeRv(); stopVU('out'); }; });
+  stream.getTracks().forEach(t => { t.onended = () => { S.streams.delete(peerId); renderStreams(); stopVU('out'); }; });
 }
 
 function closeRv() {
-  const vid   = document.getElementById('mainVideo');
+  S.streams.delete(S.cid);
+  S.streams.delete(S.cid + ':cam');
+  renderStreams();
+}
+
+// ── Multi-stream rendering ────────────────────────────────
+function createStreamEl(peerId, stream, name) {
+  const wrap = document.createElement('div');
+  wrap.className = 'stream-thumb';
+  wrap.dataset.peerId = peerId;
+  const vid = document.createElement('video');
+  vid.srcObject = stream;
+  vid.autoplay = true;
+  vid.playsInline = true;
+  vid.muted = peerId.startsWith(S.cid);
+  const label = document.createElement('div');
+  label.className = 'stream-label';
+  label.textContent = name || 'Peer';
+  wrap.appendChild(vid);
+  wrap.appendChild(label);
+  // Drag support
+  wrap.draggable = true;
+  wrap.ondragstart = (e) => { wrap._dragSrc = true; wrap.classList.add('dragging'); e.dataTransfer.effectAllowed = 'move'; };
+  wrap.ondragend = () => { wrap.classList.remove('dragging'); wrap._dragSrc = false; };
+  wrap.ondragover = (e) => e.preventDefault();
+  wrap.ondrop = (e) => {
+    e.preventDefault();
+    const parent = wrap.parentNode;
+    const src = parent.querySelector('.dragging');
+    if (src && src !== wrap) {
+      const srcIdx = [...parent.children].indexOf(src);
+      const tgtIdx = [...parent.children].indexOf(wrap);
+      if (srcIdx < tgtIdx) parent.insertBefore(src, wrap.nextSibling);
+      else parent.insertBefore(src, wrap);
+    }
+  };
+  return wrap;
+}
+
+function throttle(fn, ms) { let last = 0; return function(...a) { const now = Date.now(); if (now - last >= ms) { last = now; fn.apply(this, a); } }; }
+
+function renderStreams() {
+  const mainEl = document.getElementById('streamMain');
+  const thumbsEl = document.getElementById('streamThumbs');
   const empty = document.getElementById('mainEmpty');
-  if (vid) { vid.srcObject = null; vid.classList.remove('active'); }
-  if (empty) empty.style.display = '';
+  const container = document.getElementById('streamContainer');
+  if (!mainEl || !thumbsEl) return;
+
+  if (S.streams.size === 0) {
+    if (empty) empty.style.display = '';
+    if (container) container.style.display = 'none';
+    mainEl.innerHTML = '';
+    thumbsEl.innerHTML = '';
+    const mc = document.getElementById('myControls');
+    if (mc) mc.style.display = 'none';
+    return;
+  }
+  if (empty) empty.style.display = 'none';
+  if (container) container.style.display = '';
+
+  // Pick focused stream
+  if (!S.focusedStream || !S.streams.has(S.focusedStream)) {
+    S.focusedStream = S.streams.keys().next().value;
+  }
+
+  // Main view (only in thumbnail mode)
+  mainEl.innerHTML = '';
+  const focused = S.streams.get(S.focusedStream);
+  if (focused) {
+    const vid = document.createElement('video');
+    vid.srcObject = focused.stream;
+    vid.autoplay = true; vid.playsInline = true;
+    vid.muted = S.focusedStream.startsWith(S.cid);
+    vid.tabIndex = 0; // make focusable for keyboard events
+    mainEl.appendChild(vid);
+
+    // Remote control event listeners
+    let remoteMouseDown = false;
+    vid.addEventListener('mousedown', (e) => {
+      if (!MY.mouse) return;
+      remoteMouseDown = true;
+      const rect = vid.getBoundingClientRect();
+      broadcast({ type:'remote:input', input:'mouse', action:'click',
+        x: (e.clientX - rect.left) / rect.width,
+        y: (e.clientY - rect.top) / rect.height,
+        button: e.button, from: S.cid, fromName: S.name });
+    });
+    vid.addEventListener('mouseup', () => { remoteMouseDown = false; });
+    vid.addEventListener('mouseleave', () => { remoteMouseDown = false; });
+    vid.addEventListener('mousemove', throttle((e) => {
+      if (!MY.mouse || !remoteMouseDown) return;
+      const rect = vid.getBoundingClientRect();
+      broadcast({ type:'remote:input', input:'mouse', action:'move',
+        x: (e.clientX - rect.left) / rect.width,
+        y: (e.clientY - rect.top) / rect.height,
+        from: S.cid });
+    }, 50));
+    vid.addEventListener('keydown', (e) => {
+      if (!MY.keyboard) return;
+      e.preventDefault();
+      broadcast({ type:'remote:input', input:'keyboard', action:'keydown',
+        key: e.key, code: e.code, from: S.cid, fromName: S.name });
+    });
+    vid.addEventListener('keyup', (e) => {
+      if (!MY.keyboard) return;
+      broadcast({ type:'remote:input', input:'keyboard', action:'keyup',
+        key: e.key, code: e.code, from: S.cid });
+    });
+
+    const lbl = document.createElement('div');
+    lbl.className = 'stream-label';
+    lbl.textContent = focused.name;
+    mainEl.appendChild(lbl);
+  }
+
+  // Thumbnails
+  thumbsEl.innerHTML = '';
+  for (const [pid, s] of S.streams) {
+    const thumb = createStreamEl(pid, s.stream, s.name);
+    if (pid === S.focusedStream) thumb.classList.add('active');
+    thumb.onclick = () => { S.focusedStream = pid; renderStreams(); };
+    thumbsEl.appendChild(thumb);
+  }
+
+  // Hide thumbs sidebar if only 1 stream (in thumbnail mode)
+  const isGrid = container?.classList.contains('grid-mode');
+  thumbsEl.style.display = (!isGrid && S.streams.size <= 1) ? 'none' : '';
+
+  // Hide my-controls when no streams are active (remote control is meaningless without video)
+  const mc = document.getElementById('myControls');
+  if (mc) mc.style.display = S.streams.size > 0 ? '' : 'none';
+}
+
+function toggleStreamView() {
+  const c = document.getElementById('streamContainer');
+  if (!c) return;
+  const isGrid = c.classList.toggle('grid-mode');
+  const btn = document.getElementById('viewToggle');
+  if (btn) { btn.textContent = isGrid ? '⊡' : '⊞'; btn.classList.toggle('active-tool', isGrid); }
+  renderStreams();
+}
+
+function toggleSelfMute() {
+  S.selfMuted = !S.selfMuted;
+  for (const [key, entry] of S.streams) {
+    if (key.startsWith(S.cid)) {
+      entry.stream.getAudioTracks().forEach(t => { t.enabled = !S.selfMuted; });
+    }
+  }
+  for (const [, p] of S.peers) {
+    if (p.conn) {
+      p.conn.getSenders().forEach(sender => {
+        if (sender.track?.kind === 'audio') sender.track.enabled = !S.selfMuted;
+      });
+    }
+  }
+  const btn = document.getElementById('muteBtn');
+  if (btn) {
+    btn.textContent = S.selfMuted ? '🔇' : '🎤';
+    btn.classList.toggle('muted-state', S.selfMuted);
+    btn.title = S.selfMuted ? 'בטל השתקה' : 'השתק';
+  }
+  toast(S.selfMuted ? 'מושתק' : 'מיקרופון פעיל', S.selfMuted ? '' : 'g');
 }
 
 // ══════════════════════════════════════════════════════════
 // My Controls — what THIS peer is sending
 // ══════════════════════════════════════════════════════════
-const MY = { mouse: true, keyboard: true, midi: true };
+const MY = { mouse: false, keyboard: false, midi: true };
 
 function toggleMyCtrl(key) {
   MY[key] = !MY[key];
@@ -2151,7 +2369,8 @@ function toggleMyCtrl(key) {
   const cls = key === 'midi' ? 'active-g' : 'active';
   const btn = document.getElementById(ids[key]);
   if (btn) btn.classList.toggle(cls, MY[key]);
-  toast((MY[key] ? '✓ Sending ' : '✗ Stopped sending ') + key, MY[key] ? 'g' : '');
+  const labels = { mouse:'עכבר', keyboard:'מקלדת', midi:'MIDI' };
+  toast((MY[key] ? '✓ שולח ' : '✗ הפסקת שליחת ') + (labels[key]||key), MY[key] ? 'g' : '');
 }
 
 // ══════════════════════════════════════════════════════════
@@ -2172,7 +2391,7 @@ function togglePiano() {
   const btn = document.getElementById('pianoBtn');
   if (!w) return;
   const open = w.classList.toggle('open');
-  if (btn) btn.style.background = open ? 'var(--accentD)' : '';
+  if (btn) { btn.classList.toggle('active-tool', open); btn.style.background = ''; }
   if (open && !w.dataset.built) { buildPianoKeys(); w.dataset.built = '1'; }
 }
 
@@ -2342,17 +2561,19 @@ let sessionRecorder = null;
 let lastRecBlob = null;
 function toggleSessionRecord() {
   if (!isPremium()) { showUpgradeModal(); return; }
-  const vid = document.getElementById('mainVideo');
   if (sessionRecorder && sessionRecorder.state === 'recording') {
     sessionRecorder.stop();
     sessionRecorder = null;
-    document.getElementById('recSessionBtn').style.background = '';
+    const rsb = document.getElementById('recSessionBtn');
+    if (rsb) { rsb.innerHTML = '⏺ הקלט<span class="lock-icon" id="recLock">🔒</span>'; rsb.classList.remove('recording'); rsb.style.background = ''; }
     return;
   }
-  if (!vid || !vid.srcObject) { toast('אין שיתוף מסך להקלטה', 'r'); return; }
+  const focusedEntry = S.focusedStream && S.streams.get(S.focusedStream);
+  const recStream = focusedEntry?.stream;
+  if (!recStream || recStream.getTracks().length === 0) { toast('אין שיתוף מסך להקלטה', 'r'); return; }
   startCountdown(() => {
     const chunks = [];
-    sessionRecorder = new MediaRecorder(vid.srcObject, { mimeType: 'video/webm' });
+    sessionRecorder = new MediaRecorder(recStream, { mimeType: 'video/webm' });
     sessionRecorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
     sessionRecorder.onstop = () => {
       lastRecBlob = new Blob(chunks, { type: 'video/webm' });
@@ -2362,7 +2583,8 @@ function toggleSessionRecord() {
       showShareRecModal();
     };
     sessionRecorder.start(1000);
-    document.getElementById('recSessionBtn').style.background = 'var(--rD)';
+    const rsb = document.getElementById('recSessionBtn');
+    if (rsb) { rsb.innerHTML = '⏹ עצור הקלטה'; rsb.classList.add('recording'); rsb.style.background = ''; }
     toast('מקליט את הסשן...', 'g');
   });
 }
@@ -2434,7 +2656,7 @@ function toggleTheme() {
 }
 function initTheme() {
   const saved = localStorage.getItem('ss_theme');
-  const theme = saved || (window.matchMedia('(prefers-color-scheme:dark)').matches ? 'dark' : 'light');
+  const theme = saved || 'dark';
   document.documentElement.dataset.theme = theme;
   const icon = theme === 'dark' ? '☀️' : '🌙';
   const t1 = document.getElementById('themeToggleLand');
@@ -2568,9 +2790,10 @@ function drawVUBars(analyser, elId) {
 function toggleClipBoard() {
   const p = document.getElementById('clipPanel');
   if (!p) return;
-  p.style.display = p.style.display === 'block' ? 'none' : 'block';
+  const isOpen = p.style.display !== 'block';
+  p.style.display = isOpen ? 'block' : 'none';
   const btn = document.getElementById('clipBtn');
-  if (btn) btn.style.background = p.style.display === 'block' ? 'var(--accentD)' : '';
+  if (btn) { btn.classList.toggle('active-tool', isOpen); btn.style.background = ''; }
   renderClips();
 }
 function renderClips() {
@@ -2597,6 +2820,11 @@ function toggleFullscreen() {
   const el = document.getElementById('mainArea');
   if (document.fullscreenElement) document.exitFullscreen();
   else el?.requestFullscreen?.();
+  // Update button state after fullscreen change
+  setTimeout(() => {
+    const btn = document.getElementById('fullscreenBtn');
+    if (btn) btn.classList.toggle('active-tool', !!document.fullscreenElement);
+  }, 200);
 }
 
 // ── Nudge ─────────────────────────────────────────────────
@@ -2614,7 +2842,6 @@ function muteParticipant(peerId) {
   if (!peer) return;
   peer.muted = !peer.muted;
   broadcast({ type: 'mute:command', targetId: peerId, muted: peer.muted, from: S.cid });
-  send({ type: 'mute:command', targetId: peerId, muted: peer.muted });
   renderPeerList();
 }
 
