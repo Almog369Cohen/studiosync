@@ -469,6 +469,12 @@ const server = http.createServer(async (req, res) => {
   res.end(APP_HTML);
 });
 
+// ── Keep-alive: prevent Render free tier cold starts ──────
+setInterval(() => {
+  const url = APP_URL + '/api/ice';
+  https.get(url, () => {}).on('error', () => {});
+}, 13 * 60 * 1000); // every 13 minutes
+
 // ── Start ─────────────────────────────────────────────────
 const PORT = process.env.PORT || 4444;
 server.listen(PORT, '0.0.0.0', () => {
