@@ -3,9 +3,16 @@
   "configurations": [
     {
       "name": "studiosync",
-      "runtimeExecutable": "node",
+      "runtimeExecutable": "/opt/homebrew/bin/node",
       "runtimeArgs": ["server.js"],
       "port": 4444
+    },
+    {
+      "name": "almog-creator-lab",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--", "--host", "127.0.0.1", "--port", "5187"],
+      "cwd": "./almog-creator-lab",
+      "port": 5187
     }
   ]
 }
