@@ -2335,13 +2335,38 @@ function toggleStreamView() {
   renderStreams();
 }
 
-function toggleSelfMute() {
+async function toggleSelfMute() {
+  const hasMicStream = [...S.streams.keys()].some(k => {
+    if (!k.startsWith(S.cid)) return false;
+    const entry = S.streams.get(k);
+    return entry.stream.getAudioTracks().length > 0;
+  });
+
+  if (!hasMicStream && !S.micStream) {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      S.micStream = stream;
+      S.selfMuted = false;
+      for (const [, p] of S.peers) {
+        if (p.conn) stream.getAudioTracks().forEach(t => p.conn.addTrack(t, stream));
+      }
+      const btn = document.getElementById('muteBtn');
+      if (btn) { btn.textContent = '🎤'; btn.classList.remove('muted-state'); btn.title = 'השתק'; }
+      toast('מיקרופון פעיל', 'g');
+      return;
+    } catch (e) {
+      toast('לא ניתן לפתוח מיקרופון', 'r');
+      return;
+    }
+  }
+
   S.selfMuted = !S.selfMuted;
   for (const [key, entry] of S.streams) {
     if (key.startsWith(S.cid)) {
       entry.stream.getAudioTracks().forEach(t => { t.enabled = !S.selfMuted; });
     }
   }
+  if (S.micStream) S.micStream.getAudioTracks().forEach(t => { t.enabled = !S.selfMuted; });
   for (const [, p] of S.peers) {
     if (p.conn) {
       p.conn.getSenders().forEach(sender => {
