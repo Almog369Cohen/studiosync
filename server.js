@@ -2547,7 +2547,15 @@ async function doShare() {
       toast('הרצאה — הקלטה מתחילה אוטומטית', 'g');
       setTimeout(() => toggleSessionRecord(), 800);
     }
-  } catch(e) { toast('שיתוף בוטל', ''); }
+  } catch(e) {
+    if (e.name === 'NotAllowedError') {
+      toast('שיתוף המסך נדחה — לחץ שוב וכשהדפדפן שואל, אשר', 'r');
+    } else if (e.name === 'NotFoundError') {
+      toast('לא נמצא מסך לשתף', 'r');
+    } else {
+      toast('שיתוף בוטל: ' + (e.message || e.name), '');
+    }
+  }
 }
 function updateShareBtn(active) {
   const btn = document.getElementById('shareBtn');
@@ -2577,7 +2585,17 @@ async function doShareCam() {
       if (p.conn) stream.getTracks().forEach(t => p.conn.addTrack(t, stream));
     }
     stream.getVideoTracks()[0].onended = () => { toast('המצלמה נעצרה', ''); S.streams.delete(camKey); renderStreams(); updateCamBtn(false); };
-  } catch(e) { toast('המצלמה לא זמינה או שנדחתה', 'r'); }
+  } catch(e) {
+    if (e.name === 'NotAllowedError') {
+      toast('הרשאת מצלמה נדחתה — פתח הרשאות באתר ואפשר', 'r');
+    } else if (e.name === 'NotFoundError') {
+      toast('לא נמצאה מצלמה במחשב', 'r');
+    } else if (e.name === 'NotReadableError') {
+      toast('המצלמה בשימוש ע"י תוכנה אחרת', 'r');
+    } else {
+      toast('המצלמה לא זמינה: ' + e.name, 'r');
+    }
+  }
 }
 function updateCamBtn(active) {
   const btn = document.getElementById('camBtn');
@@ -4710,6 +4728,40 @@ function downloadAllClipsZip() {
   toast('מוריד ' + S.clips.length + ' קליפים...', 'g');
 }
 
+// ── Browser compatibility check ───────────────────────────
+function checkBrowserCompat() {
+  const ua = navigator.userAgent;
+  const isChrome = ua.includes('Chrome') && !ua.includes('Edg/') && !ua.includes('OPR/') && !ua.includes('Brave');
+  const isEdge = ua.includes('Edg/');
+  const isSafari = ua.includes('Safari') && !ua.includes('Chrome') && !ua.includes('Edg/');
+  const isFirefox = ua.includes('Firefox');
+  const hasWebMIDI = !!navigator.requestMIDIAccess;
+  const hasDisplayMedia = !!navigator.mediaDevices?.getDisplayMedia;
+  const hasWebAudio = !!(window.AudioContext || window.webkitAudioContext);
+
+  const problems = [];
+  if (!hasDisplayMedia) problems.push('שיתוף מסך לא נתמך');
+  if (!hasWebAudio) problems.push('Web Audio לא נתמך');
+  if (isSafari && !hasWebMIDI) problems.push('Safari לא תומך ב-Web MIDI — MIDI מקלייבורד פיזי לא יעבוד');
+  if (isFirefox && !hasWebMIDI) problems.push('Firefox — הפעל dom.webmidi.enabled ב-about:config, או השתמש ב-Chrome');
+
+  if (problems.length) {
+    const dismissed = localStorage.getItem('ss_compat_dismissed_v1');
+    if (dismissed) return;
+    setTimeout(() => {
+      const rec = isChrome || isEdge ? '' : ' (מומלץ להשתמש ב-Chrome או Edge)';
+      const msg = 'תאימות דפדפן: ' + problems.join(', ') + rec;
+      const html = \`
+        <div id="compatBanner" style="position:fixed;top:0;left:0;right:0;padding:10px 16px;background:#f79009;color:#000;font-size:13px;z-index:9999;display:flex;align-items:center;gap:12px" dir="rtl">
+          <div style="flex:1">⚠️ \${esc(msg)}</div>
+          <button onclick="localStorage.setItem('ss_compat_dismissed_v1','1');document.getElementById('compatBanner').remove()" style="background:rgba(0,0,0,.2);border:none;color:#000;padding:4px 12px;border-radius:4px;cursor:pointer">הבנתי</button>
+        </div>
+      \`;
+      document.body.insertAdjacentHTML('afterbegin', html);
+    }, 500);
+  }
+}
+
 // ── Boot ──────────────────────────────────────────────────
 window.onload = () => {
   initTheme();
@@ -4719,6 +4771,7 @@ window.onload = () => {
   renderSchedules();
   loadFeatures();
   initDrive();
+  checkBrowserCompat();
   setInterval(checkScheduleReminders, 30000);
   if ('Notification' in window && Notification.permission === 'default') {
     Notification.requestPermission();
