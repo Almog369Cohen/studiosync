@@ -1166,7 +1166,8 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
     </div>
     <div class="tb-flex"></div>
     <!-- Tools -->
-    <button class="tc rec-btn-transport host-only" id="recSessionBtn" onclick="toggleSessionRecord()">⏺ הקלט<span class="lock-icon" id="recLock">🔒</span></button>
+    <button class="tc rec-btn-transport host-only" id="recSessionBtn" onclick="toggleSessionRecord()">⏺ הקלט</button>
+    <button class="tc host-only" id="addScreenBtn" onclick="addAnotherScreen()" title="הוסף מסך נוסף (עד 3 מוניטורים)">＋ מסך</button>
     <button class="tc" id="viewToggle" onclick="toggleStreamView()" title="תצוגת גריד">⊞</button>
     <button class="tc" id="fullscreenBtn" onclick="toggleFullscreen()" title="מסך מלא">⛶</button>
     <button class="tc" id="pianoBtn" onclick="togglePiano()" title="פסנתר משותף">🎹</button>
@@ -1564,9 +1565,7 @@ function enterSession() {
   startPoll();
   startTimer();
   initWebMidi();
-  // Show/hide record lock icon
-  const lockEl = document.getElementById('recLock');
-  if (lockEl) lockEl.style.display = isPremium() ? 'none' : 'inline';
+  // (Recording is free for MMP — no lock)
   // Role-based UI: hide host-only controls for guests
   if (S.peerNumber === 1) {
     document.body.classList.remove('is-guest');
@@ -3034,37 +3033,139 @@ function updateTimerDisplay() {
   else el.className = 'session-timer';
 }
 
-// ── Session recording (premium) ───────────────────────────
-let sessionRecorder = null;
-let lastRecBlob = null;
-function toggleSessionRecord() {
-  if (!isPremium()) { showUpgradeModal(); return; }
-  if (sessionRecorder && sessionRecorder.state === 'recording') {
-    sessionRecorder.stop();
-    sessionRecorder = null;
-    const rsb = document.getElementById('recSessionBtn');
-    if (rsb) { rsb.innerHTML = '⏺ הקלט<span class="lock-icon" id="recLock">🔒</span>'; rsb.classList.remove('recording'); rsb.style.background = ''; }
+// ══════════════════════════════════════════════════════════
+// Session recording — records ALL active streams simultaneously
+// Multi-monitor supported via "+ הוסף מסך" (calls getDisplayMedia again).
+// Each recorder produces its own .webm and downloads on stop.
+// ══════════════════════════════════════════════════════════
+const REC = { recorders: [], startedAt: 0, extraStreams: [] };
+
+function isRecording() {
+  return REC.recorders.some(r => r.state === 'recording');
+}
+
+function chooseMime() {
+  const cands = [
+    'video/webm;codecs=vp9,opus',
+    'video/webm;codecs=vp8,opus',
+    'video/webm;codecs=vp9',
+    'video/webm;codecs=vp8',
+    'video/webm'
+  ];
+  for (const m of cands) if (MediaRecorder.isTypeSupported(m)) return m;
+  return 'video/webm';
+}
+
+function recordStream(stream, label) {
+  const mime = chooseMime();
+  const chunks = [];
+  const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 4_500_000 });
+  rec.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
+  rec.onstop = () => {
+    const blob = new Blob(chunks, { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const ts = new Date().toISOString().replace(/[:.]/g,'-').slice(0,16);
+    a.download = 'studiosync-' + (S.code || 'session') + '-' + label + '-' + ts + '.webm';
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 3000);
+    S.clips.push({ blob, name: label, ts: Date.now() });
+    if (S.clips.length > 10) S.clips.shift();
+    renderClips();
+  };
+  rec.start(2000);
+  REC.recorders.push(rec);
+  return rec;
+}
+
+function collectRecordableStreams() {
+  const out = [];
+  // 1) All currently shared streams (host share, camera, guest streams, extra monitors)
+  let i = 1;
+  for (const [pid, entry] of S.streams) {
+    const isSelf = pid.startsWith(S.cid);
+    const kind = pid.endsWith(':cam') ? 'camera' :
+                 pid.endsWith(':audio') ? 'audio' :
+                 pid.startsWith('extra:') ? 'screen' + (i++) :
+                 'screen' + (i++);
+    out.push({ stream: entry.stream, label: (isSelf ? 'me-' : 'peer-') + kind });
+  }
+  return out;
+}
+
+async function toggleSessionRecord() {
+  if (isRecording()) return stopSessionRecord();
+
+  const targets = collectRecordableStreams();
+  if (!targets.length) {
+    toast('אין שיתוף מסך להקלטה — לחץ 🖥 שתף מסך קודם', 'r');
     return;
   }
-  const focusedEntry = S.focusedStream && S.streams.get(S.focusedStream);
-  const recStream = focusedEntry?.stream;
-  if (!recStream || recStream.getTracks().length === 0) { toast('אין שיתוף מסך להקלטה', 'r'); return; }
-  startCountdown(() => {
-    const chunks = [];
-    sessionRecorder = new MediaRecorder(recStream, { mimeType: 'video/webm' });
-    sessionRecorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
-    sessionRecorder.onstop = () => {
-      lastRecBlob = new Blob(chunks, { type: 'video/webm' });
-      S.clips.push({ blob: lastRecBlob, name: 'clip-' + new Date().toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit'}), ts: Date.now() });
-      if (S.clips.length > 10) S.clips.shift();
-      renderClips();
-      showShareRecModal();
-    };
-    sessionRecorder.start(1000);
+
+  try {
+    REC.recorders = [];
+    REC.startedAt = Date.now();
+    for (const t of targets) recordStream(t.stream, t.label);
+
+    // Also record system audio via a separate mic recorder if we have one
+    if (S.micStream && S.micStream.getAudioTracks().length && S.micStream.getAudioTracks()[0].enabled) {
+      recordStream(S.micStream, 'me-mic');
+    }
+
     const rsb = document.getElementById('recSessionBtn');
-    if (rsb) { rsb.innerHTML = '⏹ עצור הקלטה'; rsb.classList.add('recording'); rsb.style.background = ''; }
-    toast('מקליט את הסשן...', 'g');
-  });
+    if (rsb) { rsb.innerHTML = '⏹ עצור (' + REC.recorders.length + ')'; rsb.classList.add('recording'); }
+    toast('מקליט ' + REC.recorders.length + ' מסכים/זרמים', 'g');
+  } catch (e) {
+    toast('שגיאת הקלטה: ' + e.message, 'r');
+    REC.recorders.forEach(r => { try { r.stop(); } catch(_){} });
+    REC.recorders = [];
+  }
+}
+
+function stopSessionRecord() {
+  for (const r of REC.recorders) { try { if (r.state !== 'inactive') r.stop(); } catch(e){} }
+  REC.recorders = [];
+  // stop any extra display streams we captured
+  for (const s of REC.extraStreams) { try { s.getTracks().forEach(t => t.stop()); } catch(e){} }
+  REC.extraStreams = [];
+  const rsb = document.getElementById('recSessionBtn');
+  if (rsb) { rsb.innerHTML = '⏺ הקלט'; rsb.classList.remove('recording'); }
+  toast('הקלטה הסתיימה — הקבצים יורדים...', 'g');
+}
+
+// Add another monitor mid-session — starts a new getDisplayMedia and adds it to the recording set
+async function addAnotherScreen() {
+  try {
+    const stream = await navigator.mediaDevices.getDisplayMedia({
+      video: true, audio: true, systemAudio: 'include'
+    });
+    const key = 'extra:' + Date.now();
+    REC.extraStreams.push(stream);
+    S.streams.set(key, { stream, type: 'screen', name: (S.name || 'Me') + ' 🖥' });
+    // Share with peers
+    for (const [, p] of S.peers) {
+      if (p.conn) stream.getTracks().forEach(t => p.conn.addTrack(t, stream));
+    }
+    // If we're already recording, hook it up
+    if (isRecording()) {
+      const n = REC.recorders.length + 1;
+      recordStream(stream, 'me-screen' + n);
+      const rsb = document.getElementById('recSessionBtn');
+      if (rsb) rsb.innerHTML = '⏹ עצור (' + REC.recorders.length + ')';
+      toast('מסך נוסף — מקליט ' + REC.recorders.length + ' זרמים', 'g');
+    } else {
+      toast('מסך נוסף שותף', 'g');
+    }
+    renderStreams();
+    stream.getVideoTracks()[0].onended = () => {
+      S.streams.delete(key);
+      REC.extraStreams = REC.extraStreams.filter(s => s !== stream);
+      renderStreams();
+    };
+  } catch (e) {
+    toast('לא נבחר מסך', '');
+  }
 }
 
 // ── Session history ───────────────────────────────────────
