@@ -327,11 +327,12 @@ const server = http.createServer(async (req, res) => {
     const name = data.name || 'Producer';
     const color = data.color || '#6c47ff';
     const instrument = data.instrument || 'Producer';
+    const mode = (data.mode === 'lecture') ? 'lecture' : 'collab';
     clients.set(id, { code, name, color, instrument, res: null, seen: Date.now() });
     queues.set(id, []);
-    sessions.set(code, { peers: new Set([id]), daw: data.daw, created: Date.now(), licensed, password: data.password || null });
-    console.log('[+] Session created:', code, licensed ? '(PRO)' : '(trial)', data.password ? '(password)' : '');
-    return json(res, { ok: true, code, clientId: id, peerNumber: 1, plan: licensed ? 'pro' : 'trial' });
+    sessions.set(code, { peers: new Set([id]), daw: data.daw, created: Date.now(), licensed, password: data.password || null, mode, hostId: id });
+    console.log('[+] Session created:', code, licensed ? '(PRO)' : '(trial)', data.password ? '(password)' : '', 'mode=' + mode);
+    return json(res, { ok: true, code, clientId: id, peerNumber: 1, plan: licensed ? 'pro' : 'trial', mode });
   }
 
   // ── Join session ──
@@ -346,8 +347,13 @@ const server = http.createServer(async (req, res) => {
     // Password check
     if (sess.password && data.password !== sess.password) return json(res, { ok: false, error: 'password_required' }, 403);
     const isProSession = sess.licensed || checkLicense(data.license);
-    const maxPeers = isProSession ? 10 : 3;
-    if (sess.peers.size >= maxPeers) return json(res, { ok: false, error: isProSession ? 'הסשן מלא (עד 10 משתתפים)' : 'הסשן החינמי מלא (עד 3). שדרג ל-Pro עבור 10 משתתפים.' }, 403);
+    // Lecture mode gets a much bigger cap since traffic is mostly one-way from the lecturer
+    const isLecture = sess.mode === 'lecture';
+    const maxPeers = isLecture ? 30 : (isProSession ? 10 : 3);
+    if (sess.peers.size >= maxPeers) return json(res, { ok: false,
+      error: isLecture ? 'ההרצאה מלאה (עד 30 תלמידים)' :
+             isProSession ? 'הסשן מלא (עד 10 משתתפים)' :
+             'הסשן החינמי מלא (עד 3). שדרג ל-Pro עבור 10 משתתפים.' }, 403);
 
     const licensed = checkLicense(data.license);
     if (!licensed && !sess.licensed) {
@@ -375,8 +381,8 @@ const server = http.createServer(async (req, res) => {
       if (pc) existingPeers.push({ id: pid, name: pc.name, color: pc.color, instrument: pc.instrument });
     }
 
-    // Send welcome to joiner with list of existing peers
-    push(id, { type: 'session:welcome', peers: existingPeers, code });
+    // Send welcome to joiner with list of existing peers + session mode
+    push(id, { type: 'session:welcome', peers: existingPeers, code, mode: sess.mode || 'collab' });
 
     // Tell ALL existing peers to create an offer to the new joiner
     for (const pid of sess.peers) {
@@ -385,8 +391,8 @@ const server = http.createServer(async (req, res) => {
       push(pid, { type: 'peer:joined', peerId: id, name, color, instrument, role: data.role || 'participant' });
     }
 
-    console.log('[+] Joined:', name, '->', code, '(peer', sess.peers.size, ')');
-    return json(res, { ok: true, code, clientId: id, peerNumber: sess.peers.size });
+    console.log('[+] Joined:', name, '->', code, '(peer', sess.peers.size, ') mode=' + (sess.mode || 'collab'));
+    return json(res, { ok: true, code, clientId: id, peerNumber: sess.peers.size, mode: sess.mode || 'collab' });
   }
 
   // ── Send / relay messages ──
@@ -637,6 +643,13 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 .lc-title { font-weight:600; font-size:15px; color:var(--hi); }
 .lc-sub { font-size:12px; color:var(--mid); margin-top:2px; }
 .lob-input { width:100%; padding:10px 12px; border:1.5px solid var(--b1); border-radius:var(--radius); font-size:14px; font-family:var(--sans); color:var(--txt); background:var(--bg); margin-bottom:14px; outline:none; transition:border .15s; }
+.mode-picker { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:14px; }
+.mode-btn { display:flex; flex-direction:column; align-items:center; gap:4px; padding:10px 8px; background:var(--s1); border:1.5px solid var(--b1); border-radius:var(--radius); cursor:pointer; transition:all .15s; font-family:var(--sans); }
+.mode-btn:hover { border-color:var(--accent); background:var(--bg); }
+.mode-btn.active { border-color:var(--accent); background:rgba(108,71,255,.1); }
+.mode-ico { font-size:20px; }
+.mode-name { font-size:13px; font-weight:600; color:var(--txt); }
+.mode-desc { font-size:10px; color:var(--dim); }
 .lob-input:focus { border-color:var(--accent); }
 .code-input { font-family:var(--mono); font-size:18px; text-transform:uppercase; letter-spacing:2px; text-align:center; }
 .color-label,.instr-label { font-size:12px; font-weight:600; color:var(--mid); text-transform:uppercase; letter-spacing:.5px; margin-bottom:8px; }
@@ -844,6 +857,19 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 .midi-pill.playing { background:rgba(3,178,140,.15); border-color:#03b28c; color:#03b28c; box-shadow:0 0 8px rgba(3,178,140,.4); }
 #kbdMidiBtn { font-family:var(--mono); font-size:10px; letter-spacing:1px; padding:6px 8px; opacity:.6; }
 #kbdMidiBtn.active { background:rgba(3,178,140,.15); border-color:#03b28c; color:#03b28c; opacity:1; box-shadow:0 0 8px rgba(3,178,140,.3); }
+#raiseHandBtn.active { background:rgba(247,144,9,.15); border-color:#f79009; color:#f79009; animation:handWave .8s ease-in-out infinite; }
+@keyframes handWave { 0%,100% { transform:rotate(-6deg); } 50% { transform:rotate(6deg); } }
+/* Lecture-mode: hide sharing controls for students */
+.is-student .share-btn, .is-student .cam-btn, .is-student .share-audio-btn { display:none !important; }
+.is-student .my-controls { display:none !important; }
+/* Class control panel */
+.cc-list { max-height:340px; overflow-y:auto; display:flex; flex-direction:column; gap:6px; }
+.cc-row { display:flex; align-items:center; gap:8px; padding:8px 10px; background:var(--s1); border:1px solid var(--b1); border-radius:8px; }
+.cc-name { flex:1; font-size:13px; font-weight:500; }
+.cc-toggles { display:flex; gap:4px; }
+.cc-toggle { width:30px; height:30px; border:1px solid var(--b1); background:none; border-radius:6px; font-size:14px; cursor:pointer; transition:all .15s; }
+.cc-toggle:hover { border-color:var(--accent); }
+.cc-toggle.on { background:rgba(3,178,140,.15); border-color:#03b28c; }
 .agent-pill { background:var(--s1); border:1px solid var(--b1); border-radius:100px; padding:3px 10px; font-size:11px; color:var(--dim); font-family:var(--sans); transition:all .2s; }
 .agent-pill.connected { border-color:#03b28c; color:#03b28c; background:rgba(3,178,140,.08); }
 .agent-pill.disconnected { border-color:#f04438; color:#f04438; background:rgba(240,68,56,.08); animation:agentBlink 1.4s ease-in-out infinite; }
@@ -1123,6 +1149,18 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
       <input id="createName" placeholder="השם שלך" class="lob-input" dir="rtl" />
       <div class="color-picker" id="createColors" style="display:none"></div>
       <div class="instr-grid" id="createInstrs" style="display:none"></div>
+      <div class="mode-picker" dir="rtl">
+        <button class="mode-btn active" data-mode="collab" onclick="selectMode('collab')">
+          <span class="mode-ico">🤝</span>
+          <span class="mode-name">משותף</span>
+          <span class="mode-desc">כולם שווים · עד 10</span>
+        </button>
+        <button class="mode-btn" data-mode="lecture" onclick="selectMode('lecture')">
+          <span class="mode-ico">🎓</span>
+          <span class="mode-name">הרצאה</span>
+          <span class="mode-desc">מרצה שולט · עד 30</span>
+        </button>
+      </div>
       <button class="btn-accent btn-full" onclick="hostStart()">צור סשן</button>
     </div>
 
@@ -1226,6 +1264,8 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
     <button class="tc host-only" id="addScreenBtn" onclick="addAnotherScreen()" title="הוסף מסך נוסף (עד 3 מוניטורים)">＋ מסך</button>
     <button class="tc" id="viewToggle" onclick="toggleStreamView()" title="תצוגת גריד">⊞</button>
     <button class="tc" id="fullscreenBtn" onclick="toggleFullscreen()" title="מסך מלא">⛶</button>
+    <button class="tc" id="raiseHandBtn" onclick="toggleRaiseHand()" title="הרם יד לבקש רשות דיבור" style="display:none">✋ הרם יד</button>
+    <button class="tc" id="classCtrlBtn" onclick="showClassControl()" title="שליטת הרצאה" style="display:none">🎓 כיתה</button>
     <button class="tc" id="pianoBtn" onclick="togglePiano()" title="פסנתר משותף">🎹 פסנתר</button>
     <button class="tc" id="kbdMidiBtn" onclick="toggleKbdMidi()" title="לחץ M להפעיל מקלדת כ-MIDI">ASDF</button>
     <button class="tc host-only" id="healthBtn" onclick="showHealthCheck()" title="בדוק שהמערכת מוכנה לסשן">🩺</button>
@@ -1424,6 +1464,8 @@ const S = {
   dnd: false,
   peerNumber: 0,
   role: 'participant', // 'participant' | 'listener'
+  mode: 'collab',      // 'collab' | 'lecture'
+  handsRaised: new Set(), // peerIds who raised a hand (host view only)
   stageMode: false,
   stageHolder: null, // peerId of who is on stage
   lastNudge: 0,
@@ -1550,6 +1592,11 @@ function dlog(msg) {
 }
 
 // ── Session lifecycle ─────────────────────────────────────
+function selectMode(mode) {
+  S.mode = (mode === 'lecture') ? 'lecture' : 'collab';
+  document.querySelectorAll('.mode-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === S.mode));
+}
+
 async function hostStart() {
   const name = (document.getElementById('createName')?.value || '').trim() || 'Producer';
   S.name = name;
@@ -1560,7 +1607,7 @@ async function hostStart() {
     const r = await fetch(SERVER + '/api/create', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: S.name, color: S.color, instrument: S.instrument, daw: 'Ableton', fingerprint: getFingerprint(), password: (document.getElementById('createPassword')?.value || '').trim() || undefined })
+      body: JSON.stringify({ name: S.name, color: S.color, instrument: S.instrument, daw: 'Ableton', mode: S.mode || 'collab', fingerprint: getFingerprint(), password: (document.getElementById('createPassword')?.value || '').trim() || undefined })
     });
     const d = await r.json();
     if (!d.ok) { toast('Error: ' + d.error, 'r'); show('lobby'); return; }
@@ -1568,6 +1615,7 @@ async function hostStart() {
     S.code = d.code;
     S.peerNumber = d.peerNumber || 1;
     S.plan = d.plan || 'trial';
+    S.mode = d.mode || S.mode || 'collab';
     S.role = 'participant';
     document.getElementById('connectingCode').textContent = S.code;
     enterSession();
@@ -1624,6 +1672,7 @@ function enterSession() {
   startTimer();
   initWebMidi();
   startAgentStatusPoll();
+  applySessionMode();
   // (Recording is free for MMP — no lock)
   // Role-based UI: hide host-only controls for guests
   if (S.peerNumber === 1) {
@@ -1853,9 +1902,11 @@ function handleMsg(msg) {
   switch (msg.type) {
     case 'session:welcome':
       S.connectedAt = Date.now();
+      S.mode = msg.mode || S.mode || 'collab';
       for (const p of (msg.peers || [])) {
         S.peers.set(p.id, { name: p.name, color: p.color, instrument: p.instrument, dc: null, conn: null, latency: 0, perms: { mouse:true, keyboard:true, midi:true } });
       }
+      applySessionMode();
       updatePeerAvatars(); renderPeerList();
       break;
     case 'peer:joined':
@@ -1871,9 +1922,51 @@ function handleMsg(msg) {
         if (card) { card.classList.add('leaving'); setTimeout(() => { lp?.conn?.close(); S.peers.delete(msg.peerId); updatePeerAvatars(); renderPeerList(); }, 300); }
         else { lp.conn?.close(); S.peers.delete(msg.peerId); updatePeerAvatars(); renderPeerList(); }
       }
+      S.handsRaised.delete(msg.peerId);
       if (!S.dnd) { playLeaveSound(); toast((msg.name || 'Peer') + ' עזב/ה', ''); }
       break;
     }
+    // ── Lecture-mode messages ──
+    case 'hand:raise':
+      if (isLecturer()) {
+        S.handsRaised.add(msg.from);
+        toast('✋ ' + (msg.fromName || 'תלמיד') + ' הרים יד', 'g');
+        // Refresh open control panel if visible
+        if (document.getElementById('ccBackdrop')) showClassControl();
+      }
+      break;
+    case 'hand:lower':
+      if (isLecturer()) {
+        S.handsRaised.delete(msg.from);
+        if (document.getElementById('ccBackdrop')) showClassControl();
+      }
+      break;
+    case 'class:perm':
+      if (msg.targetId === S.cid) {
+        // Lecturer granted/revoked a permission for me
+        if (msg.perm === 'mic') {
+          S.selfMuted = !msg.value;
+          if (S.micStream) S.micStream.getAudioTracks().forEach(t => t.enabled = msg.value);
+          for (const [, p] of S.peers) p.conn?.getSenders()?.forEach(s => { if (s.track?.kind === 'audio') s.track.enabled = msg.value; });
+          const btn = document.getElementById('muteBtn');
+          if (btn) { btn.textContent = msg.value ? '🎤' : '🔇'; btn.classList.toggle('muted-state', !msg.value); }
+        } else if (MY.hasOwnProperty(msg.perm)) {
+          MY[msg.perm] = !!msg.value;
+        }
+        toast('המרצה ' + (msg.value ? 'פתח' : 'סגר') + ' לך ' +
+          ({ mic:'מיקרופון', mouse:'עכבר', keyboard:'מקלדת', midi:'MIDI' }[msg.perm] || msg.perm),
+          msg.value ? 'g' : '');
+      }
+      break;
+    case 'class:mute-all':
+      if (isStudent()) {
+        S.selfMuted = !!msg.muted;
+        if (S.micStream) S.micStream.getAudioTracks().forEach(t => t.enabled = !msg.muted);
+        for (const [, p] of S.peers) p.conn?.getSenders()?.forEach(s => { if (s.track?.kind === 'audio') s.track.enabled = !msg.muted; });
+        const btn = document.getElementById('muteBtn');
+        if (btn) { btn.textContent = msg.muted ? '🔇' : '🎤'; btn.classList.toggle('muted-state', !!msg.muted); }
+      }
+      break;
     case 'webrtc:create-offer':
       S.peers.set(msg.peerId, { name: msg.name || '', color: msg.color || PEER_COLORS[0], instrument: msg.instrument || '', dc: null, conn: null, latency: 0, perms: { mouse:true, keyboard:true, midi:true } });
       PeerMesh.createOffer(msg.peerId).catch(e => dlog('WebRTC offer err: ' + e.message));
@@ -2617,6 +2710,102 @@ async function toggleSelfMute() {
     btn.title = S.selfMuted ? 'בטל השתקה' : 'השתק';
   }
   toast(S.selfMuted ? 'מושתק' : 'מיקרופון פעיל', S.selfMuted ? '' : 'g');
+}
+
+// ══════════════════════════════════════════════════════════
+// Lecture mode — session-level role, class control, raise-hand
+// ══════════════════════════════════════════════════════════
+function isLecture() { return S.mode === 'lecture'; }
+function isLecturer() { return isLecture() && S.peerNumber === 1; }
+function isStudent()  { return isLecture() && S.peerNumber !== 1; }
+
+function applySessionMode() {
+  document.body.classList.toggle('is-lecture', isLecture());
+  document.body.classList.toggle('is-lecturer', isLecturer());
+  document.body.classList.toggle('is-student', isStudent());
+  const raiseBtn = document.getElementById('raiseHandBtn');
+  const classBtn = document.getElementById('classCtrlBtn');
+  if (raiseBtn) raiseBtn.style.display = isStudent() ? '' : 'none';
+  if (classBtn) classBtn.style.display = isLecturer() ? '' : 'none';
+  if (isStudent()) {
+    // Auto-mute + lock permissions; sends muted, no input
+    S.selfMuted = true;
+    MY.mouse = false; MY.keyboard = false; MY.midi = false;
+    document.getElementById('myMouse')?.classList.remove('active');
+    document.getElementById('myKeys')?.classList.remove('active');
+    const muteBtn = document.getElementById('muteBtn');
+    if (muteBtn) { muteBtn.textContent = '🔇'; muteBtn.classList.add('muted-state'); }
+    toast('מצב הרצאה — משתקים אותך עד שהמרצה יתן רשות', '');
+  }
+}
+
+function toggleRaiseHand() {
+  if (!isStudent()) return;
+  const wasRaised = document.body.classList.toggle('hand-up');
+  const btn = document.getElementById('raiseHandBtn');
+  if (btn) btn.classList.toggle('active', wasRaised);
+  broadcast({ type: wasRaised ? 'hand:raise' : 'hand:lower', from: S.cid, fromName: S.name });
+  toast(wasRaised ? '✋ הרמת יד' : 'הורדת יד', wasRaised ? 'g' : '');
+}
+
+function showClassControl() {
+  if (!isLecturer()) return;
+  const students = [];
+  for (const [pid, p] of S.peers) {
+    students.push({ id: pid, name: p.name || 'תלמיד', color: p.color || '#8b5cf6',
+      handRaised: S.handsRaised.has(pid),
+      perms: p.perms || { mouse:false, keyboard:false, midi:false, mic:false } });
+  }
+  const rows = students.map(s => \`
+    <div class="cc-row" style="border-inline-start:4px solid \${s.color}">
+      <div class="cc-name">\${s.handRaised ? '✋ ' : ''}\${esc(s.name)}</div>
+      <div class="cc-toggles">
+        <button class="cc-toggle \${s.perms.mic ? 'on' : ''}" onclick="classToggle('\${s.id}','mic')">🎤</button>
+        <button class="cc-toggle \${s.perms.mouse ? 'on' : ''}" onclick="classToggle('\${s.id}','mouse')">🖱</button>
+        <button class="cc-toggle \${s.perms.keyboard ? 'on' : ''}" onclick="classToggle('\${s.id}','keyboard')">⌨</button>
+        <button class="cc-toggle \${s.perms.midi ? 'on' : ''}" onclick="classToggle('\${s.id}','midi')">🎹</button>
+      </div>
+    </div>
+  \`).join('');
+  const html = \`
+    <div class="modal-backdrop" id="ccBackdrop" onclick="if(event.target===this)closeClassControl()">
+      <div class="modal-panel" style="max-width:520px" dir="rtl">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+          <h3 style="margin:0;flex:1">🎓 שליטת הרצאה</h3>
+          <button onclick="closeClassControl()" style="background:none;border:none;color:var(--mid);font-size:18px;cursor:pointer">✕</button>
+        </div>
+        <div style="display:flex;gap:6px;margin-bottom:12px">
+          <button class="btn-primary" style="flex:1;font-size:12px" onclick="classMuteAll(true)">🔇 השתק את כולם</button>
+          <button class="btn-primary" style="flex:1;font-size:12px" onclick="classMuteAll(false)">🎤 פתח את כולם</button>
+        </div>
+        <div class="cc-list">\${rows || '<div style="font-size:12px;color:var(--dim);padding:12px;text-align:center">אין תלמידים בסשן</div>'}</div>
+        <div style="font-size:11px;color:var(--dim);margin-top:10px">לחץ על אייקון כדי לתת/לקחת הרשאה לתלמיד</div>
+      </div>
+    </div>
+  \`;
+  document.getElementById('ccBackdrop')?.remove();
+  document.body.insertAdjacentHTML('beforeend', html);
+}
+function closeClassControl() { document.getElementById('ccBackdrop')?.remove(); }
+
+function classToggle(peerId, perm) {
+  const p = S.peers.get(peerId);
+  if (!p) return;
+  p.perms = p.perms || { mouse:false, keyboard:false, midi:false, mic:false };
+  p.perms[perm] = !p.perms[perm];
+  broadcast({ type: 'class:perm', targetId: peerId, perm, value: p.perms[perm], from: S.cid });
+  // Refresh open modal
+  showClassControl();
+}
+
+function classMuteAll(muted) {
+  broadcast({ type: 'class:mute-all', muted, from: S.cid });
+  for (const [pid, p] of S.peers) {
+    p.perms = p.perms || {};
+    p.perms.mic = !muted;
+  }
+  toast(muted ? '🔇 כולם הושתקו' : '🎤 כולם נפתחו', 'g');
+  showClassControl();
 }
 
 // ══════════════════════════════════════════════════════════
