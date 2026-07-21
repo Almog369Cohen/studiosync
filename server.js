@@ -1371,6 +1371,7 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
     <button class="tc" id="fullscreenBtn" onclick="toggleFullscreen()" title="מסך מלא">⛶</button>
     <button class="tc" id="raiseHandBtn" onclick="toggleRaiseHand()" title="הרם יד לבקש רשות דיבור" style="display:none">✋ הרם יד</button>
     <button class="tc" id="classCtrlBtn" onclick="showClassControl()" title="שליטת הרצאה" style="display:none">🎓 כיתה</button>
+    <button class="tc" id="endArchiveBtn" onclick="endAndArchive()" title="סיים הרצאה + שמור הכל" style="display:none">🏁 סיים ושמור</button>
     <button class="tc" id="pianoBtn" onclick="togglePiano()" title="פסנתר משותף">🎹 פסנתר</button>
     <button class="tc" id="kbdMidiBtn" onclick="toggleKbdMidi()" title="לחץ M להפעיל מקלדת כ-MIDI">ASDF</button>
     <button class="tc host-only" id="healthBtn" onclick="showHealthCheck()" title="בדוק שהמערכת מוכנה לסשן">🩺</button>
@@ -2541,6 +2542,11 @@ async function doShare() {
       if (p.conn) stream.getTracks().forEach(t => p.conn.addTrack(t, stream));
     }
     stream.getVideoTracks()[0].onended = () => { toast('שיתוף מסך הסתיים', ''); S.streams.delete(S.cid); renderStreams(); stopVU('in'); updateShareBtn(false); };
+    // In lecture mode, auto-arm recording so the lecturer never has to remember
+    if (isLecturer() && !isRecording()) {
+      toast('הרצאה — הקלטה מתחילה אוטומטית', 'g');
+      setTimeout(() => toggleSessionRecord(), 800);
+    }
   } catch(e) { toast('שיתוף בוטל', ''); }
 }
 function updateShareBtn(active) {
@@ -3015,8 +3021,10 @@ function applySessionMode() {
   document.body.classList.toggle('is-student', isStudent());
   const raiseBtn = document.getElementById('raiseHandBtn');
   const classBtn = document.getElementById('classCtrlBtn');
+  const endBtn = document.getElementById('endArchiveBtn');
   if (raiseBtn) raiseBtn.style.display = isStudent() ? '' : 'none';
   if (classBtn) classBtn.style.display = isLecturer() ? '' : 'none';
+  if (endBtn) endBtn.style.display = isLecturer() ? '' : 'none';
   if (isStudent()) {
     // Auto-mute + lock permissions; sends muted, no input
     S.selfMuted = true;
@@ -3096,6 +3104,49 @@ function classMuteAll(muted) {
   }
   toast(muted ? '🔇 כולם הושתקו' : '🎤 כולם נפתחו', 'g');
   showClassControl();
+}
+
+async function endAndArchive() {
+  if (!isLecturer()) return;
+  if (!confirm('לסיים את ההרצאה + לשמור את כל ההקלטות ל-Drive ולהתחיל תמלול?')) return;
+
+  toast('סיום הרצאה — עוצר הקלטות...', '');
+  if (isRecording()) stopSessionRecord();
+  // Give recorders a moment to finalize their blobs
+  await new Promise(r => setTimeout(r, 1500));
+
+  const clipsAtSnapshot = [...(S.clips || [])];
+  if (!clipsAtSnapshot.length) {
+    toast('אין הקלטות לארכב', '');
+    leaveSession();
+    return;
+  }
+
+  // Upload to Drive if enabled
+  let cfg = null;
+  try { cfg = await (await fetch('/api/config')).json(); } catch(e) {}
+  if (cfg?.driveEnabled) {
+    toast('מעלה ל-Drive...', '');
+    try { await uploadAllClipsToDrive(); } catch(e) { toast('שגיאה בהעלאה: ' + e.message, 'r'); }
+  }
+
+  // Transcribe if enabled — audio clips only (mic + audio-share)
+  if (cfg?.transcribeEnabled) {
+    const audioClips = clipsAtSnapshot.filter(c => /me-mic|-audio/.test(c.name));
+    if (audioClips.length) {
+      toast('מתמלל ' + audioClips.length + ' קטעי שמע...', '');
+      for (const c of audioClips) {
+        try {
+          const r = await fetch('/api/transcribe', { method:'POST', headers:{'Content-Type':'audio/webm'}, body: c.blob });
+          const d = await r.json();
+          if (d.ok) c.transcript = d.text;
+        } catch(e) {}
+      }
+    }
+  }
+
+  toast('הארכוב הסתיים — נסגר', 'g');
+  setTimeout(() => leaveSession(), 800);
 }
 
 // ══════════════════════════════════════════════════════════
