@@ -206,7 +206,7 @@ function json(res, data, code = 200) {
 setInterval(() => {
   const now = Date.now();
   for (const [id, c] of clients) {
-    if (now - c.seen > 45000) {
+    if (now - c.seen > 90000) {
       const sess = sessions.get(c.code);
       if (sess) {
         sess.peers.delete(id);
@@ -302,7 +302,10 @@ const server = http.createServer(async (req, res) => {
     }
 
     const id   = 'p_' + Date.now() + crypto.randomBytes(3).toString('hex');
-    const code = genCode();
+    // Allow reusing a specific code (auto-rejoin after server restart) if it's free.
+    const requested = typeof data.code === 'string' ? data.code.toUpperCase().trim() : null;
+    const code = (requested && /^[A-Z0-9]{3}-[A-Z0-9]{3}$/.test(requested) && !sessions.has(requested))
+      ? requested : genCode();
     const name = data.name || 'Producer';
     const color = data.color || '#6c47ff';
     const instrument = data.instrument || 'Producer';
@@ -1610,15 +1613,60 @@ function leaveSession() {
 }
 
 // ── Polling with reconnection ─────────────────────────────
+async function tryAutoRejoin() {
+  // Server forgot us (redeploy, eviction, network gap). Attempt silent rejoin with same code+name.
+  if (!S.code || !S.name) return false;
+  try {
+    const wasHost = S.peerNumber === 1;
+    // Try recreate first if we were the host — brings the room back online.
+    if (wasHost) {
+      const r = await fetch(SERVER + '/api/create', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: S.name, color: S.color, instrument: S.instrument, daw: 'Ableton',
+          fingerprint: getFingerprint(), code: S.code })
+      });
+      const d = await r.json();
+      if (d.ok) { S.cid = d.clientId; return true; }
+    }
+    // Rejoin as guest
+    const raw = S.code.replace(/[^A-Z0-9]/gi, '').toUpperCase();
+    const code = raw.slice(0, 3) + '-' + raw.slice(3);
+    const r = await fetch(SERVER + '/api/join', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code, name: S.name, color: S.color, instrument: S.instrument,
+        fingerprint: getFingerprint() })
+    });
+    const d = await r.json();
+    if (d.ok) { S.cid = d.clientId; return true; }
+    return false;
+  } catch (e) { return false; }
+}
+
 async function startPoll() {
   S.poll = true;
   let fails = 0;
+  let rejoinAttempts = 0;
   while (S.poll) {
     try {
       const r = await fetch(SERVER + '/api/poll?cid=' + S.cid, { signal: AbortSignal.timeout(30000) });
       if (!r.ok) {
         if (r.status === 404) {
-          showBanner('Session expired — please rejoin', 'err');
+          // Try silent auto-rejoin (server likely restarted or evicted us)
+          if (rejoinAttempts < 3) {
+            rejoinAttempts++;
+            if (rejoinAttempts === 1) showBanner('מתחבר מחדש...', 'warn');
+            const ok = await tryAutoRejoin();
+            if (ok) {
+              showBanner('חובר מחדש', 'ok');
+              rejoinAttempts = 0;
+              continue;
+            }
+            await new Promise(r => setTimeout(r, 2000 * rejoinAttempts));
+            continue;
+          }
+          showBanner('הסשן פג — נא להצטרף מחדש', 'err');
           leaveSession();
           return;
         }
@@ -1627,7 +1675,7 @@ async function startPoll() {
         await new Promise(r => setTimeout(r, Math.min(2000 * fails, 10000)));
         continue;
       }
-      if (fails > 0) { showBanner('Reconnected!', 'ok'); fails = 0; }
+      if (fails > 0 || rejoinAttempts > 0) { showBanner('חובר', 'ok'); fails = 0; rejoinAttempts = 0; }
       const d = await r.json();
       for (const m of (d.messages || [])) handleMsg(m);
     } catch(e) {
