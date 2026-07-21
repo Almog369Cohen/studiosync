@@ -107,6 +107,16 @@ function handleInput(msg) {
     case 'move':
       robot.moveMouse(x, y);
       break;
+    case 'mousedown':
+      robot.moveMouse(x, y);
+      robot.mouseToggle('down', msg.button === 2 ? 'right' : 'left');
+      log('🖱  ↓ @ ' + x + ',' + y);
+      break;
+    case 'mouseup':
+      robot.moveMouse(x, y);
+      robot.mouseToggle('up', msg.button === 2 ? 'right' : 'left');
+      log('🖱  ↑ @ ' + x + ',' + y);
+      break;
     case 'click':
       robot.moveMouse(x, y);
       robot.mouseClick(msg.button === 2 ? 'right' : 'left');

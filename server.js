@@ -438,10 +438,15 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // ── Heartbeat (online indicator) ──
+  // ── Heartbeat (online indicator + session keepalive) ──
   if (path === '/api/heartbeat' && req.method === 'POST') {
     const data = await body(req);
     if (data.name) onlineUsers.set(data.name, { name: data.name, color: data.color || '#6c47ff', instrument: data.instrument || '', ts: Date.now() });
+    // Also refresh session client's seen timestamp so eviction doesn't fire during long polls / background tabs
+    if (data.cid) {
+      const c = clients.get(data.cid);
+      if (c) c.seen = Date.now();
+    }
     return json(res, { ok: true });
   }
   if (path === '/api/online' && req.method === 'GET') {
@@ -741,6 +746,10 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 #pianoWrap { position:fixed; bottom:56px; left:0; right:0; background:var(--bg); border-top:1px solid var(--b1); z-index:48; display:none; flex-direction:column; box-shadow:0 -4px 16px rgba(0,0,0,.15); }
 #pianoWrap.open { display:flex; }
 .pk-w.on, .pk-b.on { transition:background .05s; }
+.piano-size-picker { display:flex; gap:2px; background:var(--s1); border:1px solid var(--b1); border-radius:6px; padding:2px; }
+.piano-size-btn { font-size:11px; padding:3px 10px; border:none; background:none; color:var(--mid); border-radius:4px; cursor:pointer; font-family:var(--sans); }
+.piano-size-btn:hover { color:var(--fg); }
+.piano-size-btn.active { background:var(--accent); color:#fff; font-weight:600; }
 .pk-w[data-peer], .pk-b[data-peer] { position:relative; }
 .pk-w[data-peer]::after, .pk-b[data-peer]::after {
   content:attr(data-peer); position:absolute; top:2px; left:50%; transform:translateX(-50%);
@@ -1170,6 +1179,11 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
   <div id="pianoWrap">
     <div class="piano-header">
       <span class="piano-header-label">🎹 פסנתר משותף — לחץ על הקלידים או השתמש במקלדת (M להפעלה)</span>
+      <div class="piano-size-picker">
+        <button class="piano-size-btn" data-size="2" onclick="setPianoSize(2)">קומפקטי</button>
+        <button class="piano-size-btn" data-size="4" onclick="setPianoSize(4)">בינוני</button>
+        <button class="piano-size-btn" data-size="7" onclick="setPianoSize(7)">מלא</button>
+      </div>
       <button class="piano-oct" onclick="pianoOctave(-1)">◀ אוקטבה</button>
       <span id="pianoOctLbl" style="font-size:11px;color:var(--mid);min-width:28px;text-align:center">C4</span>
       <button class="piano-oct" onclick="pianoOctave(1)">אוקטבה ▶</button>
@@ -1571,6 +1585,10 @@ function enterSession() {
     MY.mouse = false; MY.keyboard = false;
     document.getElementById('myMouse')?.classList.remove('active');
     document.getElementById('myKeys')?.classList.remove('active');
+  } else {
+    // Desktop defaults are ON — reflect that on the toggle buttons
+    if (MY.mouse) document.getElementById('myMouse')?.classList.add('active');
+    if (MY.keyboard) document.getElementById('myKeys')?.classList.add('active');
   }
   // Ping loop
   S.pingInterval = setInterval(() => {
@@ -1778,12 +1796,12 @@ function handleMsg(msg) {
     case 'session:welcome':
       S.connectedAt = Date.now();
       for (const p of (msg.peers || [])) {
-        S.peers.set(p.id, { name: p.name, color: p.color, instrument: p.instrument, dc: null, conn: null, latency: 0, perms: { mouse:false, keyboard:false, midi:true } });
+        S.peers.set(p.id, { name: p.name, color: p.color, instrument: p.instrument, dc: null, conn: null, latency: 0, perms: { mouse:true, keyboard:true, midi:true } });
       }
       updatePeerAvatars(); renderPeerList();
       break;
     case 'peer:joined':
-      S.peers.set(msg.peerId, { name: msg.name, color: msg.color, instrument: msg.instrument, dc: null, conn: null, latency: 0, role: msg.role || 'participant', muted: false, perms: { mouse:false, keyboard:false, midi:true } });
+      S.peers.set(msg.peerId, { name: msg.name, color: msg.color, instrument: msg.instrument, dc: null, conn: null, latency: 0, role: msg.role || 'participant', muted: false, perms: { mouse:true, keyboard:true, midi:true } });
       updatePeerAvatars(); renderPeerList();
       if (!S.dnd) { playJoinSound(); toast(msg.name + ' הצטרף/ה', 'g'); }
       break;
@@ -1799,7 +1817,7 @@ function handleMsg(msg) {
       break;
     }
     case 'webrtc:create-offer':
-      S.peers.set(msg.peerId, { name: msg.name || '', color: msg.color || PEER_COLORS[0], instrument: msg.instrument || '', dc: null, conn: null, latency: 0, perms: { mouse:false, keyboard:false, midi:true } });
+      S.peers.set(msg.peerId, { name: msg.name || '', color: msg.color || PEER_COLORS[0], instrument: msg.instrument || '', dc: null, conn: null, latency: 0, perms: { mouse:true, keyboard:true, midi:true } });
       PeerMesh.createOffer(msg.peerId).catch(e => dlog('WebRTC offer err: ' + e.message));
       break;
     case 'webrtc:offer':
@@ -2358,27 +2376,52 @@ function renderStreams() {
     vid.tabIndex = 0; // make focusable for keyboard events
     mainEl.appendChild(vid);
 
-    // Remote control event listeners
+    // Remote control event listeners — proper drag support
     let remoteMouseDown = false;
+    const relXY = (e) => {
+      const r = vid.getBoundingClientRect();
+      return { x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height };
+    };
     vid.addEventListener('mousedown', (e) => {
       if (!MY.mouse) return;
       remoteMouseDown = true;
-      const rect = vid.getBoundingClientRect();
-      broadcast({ type:'remote:input', input:'mouse', action:'click',
-        x: (e.clientX - rect.left) / rect.width,
-        y: (e.clientY - rect.top) / rect.height,
-        button: e.button, from: S.cid, fromName: S.name });
+      const p = relXY(e);
+      broadcast({ type:'remote:input', input:'mouse', action:'mousedown',
+        x:p.x, y:p.y, button:e.button, from:S.cid, fromName:S.name });
     });
-    vid.addEventListener('mouseup', () => { remoteMouseDown = false; });
-    vid.addEventListener('mouseleave', () => { remoteMouseDown = false; });
+    vid.addEventListener('mouseup', (e) => {
+      if (!remoteMouseDown) return;
+      remoteMouseDown = false;
+      if (!MY.mouse) return;
+      const p = relXY(e);
+      broadcast({ type:'remote:input', input:'mouse', action:'mouseup',
+        x:p.x, y:p.y, button:e.button, from:S.cid });
+    });
+    vid.addEventListener('mouseleave', (e) => {
+      // Still send a mouseup so the host doesn't have a stuck-held button.
+      if (!remoteMouseDown) return;
+      remoteMouseDown = false;
+      if (!MY.mouse) return;
+      const p = relXY(e);
+      broadcast({ type:'remote:input', input:'mouse', action:'mouseup',
+        x:p.x, y:p.y, button:0, from:S.cid });
+    });
     vid.addEventListener('mousemove', throttle((e) => {
-      if (!MY.mouse || !remoteMouseDown) return;
-      const rect = vid.getBoundingClientRect();
+      if (!MY.mouse) return;
+      const p = relXY(e);
       broadcast({ type:'remote:input', input:'mouse', action:'move',
-        x: (e.clientX - rect.left) / rect.width,
-        y: (e.clientY - rect.top) / rect.height,
-        from: S.cid });
-    }, 50));
+        x:p.x, y:p.y, from:S.cid });
+    }, 30));
+    vid.addEventListener('contextmenu', (e) => {
+      if (!MY.mouse) return;
+      e.preventDefault();
+    });
+    vid.addEventListener('wheel', throttle((e) => {
+      if (!MY.mouse) return;
+      e.preventDefault();
+      broadcast({ type:'remote:input', input:'mouse', action:'scroll',
+        dx: -Math.sign(e.deltaX) * 3, dy: -Math.sign(e.deltaY) * 3, from:S.cid });
+    }, 30));
     vid.addEventListener('keydown', (e) => {
       if (!MY.keyboard) return;
       // If user's keyboard is mapped to MIDI right now, don't hijack it for remote control.
@@ -2482,7 +2525,7 @@ async function toggleSelfMute() {
 // ══════════════════════════════════════════════════════════
 // My Controls — what THIS peer is sending
 // ══════════════════════════════════════════════════════════
-const MY = { mouse: false, keyboard: false, midi: true };
+const MY = { mouse: true, keyboard: true, midi: true };
 
 function toggleMyCtrl(key) {
   MY[key] = !MY[key];
@@ -2502,6 +2545,7 @@ const PIANO = {
   velocity: 100,      // note velocity (0-127)
   active: new Set(),
   kbdOn: false,       // computer-keyboard-as-MIDI toggle (like Ableton's M)
+  size: Number(localStorage.getItem('ss_piano_size') || 2),  // octaves: 2/4/7
   // Ableton Computer MIDI Keyboard mapping — semitone offset from C
   // Lower octave: A row + upper row for black keys
   keyMap: {
@@ -2642,14 +2686,28 @@ function pianoOctave(dir) {
   buildPianoKeys();
 }
 
+function setPianoSize(octaves) {
+  PIANO.size = Math.max(1, Math.min(7, octaves));
+  try { localStorage.setItem('ss_piano_size', String(PIANO.size)); } catch(e) {}
+  releaseAllNotes(); // avoid stuck highlights when re-rendering keys
+  buildPianoKeys();
+}
+
 function buildPianoKeys() {
   const el = document.getElementById('pianoKeys');
   if (!el) return;
   el.innerHTML = '';
-  // 2 octaves starting from PIANO.octave
-  const layout = [0,null,1,null,2,3,null,4,null,5,null,6]; // null = black key gap
-  const noteNames = ['C','','D','','E','F','','G','','A','','B'];
-  for (let oct = 0; oct < 2; oct++) {
+  // Reflect current size choice in the picker
+  document.querySelectorAll('.piano-size-btn').forEach(b => {
+    b.classList.toggle('active', Number(b.dataset.size) === PIANO.size);
+  });
+  // Clamp base octave so the last key doesn't go past MIDI 108
+  const octaves = PIANO.size || 2;
+  const maxStart = 9 - octaves;
+  if (PIANO.octave > maxStart) PIANO.octave = maxStart;
+  const lbl = document.getElementById('pianoOctLbl');
+  if (lbl) lbl.textContent = 'C' + PIANO.octave;
+  for (let oct = 0; oct < octaves; oct++) {
     const whites = [0,2,4,5,7,9,11];
     const blacks = [1,3,-1,6,8,10,-1]; // -1 = no black key after E and B
     const baseNote = (PIANO.octave + oct) * 12;
@@ -3434,18 +3492,28 @@ function closeHelp() {
   localStorage.setItem('ss_help_seen', '1');
 }
 
-// ── Online Indicator ──────────────────────────────────────
+// ── Online Indicator + session keepalive ─────────────────
 let heartbeatTimer = null;
 function startHeartbeat() {
   const send = () => {
     const name = S.name || localStorage.getItem('ss_name');
     if (!name) return;
-    fetch('/api/heartbeat', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ name, color: S.color, instrument: S.instrument }) }).catch(()=>{});
+    fetch('/api/heartbeat', { method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ name, cid: S.cid, color: S.color, instrument: S.instrument }) }).catch(()=>{});
   };
   send();
-  heartbeatTimer = setInterval(send, 30000);
+  // Faster cadence than server eviction (90s) — survives background tab throttling.
+  heartbeatTimer = setInterval(send, 15000);
 }
 function stopHeartbeat() { if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; } }
+
+// When the tab returns to foreground, immediately ping so the server knows we're still here.
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && S.cid) {
+    fetch('/api/heartbeat', { method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ name:S.name, cid:S.cid, color:S.color, instrument:S.instrument }) }).catch(()=>{});
+  }
+});
 async function fetchOnline() {
   try {
     const r = await fetch('/api/online');
