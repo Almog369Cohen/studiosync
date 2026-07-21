@@ -777,6 +777,8 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 .midi-pill:hover { border-color:var(--accent); color:var(--fg); }
 .midi-pill.connected { border-color:#03b28c; color:#03b28c; }
 .midi-pill.playing { background:rgba(3,178,140,.15); border-color:#03b28c; color:#03b28c; box-shadow:0 0 8px rgba(3,178,140,.4); }
+#kbdMidiBtn { font-family:var(--mono); font-size:10px; letter-spacing:1px; padding:6px 8px; opacity:.6; }
+#kbdMidiBtn.active { background:rgba(3,178,140,.15); border-color:#03b28c; color:#03b28c; opacity:1; box-shadow:0 0 8px rgba(3,178,140,.3); }
 .share-btn { width:auto; padding:0 14px; font-size:13px; font-family:var(--sans); white-space:nowrap; }
 .cam-btn { width:auto; padding:0 14px; font-size:13px; font-family:var(--sans); white-space:nowrap; }
 .active-share { border:2px solid var(--accent) !important; background:rgba(0,255,136,.15) !important; }
@@ -1148,6 +1150,7 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
     <button class="tc rec-btn-transport host-only" id="recSessionBtn" onclick="toggleSessionRecord()">⏺ הקלט<span class="lock-icon" id="recLock">🔒</span></button>
     <button class="tc" id="viewToggle" onclick="toggleStreamView()" title="תצוגת גריד">⊞</button>
     <button class="tc" id="fullscreenBtn" onclick="toggleFullscreen()" title="מסך מלא">⛶</button>
+    <button class="tc" id="kbdMidiBtn" onclick="toggleKbdMidi()" title="לחץ M להפעיל מקלדת כ-MIDI">ASDF</button>
     <div class="midi-pill" id="midiPill" onclick="reinitWebMidi()" title="MIDI">🎹 —</div>
     <div class="latency-pill" id="latPill">-- ms</div>
   </div>
@@ -2408,12 +2411,15 @@ function toggleMyCtrl(key) {
 // Virtual Piano + MIDI
 // ══════════════════════════════════════════════════════════
 const PIANO = {
-  octave: 4,   // base octave
+  octave: 4,          // base octave (Ableton default is 3, but 4 sits in the sweet spot for laptop mics)
+  velocity: 100,      // note velocity (0-127)
   active: new Set(),
-  // computer keyboard → semitone offset from C (lower row = octave, upper row = octave+1)
+  kbdOn: false,       // computer-keyboard-as-MIDI toggle (like Ableton's M)
+  // Ableton Computer MIDI Keyboard mapping — semitone offset from C
+  // Lower octave: A row + upper row for black keys
   keyMap: {
-    'z':0,'s':1,'x':2,'d':3,'c':4,'v':5,'g':6,'b':7,'h':8,'n':9,'j':10,'m':11,
-    'q':12,'2':13,'w':14,'3':15,'e':16,'r':17,'5':18,'t':19,'6':20,'y':21,'7':22,'u':23,'i':24
+    'a':0, 'w':1, 's':2, 'e':3, 'd':4, 'f':5, 't':6, 'g':7, 'y':8, 'h':9, 'u':10, 'j':11,
+    'k':12, 'o':13, 'l':14, 'p':15, ';':16, "'":17
   }
 };
 
@@ -2504,31 +2510,102 @@ function pianoNoteOff(note, el) {
     from:S.cid, fromName:S.name });
 }
 
-// Computer keyboard → piano
-document.addEventListener('keydown', e => {
-  const tag = document.activeElement?.tagName;
-  const pianoOpen = document.getElementById('pianoWrap')?.classList.contains('open');
-  if (pianoOpen && !e.metaKey && !e.ctrlKey) {
-    const semi = PIANO.keyMap[e.key?.toLowerCase()];
-    if (semi !== undefined && !e.repeat) {
-      const note = PIANO.octave * 12 + semi;
-      const keyEl = document.querySelector(\`[data-note="\${note}"]\`);
-      pianoNoteOn(note, keyEl);
-      return;
-    }
+// ══════════════════════════════════════════════════════════
+// Computer keyboard as MIDI (like Ableton's "M" toggle)
+// ASDFGHJK = white keys, WERTYU = black keys
+// Z/X = octave down/up, C/V = velocity down/up
+// ══════════════════════════════════════════════════════════
+function toggleKbdMidi() {
+  PIANO.kbdOn = !PIANO.kbdOn;
+  const btn = document.getElementById('kbdMidiBtn');
+  if (btn) {
+    btn.classList.toggle('active', PIANO.kbdOn);
+    btn.title = PIANO.kbdOn
+      ? 'מקלדת = MIDI (ASDF...) — לחץ M לכבות'
+      : 'לחץ M להפעיל מקלדת כ-MIDI';
   }
+  toast(PIANO.kbdOn ? '🎹 מקלדת = MIDI פעיל (ASDF...)' : 'מקלדת = MIDI כבוי', PIANO.kbdOn ? 'g' : '');
+  if (PIANO.kbdOn) {
+    // release any sticky notes when turning on
+    PIANO.active.clear();
+  } else {
+    // send noteoff for any still-held keys
+    for (const note of PIANO.active) {
+      broadcast({ type:'remote:midi', action:'noteoff', note, velocity:0, channel:0,
+        from:S.cid, fromName:S.name });
+    }
+    PIANO.active.clear();
+  }
+}
+
+function kbdMidiNoteOn(note) {
+  if (PIANO.active.has(note)) return;
+  PIANO.active.add(note);
+  if (!MY.midi) return;
+  broadcast({ type:'remote:midi', action:'noteon', note, velocity:PIANO.velocity, channel:0,
+    from:S.cid, fromName:S.name });
+  flashMidiPill();
+}
+
+function kbdMidiNoteOff(note) {
+  if (!PIANO.active.has(note)) return;
+  PIANO.active.delete(note);
+  if (!MY.midi) return;
+  broadcast({ type:'remote:midi', action:'noteoff', note, velocity:0, channel:0,
+    from:S.cid, fromName:S.name });
+}
+
+document.addEventListener('keydown', e => {
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  const tag = document.activeElement?.tagName;
   if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+  const k = e.key?.toLowerCase();
+
+  // M = toggle keyboard MIDI (only inside a session)
+  if (k === 'm' && S.code && !e.repeat) {
+    e.preventDefault();
+    toggleKbdMidi();
+    return;
+  }
+
+  if (!PIANO.kbdOn) return;
+
+  // Octave: Z / X
+  if (k === 'z' && !e.repeat) {
+    PIANO.octave = Math.max(0, PIANO.octave - 1);
+    toast('אוקטבה: C' + PIANO.octave, '');
+    return;
+  }
+  if (k === 'x' && !e.repeat) {
+    PIANO.octave = Math.min(8, PIANO.octave + 1);
+    toast('אוקטבה: C' + PIANO.octave, '');
+    return;
+  }
+  // Velocity: C / V
+  if (k === 'c' && !e.repeat) {
+    PIANO.velocity = Math.max(1, PIANO.velocity - 10);
+    toast('Velocity: ' + PIANO.velocity, '');
+    return;
+  }
+  if (k === 'v' && !e.repeat) {
+    PIANO.velocity = Math.min(127, PIANO.velocity + 10);
+    toast('Velocity: ' + PIANO.velocity, '');
+    return;
+  }
+
+  const semi = PIANO.keyMap[k];
+  if (semi !== undefined && !e.repeat) {
+    e.preventDefault();
+    kbdMidiNoteOn(PIANO.octave * 12 + semi);
+  }
 });
 
 document.addEventListener('keyup', e => {
-  const pianoOpen = document.getElementById('pianoWrap')?.classList.contains('open');
-  if (pianoOpen) {
-    const semi = PIANO.keyMap[e.key?.toLowerCase()];
-    if (semi !== undefined) {
-      const note = PIANO.octave * 12 + semi;
-      const keyEl = document.querySelector(\`[data-note="\${note}"]\`);
-      pianoNoteOff(note, keyEl);
-    }
+  if (!PIANO.kbdOn) return;
+  const k = e.key?.toLowerCase();
+  const semi = PIANO.keyMap[k];
+  if (semi !== undefined) {
+    kbdMidiNoteOff(PIANO.octave * 12 + semi);
   }
 });
 
