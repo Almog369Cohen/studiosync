@@ -343,8 +343,9 @@ const server = http.createServer(async (req, res) => {
     const name       = data.name || 'Musician_' + Math.floor(Math.random() * 100);
     const color      = data.color || '#12b76a';
     const instrument = data.instrument || 'Keys';
+    const isAgent    = !!data.isAgent;
 
-    clients.set(id, { code, name, color, instrument, res: null, seen: Date.now() });
+    clients.set(id, { code, name, color, instrument, res: null, seen: Date.now(), isAgent });
     queues.set(id, []);
     sess.peers.add(id);
 
@@ -436,6 +437,24 @@ const server = http.createServer(async (req, res) => {
       }, 28000);
     }
     return;
+  }
+
+  // ── Session health (Agent connection + peer count) ──
+  if (path === '/api/health' && req.method === 'GET') {
+    const code = url.searchParams.get('code');
+    if (!code) return json(res, { ok:false, error:'no_code' }, 400);
+    const sess = sessions.get(code);
+    if (!sess) return json(res, { ok:true, agent:false, agentSeen:0, peers:0 });
+    let agentSeen = 0;
+    let peers = 0;
+    const now = Date.now();
+    for (const pid of sess.peers) {
+      const c = clients.get(pid);
+      if (!c) continue;
+      if (c.isAgent) agentSeen = Math.max(agentSeen, c.seen);
+      else peers++;
+    }
+    return json(res, { ok:true, agent: (now - agentSeen) < 15000, agentSeen, peers });
   }
 
   // ── Heartbeat (online indicator + session keepalive) ──
@@ -798,6 +817,16 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 .midi-pill.playing { background:rgba(3,178,140,.15); border-color:#03b28c; color:#03b28c; box-shadow:0 0 8px rgba(3,178,140,.4); }
 #kbdMidiBtn { font-family:var(--mono); font-size:10px; letter-spacing:1px; padding:6px 8px; opacity:.6; }
 #kbdMidiBtn.active { background:rgba(3,178,140,.15); border-color:#03b28c; color:#03b28c; opacity:1; box-shadow:0 0 8px rgba(3,178,140,.3); }
+.agent-pill { background:var(--s1); border:1px solid var(--b1); border-radius:100px; padding:3px 10px; font-size:11px; color:var(--dim); font-family:var(--sans); transition:all .2s; }
+.agent-pill.connected { border-color:#03b28c; color:#03b28c; background:rgba(3,178,140,.08); }
+.agent-pill.disconnected { border-color:#f04438; color:#f04438; background:rgba(240,68,56,.08); animation:agentBlink 1.4s ease-in-out infinite; }
+@keyframes agentBlink { 0%,100% { opacity:.7; } 50% { opacity:1; } }
+/* Click-to-control hint overlay on the shared video */
+.remote-hint { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; pointer-events:none;
+  background:rgba(0,0,0,.15); color:#fff; font-size:14px; font-weight:600; text-shadow:0 2px 6px rgba(0,0,0,.6);
+  opacity:0; transition:opacity .3s; z-index:5; }
+.stream-thumb:hover .remote-hint, .main-video-wrap:hover .remote-hint { opacity:1; }
+.remote-hint-inner { background:rgba(0,0,0,.6); padding:8px 16px; border-radius:100px; }
 .share-btn { width:auto; padding:0 14px; font-size:13px; font-family:var(--sans); white-space:nowrap; }
 .cam-btn { width:auto; padding:0 14px; font-size:13px; font-family:var(--sans); white-space:nowrap; }
 .active-share { border:2px solid var(--accent) !important; background:rgba(0,255,136,.15) !important; }
@@ -1170,9 +1199,11 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
     <button class="tc host-only" id="addScreenBtn" onclick="addAnotherScreen()" title="הוסף מסך נוסף (עד 3 מוניטורים)">＋ מסך</button>
     <button class="tc" id="viewToggle" onclick="toggleStreamView()" title="תצוגת גריד">⊞</button>
     <button class="tc" id="fullscreenBtn" onclick="toggleFullscreen()" title="מסך מלא">⛶</button>
-    <button class="tc" id="pianoBtn" onclick="togglePiano()" title="פסנתר משותף">🎹</button>
+    <button class="tc" id="pianoBtn" onclick="togglePiano()" title="פסנתר משותף">🎹 פסנתר</button>
     <button class="tc" id="kbdMidiBtn" onclick="toggleKbdMidi()" title="לחץ M להפעיל מקלדת כ-MIDI">ASDF</button>
-    <div class="midi-pill" id="midiPill" onclick="reinitWebMidi()" title="MIDI">🎹 —</div>
+    <button class="tc host-only" id="healthBtn" onclick="showHealthCheck()" title="בדוק שהמערכת מוכנה לסשן">🩺</button>
+    <div class="agent-pill host-only" id="agentPill" title="סטטוס Agent (שליטה מרחוק + MIDI)">🤖 —</div>
+    <div class="midi-pill" id="midiPill" onclick="reinitWebMidi()" title="Web MIDI keyboard">🎹 —</div>
     <div class="latency-pill" id="latPill">-- ms</div>
   </div>
 
@@ -1565,6 +1596,7 @@ function enterSession() {
   startPoll();
   startTimer();
   initWebMidi();
+  startAgentStatusPoll();
   // (Recording is free for MMP — no lock)
   // Role-based UI: hide host-only controls for guests
   if (S.peerNumber === 1) {
@@ -1611,8 +1643,8 @@ function leaveSession() {
   }
   saveHistory();
   stopTimer();
-  if (sessionRecorder && sessionRecorder.state === 'recording') sessionRecorder.stop();
-  sessionRecorder = null;
+  stopAgentStatusPoll();
+  if (isRecording && isRecording()) stopSessionRecord();
   S.role = 'participant';
   S.stageMode = false; S.stageHolder = null;
   S.poll = false;
@@ -2267,16 +2299,38 @@ async function doShareAudio() {
     return;
   }
   try {
-    const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true, systemAudio: 'include' });
+    // Music-quality mode: disable AEC/AGC/NS (they mangle music), request high bitrate.
+    const stream = await navigator.mediaDevices.getDisplayMedia({
+      video: true,
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false,
+        sampleRate: 48000, channelCount: 2, sampleSize: 16 },
+      systemAudio: 'include'
+    });
     const vt = stream.getVideoTracks()[0];
     if (vt) { stream.removeTrack(vt); vt.stop(); }
     if (stream.getAudioTracks().length === 0) { toast('לא נמצא אודיו', 'r'); return; }
-    toast('משתף שמע בלבד…', 'g');
+    // Try applying music-quality constraints on the audio track too (some browsers honor it here).
+    try { await stream.getAudioTracks()[0].applyConstraints({ echoCancellation:false, noiseSuppression:false, autoGainControl:false }); } catch(e) {}
+    toast('משתף שמע (איכות מוזיקלית)', 'g');
     S.streams.set(audioKey, { stream, type: 'audio', name: S.name + ' 🔊' });
     initVU(stream, 'in');
     updateAudioBtn(true);
     for (const [, p] of S.peers) {
-      if (p.conn) stream.getAudioTracks().forEach(t => p.conn.addTrack(t, stream));
+      if (p.conn) {
+        stream.getAudioTracks().forEach(t => {
+          const sender = p.conn.addTrack(t, stream);
+          // Bump Opus bitrate to 128kbps for music (default ~40kbps for speech).
+          setTimeout(() => {
+            try {
+              const params = sender.getParameters();
+              params.encodings = params.encodings || [{}];
+              params.encodings[0].maxBitrate = 128_000;
+              params.encodings[0].priority = 'high';
+              sender.setParameters(params);
+            } catch(e) {}
+          }, 200);
+        });
+      }
     }
     stream.getAudioTracks()[0].onended = () => { toast('שיתוף השמע הסתיים', ''); S.streams.delete(audioKey); stopVU('in'); updateAudioBtn(false); };
   } catch(e) { toast('שיתוף שמע בוטל', ''); }
@@ -2368,12 +2422,29 @@ function renderStreams() {
   mainEl.innerHTML = '';
   const focused = S.streams.get(S.focusedStream);
   if (focused) {
+    // Wrap so we can overlay the "click to control" hint
+    const wrap = document.createElement('div');
+    wrap.className = 'main-video-wrap';
+    wrap.style.cssText = 'position:relative;width:100%;height:100%;display:flex';
     const vid = document.createElement('video');
     vid.srcObject = focused.stream;
     vid.autoplay = true; vid.playsInline = true;
     vid.muted = S.focusedStream.startsWith(S.cid);
     vid.tabIndex = 0; // make focusable for keyboard events
-    mainEl.appendChild(vid);
+    vid.style.cssText = 'width:100%;height:100%;object-fit:contain;background:#000';
+    wrap.appendChild(vid);
+    // Show hint only when this isn't our own stream and the guest can send input
+    const isSelf = S.focusedStream.startsWith(S.cid);
+    if (!isSelf && (MY.mouse || MY.keyboard)) {
+      const hint = document.createElement('div');
+      hint.className = 'remote-hint';
+      hint.innerHTML = '<div class="remote-hint-inner">👆 לחץ כדי לשלוט על ה-DAW</div>';
+      wrap.appendChild(hint);
+      // Hide hint after first interaction
+      vid.addEventListener('focus', () => hint.style.display = 'none', { once:true });
+      vid.addEventListener('mousedown', () => hint.style.display = 'none', { once:true });
+    }
+    mainEl.appendChild(wrap);
 
     // Remote control event listeners — proper drag support
     let remoteMouseDown = false;
@@ -3615,6 +3686,107 @@ document.addEventListener('visibilitychange', () => {
       body:JSON.stringify({ name:S.name, cid:S.cid, color:S.color, instrument:S.instrument }) }).catch(()=>{});
   }
 });
+
+// ══════════════════════════════════════════════════════════
+// Agent status polling — pill shows red until the local Agent joins
+// ══════════════════════════════════════════════════════════
+let agentPollTimer = null;
+let lastAgentSeen = 0;
+function startAgentStatusPoll() {
+  stopAgentStatusPoll();
+  const tick = async () => {
+    if (!S.code) return;
+    try {
+      const r = await fetch('/api/health?code=' + encodeURIComponent(S.code));
+      const d = await r.json();
+      const pill = document.getElementById('agentPill');
+      if (!pill) return;
+      if (d.agent) {
+        lastAgentSeen = Date.now();
+        pill.textContent = '🤖 Agent פעיל';
+        pill.classList.remove('disconnected');
+        pill.classList.add('connected');
+        pill.title = 'שליטה מרחוק ו-MIDI זמינים';
+      } else {
+        pill.textContent = '🤖 Agent לא מחובר';
+        pill.classList.remove('connected');
+        pill.classList.add('disconnected');
+        pill.title = 'הרץ start.command על המחשב שלך כדי להפעיל MIDI + שליטה מרחוק';
+      }
+    } catch(e) {}
+  };
+  tick();
+  agentPollTimer = setInterval(tick, 5000);
+}
+function stopAgentStatusPoll() {
+  if (agentPollTimer) { clearInterval(agentPollTimer); agentPollTimer = null; }
+}
+
+// ══════════════════════════════════════════════════════════
+// Health check modal — first-time sanity check for host
+// ══════════════════════════════════════════════════════════
+async function showHealthCheck() {
+  const checks = [];
+
+  // Browser checks (auto)
+  checks.push({ label: 'Web MIDI (Chrome/Edge)', ok: !!navigator.requestMIDIAccess, note: 'להפעלת MIDI מקלייבורד פיזי' });
+  checks.push({ label: 'Screen sharing (getDisplayMedia)', ok: !!navigator.mediaDevices?.getDisplayMedia, note: 'לשיתוף מסך ה-DAW' });
+  checks.push({ label: 'Microphone (getUserMedia)', ok: !!navigator.mediaDevices?.getUserMedia });
+  checks.push({ label: 'MediaRecorder + WebM', ok: window.MediaRecorder && MediaRecorder.isTypeSupported('video/webm') });
+  checks.push({ label: 'Web Audio', ok: !!(window.AudioContext || window.webkitAudioContext), note: 'לצליל פסנתר משותף' });
+
+  // Server-side (Agent)
+  let agent = false;
+  try {
+    const r = await fetch('/api/health?code=' + encodeURIComponent(S.code));
+    const d = await r.json();
+    agent = d.agent;
+  } catch(e) {}
+  checks.push({ label: 'Agent מחובר (start.command)', ok: agent, note: 'שליטה מרחוק + הקלטת MIDI ל-Ableton' });
+
+  // Manual items — user must confirm themselves
+  const manual = [
+    { label: 'IAC Driver פעיל (Audio MIDI Setup → IAC Driver → Device is online ✓)' },
+    { label: 'Multi-Output Device (BlackHole 2ch + הרמקולים) הוגדר ונבחר ב-DAW' },
+    { label: 'הרשאת Accessibility ל-Terminal (System Settings → Privacy → Accessibility)' },
+    { label: 'הרשאת Screen Recording ל-Chrome (System Settings → Privacy → Screen Recording)' },
+    { label: 'ב-Ableton: MIDI Track → arm → MIDI From: IAC Driver' },
+  ];
+
+  const html = \`
+    <div class="modal-backdrop" id="healthBackdrop" onclick="if(event.target===this)closeHealthCheck()">
+      <div class="modal-panel" style="max-width:520px">
+        <h3 style="margin:0 0 6px">🩺 בדיקת כשירות</h3>
+        <div style="font-size:12px;color:var(--dim);margin-bottom:14px">בדיקה אוטומטית של הדפדפן והשרת + צ'קליסט הגדרות ידניות למק</div>
+        <div style="font-size:11px;color:var(--mid);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">אוטומטי</div>
+        <ul style="list-style:none;padding:0;margin:0 0 16px">
+          \${checks.map(c => \`<li style="padding:6px 0;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--b1)">
+            <span style="font-size:16px;\${c.ok ? 'color:#03b28c' : 'color:#f04438'}">\${c.ok ? '✓' : '✗'}</span>
+            <div style="flex:1"><div style="font-size:13px">\${esc(c.label)}</div>\${c.note ? \`<div style="font-size:11px;color:var(--dim)">\${esc(c.note)}</div>\` : ''}</div>
+          </li>\`).join('')}
+        </ul>
+        <div style="font-size:11px;color:var(--mid);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">ידני (בדוק בעצמך)</div>
+        <ul style="list-style:none;padding:0;margin:0 0 16px">
+          \${manual.map((m, i) => \`<li style="padding:6px 0;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--b1)">
+            <input type="checkbox" id="hc-manual-\${i}" onchange="saveHealthCheckState()" \${localStorage.getItem('ss_hc_' + i) === '1' ? 'checked' : ''} />
+            <label for="hc-manual-\${i}" style="flex:1;font-size:13px;cursor:pointer">\${esc(m.label)}</label>
+          </li>\`).join('')}
+        </ul>
+        <button onclick="closeHealthCheck()" class="btn-primary" style="width:100%">סגור</button>
+      </div>
+    </div>
+  \`;
+  const existing = document.getElementById('healthBackdrop');
+  if (existing) existing.remove();
+  document.body.insertAdjacentHTML('beforeend', html);
+}
+function closeHealthCheck() {
+  document.getElementById('healthBackdrop')?.remove();
+}
+function saveHealthCheckState() {
+  const boxes = document.querySelectorAll('[id^="hc-manual-"]');
+  boxes.forEach((b, i) => localStorage.setItem('ss_hc_' + i, b.checked ? '1' : '0'));
+}
 async function fetchOnline() {
   try {
     const r = await fetch('/api/online');
