@@ -849,6 +849,10 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 .main-area-empty-icon { font-size:48px; opacity:.5; }
 .main-area-empty-text { font-size:15px; font-weight:500; }
 .main-area-empty-sub { font-size:12px; color:var(--dim); max-width:280px; line-height:1.5; }
+.pulse-dot { width:14px; height:14px; border-radius:50%; background:var(--accent); margin:0 auto; animation:pulseDot 1.5s ease-in-out infinite; box-shadow:0 0 0 0 rgba(108,71,255,.7); }
+@keyframes pulseDot { 0% { box-shadow:0 0 0 0 rgba(108,71,255,.7); } 70% { box-shadow:0 0 0 12px rgba(108,71,255,0); } 100% { box-shadow:0 0 0 0 rgba(108,71,255,0); } }
+.is-student #emptyText, .is-student #emptySub, .is-student #emptyIcon { display:none; }
+.is-student #studentWaiting { display:block !important; }
 .main-video { width:100%; height:100%; object-fit:contain; border-radius:var(--radiusL); background:#000; display:none; }
 .main-video.active { display:block; }
 
@@ -1323,10 +1327,14 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
         <div class="stream-thumbs" id="streamThumbs"></div>
       </div>
       <div class="main-area-empty" id="mainEmpty" dir="rtl">
-        <div class="main-area-empty-icon">🖥</div>
-        <div class="main-area-empty-text">ממתין לשיתוף מסך...</div>
-        <div class="main-area-empty-sub">לחץ על <b>"שתף מסך"</b> בסרגל למטה כדי לשתף את מסך ה-DAW והשמע.</div>
-        <button class="btn-ghost" style="margin-top:12px;font-size:13px" onclick="doShareCam()">📷 או שתף מצלמה</button>
+        <div class="main-area-empty-icon" id="emptyIcon">🖥</div>
+        <div class="main-area-empty-text" id="emptyText">ממתין לשיתוף מסך...</div>
+        <div class="main-area-empty-sub" id="emptySub">לחץ על <b>"שתף מסך"</b> בסרגל למטה כדי לשתף את מסך ה-DAW והשמע.</div>
+        <button class="btn-ghost host-only" id="emptyShareCam" style="margin-top:12px;font-size:13px" onclick="doShareCam()">📷 או שתף מצלמה</button>
+        <div class="student-waiting" id="studentWaiting" style="display:none;margin-top:16px">
+          <div class="pulse-dot"></div>
+          <div style="font-size:12px;color:var(--dim);margin-top:8px">ממתין שהמרצה יתחיל</div>
+        </div>
       </div>
     </div>
 
