@@ -735,8 +735,15 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 /* (tracks removed — not connected to real DAW) */
 
 /* ── Virtual Piano ───────────────────────────────────── */
-#pianoWrap { position:fixed; bottom:56px; left:0; right:0; background:var(--bg); border-top:1px solid var(--b1); z-index:48; display:none; flex-direction:column; }
+#pianoWrap { position:fixed; bottom:56px; left:0; right:0; background:var(--bg); border-top:1px solid var(--b1); z-index:48; display:none; flex-direction:column; box-shadow:0 -4px 16px rgba(0,0,0,.15); }
 #pianoWrap.open { display:flex; }
+.pk-w.on, .pk-b.on { transition:background .05s; }
+.pk-w[data-peer], .pk-b[data-peer] { position:relative; }
+.pk-w[data-peer]::after, .pk-b[data-peer]::after {
+  content:attr(data-peer); position:absolute; top:2px; left:50%; transform:translateX(-50%);
+  font-size:9px; font-weight:700; color:#fff; background:rgba(0,0,0,.5); padding:1px 4px; border-radius:8px;
+  pointer-events:none; white-space:nowrap; max-width:90%; overflow:hidden; text-overflow:ellipsis;
+}
 .piano-header { display:flex; align-items:center; gap:10px; padding:6px 16px; border-bottom:1px solid var(--b1); }
 .piano-header-label { font-size:12px; font-weight:600; color:var(--mid); flex:1; }
 .piano-oct { padding:3px 10px; font-size:11px; border:1px solid var(--b1); border-radius:4px; background:none; cursor:pointer; color:var(--mid); }
@@ -1150,9 +1157,22 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
     <button class="tc rec-btn-transport host-only" id="recSessionBtn" onclick="toggleSessionRecord()">⏺ הקלט<span class="lock-icon" id="recLock">🔒</span></button>
     <button class="tc" id="viewToggle" onclick="toggleStreamView()" title="תצוגת גריד">⊞</button>
     <button class="tc" id="fullscreenBtn" onclick="toggleFullscreen()" title="מסך מלא">⛶</button>
+    <button class="tc" id="pianoBtn" onclick="togglePiano()" title="פסנתר משותף">🎹</button>
     <button class="tc" id="kbdMidiBtn" onclick="toggleKbdMidi()" title="לחץ M להפעיל מקלדת כ-MIDI">ASDF</button>
     <div class="midi-pill" id="midiPill" onclick="reinitWebMidi()" title="MIDI">🎹 —</div>
     <div class="latency-pill" id="latPill">-- ms</div>
+  </div>
+
+  <!-- Shared Piano — visible to all participants -->
+  <div id="pianoWrap">
+    <div class="piano-header">
+      <span class="piano-header-label">🎹 פסנתר משותף — לחץ על הקלידים או השתמש במקלדת (M להפעלה)</span>
+      <button class="piano-oct" onclick="pianoOctave(-1)">◀ אוקטבה</button>
+      <span id="pianoOctLbl" style="font-size:11px;color:var(--mid);min-width:28px;text-align:center">C4</span>
+      <button class="piano-oct" onclick="pianoOctave(1)">אוקטבה ▶</button>
+      <button class="piano-close" onclick="togglePiano()" title="סגור">✕</button>
+    </div>
+    <div class="piano-keys" id="pianoKeys"></div>
   </div>
 </div>
 
@@ -1773,9 +1793,19 @@ function handleMsg(msg) {
       }
       break;
     }
-    case 'remote:midi':
+    case 'remote:midi': {
       dlog('🎹 MIDI ' + msg.action + ' note=' + (msg.note||'-') + ' from ' + (msg.fromName||'peer'));
+      const sender = S.peers.get(msg.from);
+      const color = sender?.color || '#8b5cf6';
+      const name = msg.fromName || sender?.name || 'Peer';
+      if (msg.action === 'noteon') {
+        handleNote('noteon', msg.note, { source:'remote', velocity:msg.velocity,
+          channel:msg.channel, peerColor:color, peerName:name });
+      } else if (msg.action === 'noteoff') {
+        handleNote('noteoff', msg.note, { source:'remote' });
+      }
       break;
+    }
     case 'nudge':
       if (!S.dnd) {
         playTone(1200, .15); setTimeout(() => playTone(1500, .15), 120);
@@ -2423,18 +2453,135 @@ const PIANO = {
   }
 };
 
+// ══════════════════════════════════════════════════════════
+// Web Audio piano synth — local sound for all note sources
+// ══════════════════════════════════════════════════════════
+const AUDIO = { ctx: null, master: null, voices: new Map() };
+
+function audioInit() {
+  if (AUDIO.ctx) return;
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return;
+  AUDIO.ctx = new AC();
+  AUDIO.master = AUDIO.ctx.createGain();
+  AUDIO.master.gain.value = 0.35;
+  AUDIO.master.connect(AUDIO.ctx.destination);
+}
+
+function midiToFreq(note) {
+  return 440 * Math.pow(2, (note - 69) / 12);
+}
+
+function playPianoNote(note, velocity) {
+  audioInit();
+  if (!AUDIO.ctx) return;
+  if (AUDIO.ctx.state === 'suspended') AUDIO.ctx.resume();
+
+  // stop any existing voice on this note
+  stopPianoNote(note);
+
+  const freq = midiToFreq(note);
+  const vel = (velocity || 100) / 127;
+  const now = AUDIO.ctx.currentTime;
+
+  // Additive synth: 3 harmonics (fundamental + 2nd + 3rd) for piano-ish tone
+  const gain = AUDIO.ctx.createGain();
+  gain.gain.setValueAtTime(0, now);
+  gain.gain.linearRampToValueAtTime(vel * 0.9, now + 0.005);        // fast attack
+  gain.gain.exponentialRampToValueAtTime(vel * 0.35, now + 0.15);   // initial decay
+  gain.gain.exponentialRampToValueAtTime(vel * 0.15, now + 1.5);    // sustain-decay
+  gain.connect(AUDIO.master);
+
+  const oscs = [];
+  const harmonics = [[1, 1], [2, 0.35], [3, 0.15]];
+  for (const [mult, amp] of harmonics) {
+    const o = AUDIO.ctx.createOscillator();
+    o.type = 'sine';
+    o.frequency.value = freq * mult;
+    const g = AUDIO.ctx.createGain();
+    g.gain.value = amp;
+    o.connect(g); g.connect(gain);
+    o.start(now);
+    oscs.push({ o, g });
+  }
+
+  AUDIO.voices.set(note, { gain, oscs });
+}
+
+function stopPianoNote(note) {
+  const v = AUDIO.voices.get(note);
+  if (!v) return;
+  const now = AUDIO.ctx.currentTime;
+  try {
+    v.gain.gain.cancelScheduledValues(now);
+    v.gain.gain.setValueAtTime(v.gain.gain.value, now);
+    v.gain.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
+    v.oscs.forEach(({o}) => o.stop(now + 0.25));
+  } catch (e) {}
+  AUDIO.voices.delete(note);
+}
+
+// ══════════════════════════════════════════════════════════
+// Central note pipeline — every input source flows through here.
+// source='local' → play locally + broadcast to peers
+// source='remote' → play locally + highlight in peer color, don't rebroadcast
+// ══════════════════════════════════════════════════════════
+function handleNote(action, note, opts) {
+  opts = opts || {};
+  const velocity = opts.velocity || 100;
+  const source = opts.source || 'local';
+  const peerColor = opts.peerColor || '#8b5cf6';
+  const peerName = opts.peerName || '';
+  const channel = opts.channel || 0;
+
+  if (action === 'noteon') {
+    playPianoNote(note, velocity);
+    highlightKey(note, true, peerColor, peerName);
+    if (source === 'local' && MY.midi) {
+      broadcast({ type:'remote:midi', action:'noteon', note, velocity, channel,
+        from:S.cid, fromName:S.name });
+    }
+  } else if (action === 'noteoff') {
+    stopPianoNote(note);
+    highlightKey(note, false);
+    if (source === 'local' && MY.midi) {
+      broadcast({ type:'remote:midi', action:'noteoff', note, velocity:0, channel,
+        from:S.cid, fromName:S.name });
+    }
+  }
+}
+
+function highlightKey(note, on, color, peerName) {
+  const el = document.querySelector('[data-note="' + note + '"]');
+  if (!el) return;
+  if (on) {
+    el.classList.add('on');
+    if (color) el.style.background = color;
+    if (peerName) el.setAttribute('data-peer', peerName.slice(0, 8));
+  } else {
+    el.classList.remove('on');
+    el.style.background = '';
+    el.removeAttribute('data-peer');
+  }
+}
+
 function togglePiano() {
   const w = document.getElementById('pianoWrap');
   const btn = document.getElementById('pianoBtn');
   if (!w) return;
   const open = w.classList.toggle('open');
-  if (btn) { btn.classList.toggle('active-tool', open); btn.style.background = ''; }
-  if (open && !w.dataset.built) { buildPianoKeys(); w.dataset.built = '1'; }
+  if (btn) btn.classList.toggle('active', open);
+  if (open) {
+    audioInit(); // unlock audio on user gesture
+    if (AUDIO.ctx?.state === 'suspended') AUDIO.ctx.resume();
+    if (!w.dataset.built) { buildPianoKeys(); w.dataset.built = '1'; }
+  }
 }
 
 function pianoOctave(dir) {
   PIANO.octave = Math.max(0, Math.min(8, PIANO.octave + dir));
-  document.getElementById('pianoOctLbl').textContent = 'C' + PIANO.octave;
+  const lbl = document.getElementById('pianoOctLbl');
+  if (lbl) lbl.textContent = 'C' + PIANO.octave;
   buildPianoKeys();
 }
 
@@ -2462,6 +2609,8 @@ function buildPianoKeys() {
       key.innerHTML = label;
       key.onmousedown = () => pianoNoteOn(note, key);
       key.onmouseup = key.onmouseleave = () => pianoNoteOff(note, key);
+      key.ontouchstart = (e) => { e.preventDefault(); pianoNoteOn(note, key); };
+      key.ontouchend = key.ontouchcancel = (e) => { e.preventDefault(); pianoNoteOff(note, key); };
       octEl.appendChild(key);
     });
 
@@ -2478,6 +2627,8 @@ function buildPianoKeys() {
       bk.style.left = (blackOffsets[i] * 32 + 11) + 'px'; // 32px per white key
       bk.onmousedown = (e) => { e.stopPropagation(); pianoNoteOn(note, bk); };
       bk.onmouseup = bk.onmouseleave = () => pianoNoteOff(note, bk);
+      bk.ontouchstart = (e) => { e.preventDefault(); e.stopPropagation(); pianoNoteOn(note, bk); };
+      bk.ontouchend = bk.ontouchcancel = (e) => { e.preventDefault(); pianoNoteOff(note, bk); };
       octEl.appendChild(bk);
     });
     el.appendChild(octEl);
@@ -2492,22 +2643,14 @@ function buildPianoKeys() {
 function pianoNoteOn(note, el) {
   if (PIANO.active.has(note)) return;
   PIANO.active.add(note);
-  el?.classList.add('on');
-  if (!MY.midi) return; // user toggled off MIDI sending
-  const vel = Number(document.getElementById('pianoVel')?.value || 100);
-  const ch  = Number(document.getElementById('pianoChSel')?.value || 1) - 1;
-  broadcast({ type:'remote:midi', action:'noteon', note, velocity:vel, channel:ch,
-    from:S.cid, fromName:S.name });
+  handleNote('noteon', note, { source:'local', velocity:PIANO.velocity,
+    peerColor:S.color, peerName:S.name });
 }
 
 function pianoNoteOff(note, el) {
   if (!PIANO.active.has(note)) return;
   PIANO.active.delete(note);
-  el?.classList.remove('on');
-  if (!MY.midi) return;
-  const ch = Number(document.getElementById('pianoChSel')?.value || 1) - 1;
-  broadcast({ type:'remote:midi', action:'noteoff', note, velocity:0, channel:ch,
-    from:S.cid, fromName:S.name });
+  handleNote('noteoff', note, { source:'local' });
 }
 
 // ══════════════════════════════════════════════════════════
@@ -2541,18 +2684,15 @@ function toggleKbdMidi() {
 function kbdMidiNoteOn(note) {
   if (PIANO.active.has(note)) return;
   PIANO.active.add(note);
-  if (!MY.midi) return;
-  broadcast({ type:'remote:midi', action:'noteon', note, velocity:PIANO.velocity, channel:0,
-    from:S.cid, fromName:S.name });
+  handleNote('noteon', note, { source:'local', velocity:PIANO.velocity,
+    peerColor:S.color, peerName:S.name });
   flashMidiPill();
 }
 
 function kbdMidiNoteOff(note) {
   if (!PIANO.active.has(note)) return;
   PIANO.active.delete(note);
-  if (!MY.midi) return;
-  broadcast({ type:'remote:midi', action:'noteoff', note, velocity:0, channel:0,
-    from:S.cid, fromName:S.name });
+  handleNote('noteoff', note, { source:'local' });
 }
 
 document.addEventListener('keydown', e => {
@@ -2648,24 +2788,24 @@ function attachMidiInputs() {
 }
 
 function onMidiMessage(e) {
-  if (!MY.midi) return;
   const [status, d1, d2] = e.data;
   const cmd = status & 0xf0;
   const channel = status & 0x0f;
-  let msg = null;
   if (cmd === 0x90 && d2 > 0) {
-    msg = { type:'remote:midi', action:'noteon', note:d1, velocity:d2, channel };
+    handleNote('noteon', d1, { source:'local', velocity:d2, channel,
+      peerColor:S.color, peerName:S.name });
+    flashMidiPill();
   } else if (cmd === 0x80 || (cmd === 0x90 && d2 === 0)) {
-    msg = { type:'remote:midi', action:'noteoff', note:d1, velocity:0, channel };
-  } else if (cmd === 0xb0) {
-    msg = { type:'remote:midi', action:'cc', cc:d1, value:d2, channel };
-  } else if (cmd === 0xe0) {
-    msg = { type:'remote:midi', action:'pitchbend', value:(d2 << 7) | d1, channel };
+    handleNote('noteoff', d1, { source:'local', channel });
+  } else if (cmd === 0xb0 || cmd === 0xe0) {
+    // CC / pitchbend still pass through directly to peers
+    if (!MY.midi) return;
+    const msg = cmd === 0xb0
+      ? { type:'remote:midi', action:'cc', cc:d1, value:d2, channel }
+      : { type:'remote:midi', action:'pitchbend', value:(d2 << 7) | d1, channel };
+    msg.from = S.cid; msg.fromName = S.name;
+    broadcast(msg);
   }
-  if (!msg) return;
-  msg.from = S.cid; msg.fromName = S.name;
-  broadcast(msg);
-  flashMidiPill();
 }
 
 function flashMidiPill() {
