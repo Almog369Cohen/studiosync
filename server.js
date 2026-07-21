@@ -220,6 +220,27 @@ function json(res, data, code = 200) {
   res.end(JSON.stringify(data));
 }
 
+function httpsRequest(url, opts, body) {
+  return new Promise((resolve, reject) => {
+    const u = new URL(url);
+    const req = https.request({
+      hostname: u.hostname, path: u.pathname + u.search, port: u.port || 443,
+      method: opts.method || 'GET', headers: opts.headers || {}
+    }, resp => {
+      const chunks = [];
+      resp.on('data', c => chunks.push(c));
+      resp.on('end', () => {
+        const text = Buffer.concat(chunks).toString('utf8');
+        if (resp.statusCode >= 200 && resp.statusCode < 300) resolve(text);
+        else reject(new Error('HTTP ' + resp.statusCode + ': ' + text.slice(0, 200)));
+      });
+    });
+    req.on('error', reject);
+    if (body) req.write(body);
+    req.end();
+  });
+}
+
 // ── Cleanup stale clients every 30s ──────────────────────
 setInterval(() => {
   const now = Date.now();
@@ -468,8 +489,78 @@ const server = http.createServer(async (req, res) => {
     return json(res, {
       ok: true,
       googleClientId: process.env.GDRIVE_CLIENT_ID || '',
-      driveEnabled: !!process.env.GDRIVE_CLIENT_ID
+      driveEnabled: !!process.env.GDRIVE_CLIENT_ID,
+      transcribeEnabled: !!(process.env.OPENAI_API_KEY || process.env.ELEVENLABS_API_KEY),
+      transcribeProvider: process.env.ELEVENLABS_API_KEY ? 'elevenlabs' : (process.env.OPENAI_API_KEY ? 'openai' : null)
     });
+  }
+
+  // ── Transcription proxy — receives audio blob, calls STT provider ──
+  if (path === '/api/transcribe' && req.method === 'POST') {
+    const provider = process.env.ELEVENLABS_API_KEY ? 'elevenlabs'
+                    : process.env.OPENAI_API_KEY ? 'openai' : null;
+    if (!provider) return json(res, { ok:false, error:'no_transcription_key',
+      message:'הוסף OPENAI_API_KEY או ELEVENLABS_API_KEY למשתני הסביבה' }, 501);
+
+    // Buffer the raw body (browser sends multipart with the audio blob directly)
+    const chunks = [];
+    for await (const c of req) chunks.push(c);
+    const rawBody = Buffer.concat(chunks);
+    const contentType = req.headers['content-type'] || 'audio/webm';
+
+    try {
+      if (provider === 'openai') {
+        // Rebuild as OpenAI multipart with model=whisper-1
+        const boundary = '----ss' + Math.random().toString(36).slice(2);
+        const CRLF = '\r\n';
+        const filePart = Buffer.from(
+          '--' + boundary + CRLF +
+          'Content-Disposition: form-data; name="file"; filename="audio.webm"' + CRLF +
+          'Content-Type: audio/webm' + CRLF + CRLF, 'utf8');
+        const modelPart = Buffer.from(
+          CRLF + '--' + boundary + CRLF +
+          'Content-Disposition: form-data; name="model"' + CRLF + CRLF + 'whisper-1', 'utf8');
+        const endPart = Buffer.from(CRLF + '--' + boundary + '--' + CRLF, 'utf8');
+        const body = Buffer.concat([filePart, rawBody, modelPart, endPart]);
+
+        const result = await httpsRequest('https://api.openai.com/v1/audio/transcriptions', {
+          method: 'POST',
+          headers: {
+            'Authorization': 'Bearer ' + process.env.OPENAI_API_KEY,
+            'Content-Type': 'multipart/form-data; boundary=' + boundary,
+            'Content-Length': body.length
+          }
+        }, body);
+        const parsed = JSON.parse(result);
+        return json(res, { ok:true, provider:'openai', text: parsed.text || '' });
+      } else {
+        // ElevenLabs STT — send audio directly with model_id as a query/form field
+        const boundary = '----ss' + Math.random().toString(36).slice(2);
+        const CRLF = '\r\n';
+        const filePart = Buffer.from(
+          '--' + boundary + CRLF +
+          'Content-Disposition: form-data; name="file"; filename="audio.webm"' + CRLF +
+          'Content-Type: audio/webm' + CRLF + CRLF, 'utf8');
+        const modelPart = Buffer.from(
+          CRLF + '--' + boundary + CRLF +
+          'Content-Disposition: form-data; name="model_id"' + CRLF + CRLF + 'scribe_v1', 'utf8');
+        const endPart = Buffer.from(CRLF + '--' + boundary + '--' + CRLF, 'utf8');
+        const body = Buffer.concat([filePart, rawBody, modelPart, endPart]);
+
+        const result = await httpsRequest('https://api.elevenlabs.io/v1/speech-to-text', {
+          method: 'POST',
+          headers: {
+            'xi-api-key': process.env.ELEVENLABS_API_KEY,
+            'Content-Type': 'multipart/form-data; boundary=' + boundary,
+            'Content-Length': body.length
+          }
+        }, body);
+        const parsed = JSON.parse(result);
+        return json(res, { ok:true, provider:'elevenlabs', text: parsed.text || '' });
+      }
+    } catch (e) {
+      return json(res, { ok:false, error:'stt_failed', message: e.message }, 500);
+    }
   }
 
   // ── Session health (Agent connection + peer count) ──
@@ -3808,6 +3899,7 @@ function renderClips() {
       <span class="clip-name">🎵 \${esc(c.name)} (\${size})</span>
       <a class="clip-dl" href="\${url}" download="\${c.name}.webm" title="הורד">⬇</a>
       <button class="clip-dl" onclick="uploadClipToDrive(\${idx})" title="העלה ל-Drive" style="background:none;border:none;cursor:pointer">☁</button>
+      <button class="clip-dl" onclick="transcribeClip(\${idx})" title="תמלל" style="background:none;border:none;cursor:pointer">📝</button>
     </div>\`;
   }).join('');
   el.innerHTML = bulkRow + cards;
@@ -4376,6 +4468,74 @@ async function uploadAllClipsToDrive() {
     } catch (e) { fail++; }
   }
   toast(\`הועלו \${ok} קליפים\${fail ? ' (\${fail} נכשלו)' : ''} → תיקיית StudioSync ב-Drive\`, ok ? 'g' : 'r');
+}
+
+// ══════════════════════════════════════════════════════════
+// Transcription — send audio blob to server proxy → STT provider
+// ══════════════════════════════════════════════════════════
+async function transcribeClip(idx) {
+  const clip = S.clips[idx];
+  if (!clip) return;
+  toast('מתמלל: ' + clip.name + '... (יכול לקחת דקה)', '');
+  try {
+    // Extract just the audio track (keeps upload small when the clip is a screen recording)
+    const audioBlob = await extractAudioForTranscription(clip.blob);
+    const r = await fetch('/api/transcribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'audio/webm' },
+      body: audioBlob
+    });
+    const d = await r.json();
+    if (!d.ok) {
+      if (d.error === 'no_transcription_key') {
+        toast('תמלול לא הופעל בשרת — הוסף OPENAI_API_KEY או ELEVENLABS_API_KEY', 'r');
+      } else {
+        toast('שגיאת תמלול: ' + (d.message || d.error), 'r');
+      }
+      return;
+    }
+    showTranscript(clip.name, d.text, d.provider);
+  } catch (e) {
+    toast('שגיאת תמלול: ' + e.message, 'r');
+  }
+}
+
+// For MMP just send the full blob — the STT providers extract audio internally.
+// (Doing MediaRecorder → audio-only re-encoding in the browser is heavier than the
+// upload cost saving would be worth for typical session lengths.)
+async function extractAudioForTranscription(blob) { return blob; }
+
+function showTranscript(name, text, provider) {
+  const html = \`
+    <div class="modal-backdrop" id="ttBackdrop" onclick="if(event.target===this)closeTranscript()">
+      <div class="modal-panel" style="max-width:640px" dir="rtl">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+          <h3 style="margin:0;flex:1">📝 תמלול: \${esc(name)}</h3>
+          <span style="font-size:11px;color:var(--dim)">\${provider || ''}</span>
+          <button onclick="closeTranscript()" style="background:none;border:none;color:var(--mid);font-size:18px;cursor:pointer">✕</button>
+        </div>
+        <textarea id="ttText" style="width:100%;height:280px;padding:10px;border:1px solid var(--b1);border-radius:6px;font-family:var(--sans);font-size:13px;line-height:1.6;background:var(--bg);color:var(--txt);resize:vertical" dir="rtl">\${esc(text || '(אין טקסט)')}</textarea>
+        <div style="display:flex;gap:6px;margin-top:10px">
+          <button class="btn-primary" style="flex:1" onclick="copyTranscript()">📋 העתק</button>
+          <button class="btn-primary" style="flex:1" onclick="downloadTranscript('\${esc(name)}')">⬇ הורד .txt</button>
+        </div>
+      </div>
+    </div>
+  \`;
+  document.getElementById('ttBackdrop')?.remove();
+  document.body.insertAdjacentHTML('beforeend', html);
+}
+function closeTranscript() { document.getElementById('ttBackdrop')?.remove(); }
+function copyTranscript() {
+  const txt = document.getElementById('ttText')?.value || '';
+  navigator.clipboard?.writeText(txt).then(() => toast('הועתק', 'g'));
+}
+function downloadTranscript(name) {
+  const txt = document.getElementById('ttText')?.value || '';
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([txt], { type: 'text/plain;charset=utf-8' }));
+  a.download = name + '.txt';
+  document.body.appendChild(a); a.click(); a.remove();
 }
 
 // Download all clips as a single manifest (JSON) — browsers can't create real zips without a lib;
