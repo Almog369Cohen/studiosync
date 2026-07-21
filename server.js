@@ -1,7 +1,25 @@
 const http  = require('http');
 const https = require('https');
 const os    = require('os');
+const fs    = require('fs');
+const path  = require('path');
 const crypto = require('crypto');
+
+// ── Load .env for local dev (in production Render supplies env vars directly) ──
+try {
+  const envPath = path.join(__dirname, '.env');
+  if (fs.existsSync(envPath)) {
+    for (const line of fs.readFileSync(envPath, 'utf8').split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const eq = trimmed.indexOf('=');
+      if (eq < 0) continue;
+      const key = trimmed.slice(0, eq).trim();
+      const val = trimmed.slice(eq + 1).trim();
+      if (key && !process.env[key]) process.env[key] = val;
+    }
+  }
+} catch (e) { /* .env optional */ }
 
 // Optional: robotjs for remote mouse/keyboard control
 let robot = null;
@@ -437,6 +455,15 @@ const server = http.createServer(async (req, res) => {
       }, 28000);
     }
     return;
+  }
+
+  // ── Public runtime config (Google Client ID is public by design) ──
+  if (path === '/api/config' && req.method === 'GET') {
+    return json(res, {
+      ok: true,
+      googleClientId: process.env.GDRIVE_CLIENT_ID || '',
+      driveEnabled: !!process.env.GDRIVE_CLIENT_ID
+    });
   }
 
   // ── Session health (Agent connection + peer count) ──
@@ -3450,11 +3477,24 @@ function renderClips() {
   const el = document.getElementById('clipPanel');
   if (!el) return;
   if (S.clips.length === 0) { el.innerHTML = '<div style="font-size:12px;color:var(--dim);text-align:center;padding:12px" dir="rtl">אין קליפים עדיין. הקלט סשן כדי ליצור קליפ.</div>'; return; }
-  el.innerHTML = S.clips.slice().reverse().map((c, i) => {
+  const totalMB = (S.clips.reduce((s, c) => s + c.blob.size, 0) / 1024 / 1024).toFixed(1);
+  const bulkRow = S.clips.length > 1
+    ? \`<div style="display:flex;gap:6px;padding:6px 8px;border-bottom:1px solid var(--b1);background:var(--s1)">
+        <button class="btn-primary" style="flex:1;font-size:11px;padding:6px" onclick="downloadAllClipsZip()">⬇ הורד הכל (\${totalMB}MB)</button>
+        <button class="btn-primary" style="flex:1;font-size:11px;padding:6px" onclick="uploadAllClipsToDrive()">☁ העלה הכל ל-Drive</button>
+       </div>\`
+    : '';
+  const cards = S.clips.slice().reverse().map((c, i) => {
+    const idx = S.clips.length - 1 - i;
     const url = URL.createObjectURL(c.blob);
     const size = (c.blob.size / 1024 / 1024).toFixed(1) + 'MB';
-    return '<div class="clip-card"><span class="clip-name">🎵 ' + esc(c.name) + ' (' + size + ')</span><a class="clip-dl" href="' + url + '" download="' + c.name + '.webm">⬇</a></div>';
+    return \`<div class="clip-card">
+      <span class="clip-name">🎵 \${esc(c.name)} (\${size})</span>
+      <a class="clip-dl" href="\${url}" download="\${c.name}.webm" title="הורד">⬇</a>
+      <button class="clip-dl" onclick="uploadClipToDrive(\${idx})" title="העלה ל-Drive" style="background:none;border:none;cursor:pointer">☁</button>
+    </div>\`;
   }).join('');
+  el.innerHTML = bulkRow + cards;
 }
 
 // ── DND mode ──────────────────────────────────────────────
@@ -3889,6 +3929,154 @@ async function voteFeature(btn, fid) {
   } catch(e) {}
 }
 
+// ══════════════════════════════════════════════════════════
+// Google Drive integration — client-side OAuth + direct upload
+// (No server-side token storage: token stays in browser memory.)
+// ══════════════════════════════════════════════════════════
+const DRIVE = { clientId: null, accessToken: null, tokenClient: null, folderId: null };
+
+async function initDrive() {
+  try {
+    const r = await fetch('/api/config');
+    const d = await r.json();
+    if (!d.driveEnabled || !d.googleClientId) return;
+    DRIVE.clientId = d.googleClientId;
+    await loadScript('https://accounts.google.com/gsi/client');
+    DRIVE.tokenClient = google.accounts.oauth2.initTokenClient({
+      client_id: DRIVE.clientId,
+      scope: 'https://www.googleapis.com/auth/drive.file',
+      callback: (resp) => {
+        if (resp.access_token) {
+          DRIVE.accessToken = resp.access_token;
+          if (DRIVE._pendingResolve) { DRIVE._pendingResolve(); DRIVE._pendingResolve = null; }
+        }
+      }
+    });
+  } catch (e) { /* Drive optional */ }
+}
+
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    if ([...document.scripts].some(s => s.src === src)) return resolve();
+    const s = document.createElement('script');
+    s.src = src; s.async = true; s.defer = true;
+    s.onload = resolve; s.onerror = reject;
+    document.head.appendChild(s);
+  });
+}
+
+async function ensureDriveAuth() {
+  if (!DRIVE.tokenClient) {
+    toast('Google Drive לא הוגדר בשרת', 'r');
+    return false;
+  }
+  if (DRIVE.accessToken) return true;
+  await new Promise((resolve) => {
+    DRIVE._pendingResolve = resolve;
+    DRIVE.tokenClient.requestAccessToken({ prompt: '' });
+  });
+  return !!DRIVE.accessToken;
+}
+
+async function ensureDriveFolder() {
+  if (DRIVE.folderId) return DRIVE.folderId;
+  const name = 'StudioSync';
+  // Look for existing folder first
+  const q = encodeURIComponent(\`name='\${name}' and mimeType='application/vnd.google-apps.folder' and trashed=false\`);
+  const search = await fetch('https://www.googleapis.com/drive/v3/files?q=' + q + '&fields=files(id,name)', {
+    headers: { Authorization: 'Bearer ' + DRIVE.accessToken }
+  });
+  const sd = await search.json();
+  if (sd.files && sd.files.length) { DRIVE.folderId = sd.files[0].id; return DRIVE.folderId; }
+  // Create it
+  const create = await fetch('https://www.googleapis.com/drive/v3/files', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + DRIVE.accessToken },
+    body: JSON.stringify({ name, mimeType: 'application/vnd.google-apps.folder' })
+  });
+  const cd = await create.json();
+  DRIVE.folderId = cd.id;
+  return DRIVE.folderId;
+}
+
+async function uploadBlobToDrive(blob, filename, onProgress) {
+  if (!(await ensureDriveAuth())) return null;
+  const folder = await ensureDriveFolder();
+  const metadata = { name: filename, parents: [folder], mimeType: blob.type || 'video/webm' };
+  // Multipart upload
+  const boundary = '-------studiosync' + Math.random().toString(36).slice(2);
+  const CRLF = '\\r\\n';
+  const delimiter = CRLF + '--' + boundary + CRLF;
+  const closeDelim = CRLF + '--' + boundary + '--';
+  const metaPart = delimiter + 'Content-Type: application/json' + CRLF + CRLF + JSON.stringify(metadata);
+  const dataHeader = delimiter + 'Content-Type: ' + metadata.mimeType + CRLF + 'Content-Transfer-Encoding: binary' + CRLF + CRLF;
+  const body = new Blob([metaPart, dataHeader, blob, closeDelim], { type: 'multipart/related; boundary=' + boundary });
+
+  const xhr = new XMLHttpRequest();
+  const url = 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink';
+  return new Promise((resolve, reject) => {
+    xhr.open('POST', url);
+    xhr.setRequestHeader('Authorization', 'Bearer ' + DRIVE.accessToken);
+    xhr.setRequestHeader('Content-Type', 'multipart/related; boundary=' + boundary);
+    if (onProgress && xhr.upload) {
+      xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(e.loaded / e.total); };
+    }
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) resolve(JSON.parse(xhr.responseText));
+      else reject(new Error('Drive upload failed: ' + xhr.status + ' ' + xhr.responseText));
+    };
+    xhr.onerror = () => reject(new Error('Network error'));
+    xhr.send(body);
+  });
+}
+
+async function uploadClipToDrive(idx) {
+  const clip = S.clips[idx];
+  if (!clip) return;
+  toast('מעלה ל-Drive: ' + clip.name, '');
+  try {
+    const res = await uploadBlobToDrive(clip.blob, clip.name + '.webm',
+      (p) => { /* could show progress bar */ });
+    if (res?.webViewLink) {
+      toast('✓ עלה: ' + clip.name, 'g');
+      window.open(res.webViewLink, '_blank');
+    }
+  } catch (e) {
+    toast('שגיאה: ' + e.message, 'r');
+  }
+}
+
+async function uploadAllClipsToDrive() {
+  if (!S.clips.length) return;
+  if (!(await ensureDriveAuth())) return;
+  toast('מעלה ' + S.clips.length + ' קליפים ל-Drive...', '');
+  let ok = 0, fail = 0;
+  for (let i = 0; i < S.clips.length; i++) {
+    const clip = S.clips[i];
+    try {
+      await uploadBlobToDrive(clip.blob, clip.name + '.webm');
+      ok++;
+      toast(\`\${ok}/\${S.clips.length} עלו\`, '');
+    } catch (e) { fail++; }
+  }
+  toast(\`הועלו \${ok} קליפים\${fail ? ' (\${fail} נכשלו)' : ''} → תיקיית StudioSync ב-Drive\`, ok ? 'g' : 'r');
+}
+
+// Download all clips as a single manifest (JSON) — browsers can't create real zips without a lib;
+// but we can trigger sequential downloads which most browsers batch as a single "download all" prompt.
+function downloadAllClipsZip() {
+  if (!S.clips.length) return;
+  S.clips.forEach((c, i) => {
+    setTimeout(() => {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(c.blob);
+      a.download = c.name + '.webm';
+      document.body.appendChild(a); a.click(); a.remove();
+    }, i * 250);
+  });
+  toast('מוריד ' + S.clips.length + ' קליפים...', 'g');
+}
+
 // ── Boot ──────────────────────────────────────────────────
 window.onload = () => {
   initTheme();
@@ -3897,6 +4085,7 @@ window.onload = () => {
   startOnlinePolling();
   renderSchedules();
   loadFeatures();
+  initDrive();
   setInterval(checkScheduleReminders, 30000);
   if ('Notification' in window && Notification.permission === 'default') {
     Notification.requestPermission();
