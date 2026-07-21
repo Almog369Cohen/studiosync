@@ -773,6 +773,10 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 .tc { width:34px; height:34px; border:1.5px solid var(--b1); border-radius:6px; background:none; cursor:pointer; font-size:14px; display:flex; align-items:center; justify-content:center; color:var(--txt); }
 .tc:hover { border-color:var(--accent); color:var(--accent); }
 .latency-pill { background:var(--s1); border:1px solid var(--b1); border-radius:100px; padding:3px 10px; font-size:11px; font-family:var(--mono); color:var(--mid); }
+.midi-pill { background:var(--s1); border:1px solid var(--b1); border-radius:100px; padding:3px 10px; font-size:11px; color:var(--mid); cursor:pointer; user-select:none; transition:all .15s; }
+.midi-pill:hover { border-color:var(--accent); color:var(--fg); }
+.midi-pill.connected { border-color:#03b28c; color:#03b28c; }
+.midi-pill.playing { background:rgba(3,178,140,.15); border-color:#03b28c; color:#03b28c; box-shadow:0 0 8px rgba(3,178,140,.4); }
 .share-btn { width:auto; padding:0 14px; font-size:13px; font-family:var(--sans); white-space:nowrap; }
 .cam-btn { width:auto; padding:0 14px; font-size:13px; font-family:var(--sans); white-space:nowrap; }
 .active-share { border:2px solid var(--accent) !important; background:rgba(0,255,136,.15) !important; }
@@ -1144,6 +1148,7 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
     <button class="tc rec-btn-transport host-only" id="recSessionBtn" onclick="toggleSessionRecord()">⏺ הקלט<span class="lock-icon" id="recLock">🔒</span></button>
     <button class="tc" id="viewToggle" onclick="toggleStreamView()" title="תצוגת גריד">⊞</button>
     <button class="tc" id="fullscreenBtn" onclick="toggleFullscreen()" title="מסך מלא">⛶</button>
+    <div class="midi-pill" id="midiPill" onclick="reinitWebMidi()" title="MIDI">🎹 —</div>
     <div class="latency-pill" id="latPill">-- ms</div>
   </div>
 </div>
@@ -1516,6 +1521,7 @@ function enterSession() {
   show('session');
   startPoll();
   startTimer();
+  initWebMidi();
   // Show/hide record lock icon
   const lockEl = document.getElementById('recLock');
   if (lockEl) lockEl.style.display = isPremium() ? 'none' : 'inline';
@@ -2534,6 +2540,90 @@ document.addEventListener('keydown', e => {
   if (e.code === 'ArrowUp') { e.preventDefault(); cmd('bpm', 1); }
   if (e.code === 'ArrowDown') { e.preventDefault(); cmd('bpm', -1); }
 });
+
+// ══════════════════════════════════════════════════════════
+// Web MIDI API — capture real MIDI keyboards, forward to host
+// ══════════════════════════════════════════════════════════
+const WEBMIDI = { access: null, inputs: [], playingTimer: null };
+
+async function initWebMidi() {
+  if (!navigator.requestMIDIAccess) {
+    updateMidiPill('unsupported');
+    return;
+  }
+  try {
+    WEBMIDI.access = await navigator.requestMIDIAccess({ sysex: false });
+    attachMidiInputs();
+    WEBMIDI.access.onstatechange = attachMidiInputs;
+  } catch (e) {
+    updateMidiPill('denied');
+  }
+}
+
+function attachMidiInputs() {
+  WEBMIDI.inputs = [];
+  if (!WEBMIDI.access) return;
+  for (const input of WEBMIDI.access.inputs.values()) {
+    input.onmidimessage = onMidiMessage;
+    WEBMIDI.inputs.push(input.name || 'MIDI Device');
+  }
+  updateMidiPill(WEBMIDI.inputs.length ? 'connected' : 'none');
+}
+
+function onMidiMessage(e) {
+  if (!MY.midi) return;
+  const [status, d1, d2] = e.data;
+  const cmd = status & 0xf0;
+  const channel = status & 0x0f;
+  let msg = null;
+  if (cmd === 0x90 && d2 > 0) {
+    msg = { type:'remote:midi', action:'noteon', note:d1, velocity:d2, channel };
+  } else if (cmd === 0x80 || (cmd === 0x90 && d2 === 0)) {
+    msg = { type:'remote:midi', action:'noteoff', note:d1, velocity:0, channel };
+  } else if (cmd === 0xb0) {
+    msg = { type:'remote:midi', action:'cc', cc:d1, value:d2, channel };
+  } else if (cmd === 0xe0) {
+    msg = { type:'remote:midi', action:'pitchbend', value:(d2 << 7) | d1, channel };
+  }
+  if (!msg) return;
+  msg.from = S.cid; msg.fromName = S.name;
+  broadcast(msg);
+  flashMidiPill();
+}
+
+function flashMidiPill() {
+  const pill = document.getElementById('midiPill');
+  if (!pill) return;
+  pill.classList.add('playing');
+  clearTimeout(WEBMIDI.playingTimer);
+  WEBMIDI.playingTimer = setTimeout(() => pill.classList.remove('playing'), 150);
+}
+
+function updateMidiPill(state) {
+  const pill = document.getElementById('midiPill');
+  if (!pill) return;
+  pill.classList.remove('connected', 'playing');
+  if (state === 'connected') {
+    pill.classList.add('connected');
+    const name = WEBMIDI.inputs[0] || 'MIDI';
+    pill.textContent = '🎹 ' + (name.length > 18 ? name.slice(0, 16) + '…' : name);
+    pill.title = WEBMIDI.inputs.join(', ');
+  } else if (state === 'none') {
+    pill.textContent = '🎹 חבר קלייבורד';
+    pill.title = 'לא נמצא מכשיר MIDI — חבר קלייבורד ולחץ לרענון';
+  } else if (state === 'denied') {
+    pill.textContent = '🎹 חסום';
+    pill.title = 'הרשאת MIDI נדחתה — לחץ להרשאה מחדש';
+  } else if (state === 'unsupported') {
+    pill.textContent = '🎹 לא נתמך';
+    pill.title = 'הדפדפן לא תומך ב-Web MIDI (השתמש ב-Chrome)';
+  }
+}
+
+function reinitWebMidi() {
+  initWebMidi();
+  toast('סורק מכשירי MIDI…', '');
+}
 
 // ── Premium gating ────────────────────────────────────────
 function isPremium() { return S.plan === 'pro'; }
