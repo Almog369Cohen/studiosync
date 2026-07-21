@@ -678,7 +678,9 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 .session-code-chip:hover { border-color:var(--accent); color:var(--accent); }
 .copy-icon { font-size:14px; color:var(--mid); }
 .peer-avatars { display:flex; margin-left:4px; }
-.peer-avatar { width:28px; height:28px; border-radius:50%; border:2px solid var(--bg); display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:700; color:#fff; cursor:default; margin-left:-6px; }
+.peer-avatar { width:28px; height:28px; border-radius:50%; border:2px solid var(--bg); display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:700; color:#fff; cursor:default; margin-left:-6px; transition:box-shadow .1s ease-out, transform .1s ease-out; }
+.peer-avatar.speaking { box-shadow:0 0 0 3px #03b28c, 0 0 12px rgba(3,178,140,.6); transform:scale(1.08); }
+.peer-avatar.speaking-loud { box-shadow:0 0 0 4px #03b28c, 0 0 18px rgba(3,178,140,.9); transform:scale(1.15); }
 .peer-avatar.self { margin-left:0; }
 .tb-flex { flex:1; }
 .tb-status { font-size:12px; color:var(--mid); white-space:nowrap; }
@@ -1147,6 +1149,7 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
         </div>
       </div>
       <input id="createName" placeholder="השם שלך" class="lob-input" dir="rtl" />
+      <input id="createPassword" placeholder="סיסמה (אופציונלי)" type="password" class="lob-input" dir="rtl" />
       <div class="color-picker" id="createColors" style="display:none"></div>
       <div class="instr-grid" id="createInstrs" style="display:none"></div>
       <div class="mode-picker" dir="rtl">
@@ -1178,6 +1181,7 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
       <div class="color-picker" id="joinColors" style="display:none"></div>
       <div class="instr-grid" id="joinInstrs" style="display:none"></div>
       <input id="joinCode" placeholder="ABC-123" class="lob-input code-input" dir="ltr" />
+      <input id="joinPassword" placeholder="סיסמה (אם נדרשת)" type="password" class="lob-input" dir="rtl" />
       <button class="btn-accent btn-full" onclick="remoteJoin()">הצטרף</button>
     </div>
 
@@ -1649,6 +1653,7 @@ async function remoteJoin() {
     S.code = d.code;
     S.peerNumber = d.peerNumber || 2;
     S.plan = d.plan || 'trial';
+    S.mode = d.mode || 'collab';
     S.role = document.getElementById('joinAsListener')?.checked ? 'listener' : 'participant';
     document.getElementById('connectingCode').textContent = S.code;
     enterSession();
@@ -1834,6 +1839,7 @@ const PeerMesh = {
     pc.onicecandidate = (e) => { if (e.candidate) send({ type: 'webrtc:ice', peerId, candidate: e.candidate }); };
     pc.onconnectionstatechange = () => { updatePeerStatus(peerId, pc.connectionState); };
     pc.ontrack = (e) => { if (e.streams[0]) showRemoteStream(e.streams[0], peerId); };
+    startAdaptiveBitrate(pc, peerId);
     pc.onnegotiationneeded = async () => {
       try {
         const offer = await pc.createOffer();
@@ -1866,6 +1872,7 @@ const PeerMesh = {
           send({ type: 'webrtc:offer', peerId, offer: o });
         } catch(e) {}
       };
+      startAdaptiveBitrate(pc, peerId);
     }
     pc.ontrack = (e) => { if (e.streams[0]) showRemoteStream(e.streams[0], peerId); };
     await pc.setRemoteDescription(offer);
@@ -1923,6 +1930,7 @@ function handleMsg(msg) {
         else { lp.conn?.close(); S.peers.delete(msg.peerId); updatePeerAvatars(); renderPeerList(); }
       }
       S.handsRaised.delete(msg.peerId);
+      voiceDetach(msg.peerId);
       if (!S.dnd) { playLeaveSound(); toast((msg.name || 'Peer') + ' עזב/ה', ''); }
       break;
     }
@@ -2155,13 +2163,15 @@ function updatePeerAvatars() {
   el.innerHTML = '';
   const self = document.createElement('div');
   self.className = 'peer-avatar self';
+  self.dataset.peerId = S.cid || 'self';
   self.style.background = S.color;
   self.textContent = (S.name || '?')[0].toUpperCase();
   self.title = S.name + ' (you)';
   el.appendChild(self);
-  for (const [, p] of S.peers) {
+  for (const [pid, p] of S.peers) {
     const av = document.createElement('div');
     av.className = 'peer-avatar';
+    av.dataset.peerId = pid;
     av.style.background = p.color || '#adb5bd';
     av.textContent = (p.name || '?')[0].toUpperCase();
     av.title = p.name;
@@ -2469,7 +2479,8 @@ function showRemoteStream(stream, peerId) {
   renderStreams();
   toast(name + ' משתף/ת מסך', 'g');
   initVU(stream, 'out');
-  stream.getTracks().forEach(t => { t.onended = () => { S.streams.delete(peerId); renderStreams(); stopVU('out'); }; });
+  voiceAttach(peerId, stream);
+  stream.getTracks().forEach(t => { t.onended = () => { S.streams.delete(peerId); renderStreams(); stopVU('out'); voiceDetach(peerId); }; });
 }
 
 function closeRv() {
@@ -2681,6 +2692,7 @@ async function toggleSelfMute() {
       }
       const btn = document.getElementById('muteBtn');
       if (btn) { btn.textContent = '🎤'; btn.classList.remove('muted-state'); btn.title = 'השתק'; }
+      voiceAttach(S.cid || 'self', stream);
       toast('מיקרופון פעיל', 'g');
       return;
     } catch (e) {
@@ -2710,6 +2722,121 @@ async function toggleSelfMute() {
     btn.title = S.selfMuted ? 'בטל השתקה' : 'השתק';
   }
   toast(S.selfMuted ? 'מושתק' : 'מיקרופון פעיל', S.selfMuted ? '' : 'g');
+}
+
+// ══════════════════════════════════════════════════════════
+// Adaptive bitrate — measure loss/RTT per peer, ramp video down
+// under stress and back up when things clear
+// ══════════════════════════════════════════════════════════
+const BW_TIERS = [500_000, 1_000_000, 2_500_000, 4_500_000]; // bits/s
+function startAdaptiveBitrate(pc, peerId) {
+  let tier = BW_TIERS.length - 1;
+  let lastPacketsLost = 0, lastPacketsSent = 0;
+  const interval = setInterval(async () => {
+    if (!pc || pc.connectionState === 'closed' || pc.connectionState === 'failed') {
+      clearInterval(interval); return;
+    }
+    try {
+      const stats = await pc.getStats();
+      let sent = 0, lost = 0, rtt = 0, hadOutbound = false;
+      stats.forEach(r => {
+        if (r.type === 'outbound-rtp' && r.kind === 'video') {
+          sent = r.packetsSent || 0; hadOutbound = true;
+        }
+        if (r.type === 'remote-inbound-rtp' && r.kind === 'video') {
+          lost = r.packetsLost || 0;
+          rtt = r.roundTripTime || 0;
+        }
+      });
+      if (!hadOutbound) return;
+      const dSent = Math.max(1, sent - lastPacketsSent);
+      const dLost = Math.max(0, lost - lastPacketsLost);
+      lastPacketsSent = sent; lastPacketsLost = lost;
+      const lossRate = dLost / dSent;
+      // Decide direction
+      let target = tier;
+      if (lossRate > 0.05 || rtt > 0.3) target = Math.max(0, tier - 1);
+      else if (lossRate < 0.005 && rtt < 0.15 && tier < BW_TIERS.length - 1) target = tier + 1;
+      if (target !== tier) {
+        tier = target;
+        applyVideoBitrate(pc, BW_TIERS[tier]);
+        const p = S.peers.get(peerId);
+        if (p) p.bwTier = tier;
+        dlog('BW → ' + peerId + ' tier=' + tier + ' (' + Math.round(BW_TIERS[tier]/1000) + 'kbps) loss=' + (lossRate*100).toFixed(1) + '% rtt=' + Math.round(rtt*1000) + 'ms');
+      }
+    } catch (e) {}
+  }, 3000);
+}
+
+function applyVideoBitrate(pc, maxBitrate) {
+  pc.getSenders().forEach(sender => {
+    if (sender.track?.kind !== 'video') return;
+    try {
+      const params = sender.getParameters();
+      params.encodings = params.encodings && params.encodings.length ? params.encodings : [{}];
+      for (const enc of params.encodings) enc.maxBitrate = maxBitrate;
+      sender.setParameters(params);
+    } catch (e) {}
+  });
+}
+
+// ══════════════════════════════════════════════════════════
+// Voice Activity — glow avatar for whichever peer is speaking
+// ══════════════════════════════════════════════════════════
+const VOICE = { analyzers: new Map(), rafId: null, ctx: null };
+
+function voiceEnsureCtx() {
+  if (VOICE.ctx) return VOICE.ctx;
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return null;
+  VOICE.ctx = new AC();
+  return VOICE.ctx;
+}
+
+function voiceAttach(peerId, stream) {
+  if (!stream || !stream.getAudioTracks || !stream.getAudioTracks().length) return;
+  const ctx = voiceEnsureCtx();
+  if (!ctx) return;
+  // Replace any existing analyzer for this peer
+  voiceDetach(peerId);
+  try {
+    const src = ctx.createMediaStreamSource(stream);
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 512;
+    analyser.smoothingTimeConstant = 0.5;
+    src.connect(analyser);
+    VOICE.analyzers.set(peerId, { analyser, buffer: new Uint8Array(analyser.frequencyBinCount) });
+    if (!VOICE.rafId) voiceTick();
+  } catch (e) {}
+}
+
+function voiceDetach(peerId) {
+  VOICE.analyzers.delete(peerId);
+  const el = document.querySelector('[data-peer-id="' + peerId + '"]');
+  if (el) el.classList.remove('speaking', 'speaking-loud');
+}
+
+function voiceTick() {
+  let anyActive = false;
+  for (const [peerId, { analyser, buffer }] of VOICE.analyzers) {
+    analyser.getByteFrequencyData(buffer);
+    // Focus on speech band (~85Hz to ~3kHz — bins 1..60 at 22kHz sample rate / 256 bins)
+    let sum = 0, count = 0;
+    for (let i = 1; i < Math.min(64, buffer.length); i++) { sum += buffer[i]; count++; }
+    const avg = sum / count;
+    // Update avatar visual
+    const av = document.querySelector('[data-peer-id="' + peerId + '"]');
+    if (av) {
+      const speaking = avg > 22;
+      const loud = avg > 55;
+      av.classList.toggle('speaking', speaking && !loud);
+      av.classList.toggle('speaking-loud', loud);
+    }
+    if (avg > 10) anyActive = true;
+  }
+  // Keep ticking as long as we have analyzers
+  if (VOICE.analyzers.size) VOICE.rafId = requestAnimationFrame(voiceTick);
+  else VOICE.rafId = null;
 }
 
 // ══════════════════════════════════════════════════════════
