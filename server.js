@@ -772,6 +772,11 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 .peer-avatar { width:28px; height:28px; border-radius:50%; border:2px solid var(--bg); display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:700; color:#fff; cursor:default; margin-left:-6px; transition:box-shadow .1s ease-out, transform .1s ease-out; }
 .peer-avatar.speaking { box-shadow:0 0 0 3px #03b28c, 0 0 12px rgba(3,178,140,.6); transform:scale(1.08); }
 .peer-avatar.speaking-loud { box-shadow:0 0 0 4px #03b28c, 0 0 18px rgba(3,178,140,.9); transform:scale(1.15); }
+.peer-avatar { position:relative; }
+.peer-avatar .conn-dot { position:absolute; bottom:-1px; right:-1px; width:9px; height:9px; border-radius:50%; border:2px solid var(--bg); background:#adb5bd; }
+.peer-avatar .conn-dot.good { background:#03b28c; }
+.peer-avatar .conn-dot.ok   { background:#f79009; }
+.peer-avatar .conn-dot.bad  { background:#f04438; }
 .peer-avatar.self { margin-left:0; }
 .tb-flex { flex:1; }
 .tb-status { font-size:12px; color:var(--mid); white-space:nowrap; }
@@ -963,6 +968,11 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 .cc-toggle { width:30px; height:30px; border:1px solid var(--b1); background:none; border-radius:6px; font-size:14px; cursor:pointer; transition:all .15s; }
 .cc-toggle:hover { border-color:var(--accent); }
 .cc-toggle.on { background:rgba(3,178,140,.15); border-color:#03b28c; }
+.ss-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+.ss-tile { padding:14px; background:var(--s1); border:1px solid var(--b1); border-radius:8px; text-align:center; }
+.ss-tile-val { font-size:20px; font-weight:700; color:var(--accent); }
+.ss-tile-lbl { font-size:11px; color:var(--dim); margin-top:2px; }
+.ss-peer { display:inline-flex; width:26px; height:26px; border-radius:50%; align-items:center; justify-content:center; color:#fff; font-size:11px; font-weight:700; }
 .agent-pill { background:var(--s1); border:1px solid var(--b1); border-radius:100px; padding:3px 10px; font-size:11px; color:var(--dim); font-family:var(--sans); transition:all .2s; }
 .agent-pill.connected { border-color:#03b28c; color:#03b28c; background:rgba(3,178,140,.08); }
 .agent-pill.disconnected { border-color:#f04438; color:#f04438; background:rgba(240,68,56,.08); animation:agentBlink 1.4s ease-in-out infinite; }
@@ -1808,6 +1818,15 @@ function enterSession() {
 }
 
 function leaveSession() {
+  // Capture summary data BEFORE we tear down
+  const summary = {
+    code: S.code,
+    mode: S.mode,
+    durationSec: S.connectedAt ? Math.floor((Date.now() - S.connectedAt) / 1000) : 0,
+    peers: [...S.peers.values()].map(p => ({ name: p.name || 'Peer', color: p.color })),
+    clipCount: (S.clips || []).length,
+    hostRole: S.peerNumber === 1
+  };
   // Notify server immediately so peers see instant disconnect
   if (S.cid) {
     send({ type: 'peer:left', peerId: S.cid, name: S.name });
@@ -1828,10 +1847,42 @@ function leaveSession() {
   S.playing = false; S.rec = false;
   S.pos = { b: 1, bt: 1, tk: 1 };
   closeRv();
-  document.body.classList.remove('is-guest');
+  document.body.classList.remove('is-guest', 'is-lecture', 'is-lecturer', 'is-student');
   show('landing');
-  showRatingModal();
+  // Show summary only if there was actual session time
+  if (summary.durationSec > 10) showSessionSummary(summary);
+  else showRatingModal();
 }
+
+function showSessionSummary(s) {
+  const m = Math.floor(s.durationSec / 60), sec = s.durationSec % 60;
+  const dur = (m ? m + ' דק\\'  ' : '') + sec + ' שנ\\'';
+  const modeName = s.mode === 'lecture' ? 'הרצאה 🎓' : 'משותף 🤝';
+  const peersHtml = s.peers.length
+    ? s.peers.map(p => \`<span class="ss-peer" style="background:\${p.color}">\${esc(p.name[0].toUpperCase())}</span>\`).join('')
+    : '<span style="font-size:12px;color:var(--dim)">אף אחד לא הצטרף</span>';
+  const html = \`
+    <div class="modal-backdrop" id="summBackdrop" onclick="if(event.target===this)closeSessionSummary()">
+      <div class="modal-panel" style="max-width:440px" dir="rtl">
+        <h3 style="margin:0 0 4px">✨ סיכום סשן</h3>
+        <div style="font-size:11px;color:var(--dim);margin-bottom:16px">\${esc(s.code || '')}</div>
+        <div class="ss-grid">
+          <div class="ss-tile"><div class="ss-tile-val">\${dur}</div><div class="ss-tile-lbl">משך</div></div>
+          <div class="ss-tile"><div class="ss-tile-val">\${s.peers.length + 1}</div><div class="ss-tile-lbl">משתתפים</div></div>
+          <div class="ss-tile"><div class="ss-tile-val">\${s.clipCount}</div><div class="ss-tile-lbl">הקלטות</div></div>
+          <div class="ss-tile"><div class="ss-tile-val" style="font-size:15px">\${modeName}</div><div class="ss-tile-lbl">מצב</div></div>
+        </div>
+        <div style="margin:16px 0 8px;font-size:11px;color:var(--dim)">משתתפים</div>
+        <div style="display:flex;gap:4px;flex-wrap:wrap">\${peersHtml}</div>
+        \${s.clipCount && s.hostRole ? \`<div style="font-size:11px;color:var(--dim);margin-top:12px">\${s.clipCount} הקלטות זמינות בלשונית "היסטוריה" אחרי הסגירה</div>\` : ''}
+        <button onclick="closeSessionSummary()" class="btn-primary" style="width:100%;margin-top:16px">סגור</button>
+      </div>
+    </div>
+  \`;
+  document.getElementById('summBackdrop')?.remove();
+  document.body.insertAdjacentHTML('beforeend', html);
+}
+function closeSessionSummary() { document.getElementById('summBackdrop')?.remove(); }
 
 // ── Polling with reconnection ─────────────────────────────
 async function tryAutoRejoin() {
@@ -2265,7 +2316,10 @@ function updatePeerAvatars() {
     av.dataset.peerId = pid;
     av.style.background = p.color || '#adb5bd';
     av.textContent = (p.name || '?')[0].toUpperCase();
-    av.title = p.name;
+    av.title = p.name + connQualityLabel(p);
+    const dot = document.createElement('span');
+    dot.className = 'conn-dot ' + connQualityClass(p);
+    av.appendChild(dot);
     el.appendChild(av);
   }
   const count = S.peers.size;
@@ -2343,6 +2397,23 @@ function togglePerm(peerId, key, badge, cls) {
   // Broadcast permission update to all peers
   broadcast({ type:'perms:update', peerId, perms: p.perms, from: S.cid });
   toast((p.name || 'Peer') + ': ' + key + ' ' + (p.perms[key] ? 'on' : 'off'), p.perms[key] ? 'g' : '');
+}
+
+function connQualityClass(p) {
+  if (!p) return '';
+  if (p.connState === 'connected') {
+    if (p.bwTier == null) return 'good';
+    return p.bwTier >= 2 ? 'good' : p.bwTier === 1 ? 'ok' : 'bad';
+  }
+  if (p.connState === 'connecting' || p.connState === 'new') return 'ok';
+  if (p.connState === 'failed' || p.connState === 'disconnected') return 'bad';
+  return '';
+}
+function connQualityLabel(p) {
+  if (!p) return '';
+  const state = p.connState || 'unknown';
+  const tier = p.bwTier == null ? '' : (p.bwTier >= 2 ? ' · איכות טובה' : p.bwTier === 1 ? ' · איכות בינונית' : ' · איכות נמוכה');
+  return ' — ' + state + tier;
 }
 
 function updatePeerStatus(peerId, state) {
@@ -2853,6 +2924,7 @@ function startAdaptiveBitrate(pc, peerId) {
         applyVideoBitrate(pc, BW_TIERS[tier]);
         const p = S.peers.get(peerId);
         if (p) p.bwTier = tier;
+        updatePeerAvatars();
         dlog('BW → ' + peerId + ' tier=' + tier + ' (' + Math.round(BW_TIERS[tier]/1000) + 'kbps) loss=' + (lossRate*100).toFixed(1) + '% rtt=' + Math.round(rtt*1000) + 'ms');
       }
     } catch (e) {}
@@ -3896,7 +3968,7 @@ function renderClips() {
     const url = URL.createObjectURL(c.blob);
     const size = (c.blob.size / 1024 / 1024).toFixed(1) + 'MB';
     return \`<div class="clip-card">
-      <span class="clip-name">🎵 \${esc(c.name)} (\${size})</span>
+      <span class="clip-name" onclick="previewClip(\${idx})" style="cursor:pointer" title="לחץ להשמעה">🎵 \${esc(c.name)} (\${size})</span>
       <a class="clip-dl" href="\${url}" download="\${c.name}.webm" title="הורד">⬇</a>
       <button class="clip-dl" onclick="uploadClipToDrive(\${idx})" title="העלה ל-Drive" style="background:none;border:none;cursor:pointer">☁</button>
       <button class="clip-dl" onclick="transcribeClip(\${idx})" title="תמלל" style="background:none;border:none;cursor:pointer">📝</button>
@@ -4468,6 +4540,40 @@ async function uploadAllClipsToDrive() {
     } catch (e) { fail++; }
   }
   toast(\`הועלו \${ok} קליפים\${fail ? ' (\${fail} נכשלו)' : ''} → תיקיית StudioSync ב-Drive\`, ok ? 'g' : 'r');
+}
+
+// ══════════════════════════════════════════════════════════
+// Recording preview — inline video/audio player for a captured clip
+// ══════════════════════════════════════════════════════════
+function previewClip(idx) {
+  const clip = S.clips[idx];
+  if (!clip) return;
+  const url = URL.createObjectURL(clip.blob);
+  const isAudio = /me-mic|-audio/.test(clip.name);
+  const html = \`
+    <div class="modal-backdrop" id="pvBackdrop" onclick="if(event.target===this)closePreview()">
+      <div class="modal-panel" style="max-width:720px;padding:14px" dir="rtl">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+          <h3 style="margin:0;flex:1">\${esc(clip.name)}</h3>
+          <button onclick="closePreview()" style="background:none;border:none;color:var(--mid);font-size:18px;cursor:pointer">✕</button>
+        </div>
+        \${isAudio
+          ? \`<audio controls autoplay src="\${url}" style="width:100%"></audio>\`
+          : \`<video controls autoplay src="\${url}" style="width:100%;max-height:60vh;background:#000;border-radius:6px"></video>\`}
+        <div style="display:flex;gap:6px;margin-top:10px">
+          <a class="btn-primary" style="flex:1;text-align:center;text-decoration:none;padding:8px" href="\${url}" download="\${clip.name}.webm">⬇ הורד</a>
+          <button class="btn-primary" style="flex:1" onclick="closePreview();uploadClipToDrive(\${idx})">☁ Drive</button>
+          <button class="btn-primary" style="flex:1" onclick="closePreview();transcribeClip(\${idx})">📝 תמלול</button>
+        </div>
+      </div>
+    </div>
+  \`;
+  document.getElementById('pvBackdrop')?.remove();
+  document.body.insertAdjacentHTML('beforeend', html);
+}
+function closePreview() {
+  const b = document.getElementById('pvBackdrop');
+  if (b) { b.querySelector('video,audio')?.pause(); b.remove(); }
 }
 
 // ══════════════════════════════════════════════════════════
