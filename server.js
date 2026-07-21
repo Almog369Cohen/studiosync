@@ -1536,6 +1536,8 @@ async function remoteJoin() {
 
 function enterSession() {
   S.connectedAt = Date.now();
+  // Auto-assign a distinct color per peer position since we no longer show a color picker.
+  S.color = PEER_COLORS[((S.peerNumber || 1) - 1) % PEER_COLORS.length];
   document.getElementById('codeDisplay').textContent = S.code;
   const spCode = document.getElementById('spCode');
   if (spCode) spCode.textContent = S.code;
@@ -2331,14 +2333,21 @@ function renderStreams() {
     }, 50));
     vid.addEventListener('keydown', (e) => {
       if (!MY.keyboard) return;
+      // If user's keyboard is mapped to MIDI right now, don't hijack it for remote control.
+      if (PIANO.kbdOn && PIANO.keyMap[e.key?.toLowerCase()] !== undefined) return;
       e.preventDefault();
       broadcast({ type:'remote:input', input:'keyboard', action:'keydown',
-        key: e.key, code: e.code, from: S.cid, fromName: S.name });
+        key: e.key, code: e.code,
+        shift: e.shiftKey, ctrl: e.ctrlKey, alt: e.altKey, meta: e.metaKey,
+        from: S.cid, fromName: S.name });
     });
     vid.addEventListener('keyup', (e) => {
       if (!MY.keyboard) return;
+      if (PIANO.kbdOn && PIANO.keyMap[e.key?.toLowerCase()] !== undefined) return;
       broadcast({ type:'remote:input', input:'keyboard', action:'keyup',
-        key: e.key, code: e.code, from: S.cid });
+        key: e.key, code: e.code,
+        shift: e.shiftKey, ctrl: e.ctrlKey, alt: e.altKey, meta: e.metaKey,
+        from: S.cid });
     });
 
     const lbl = document.createElement('div');
@@ -2643,13 +2652,15 @@ function buildPianoKeys() {
 function pianoNoteOn(note, el) {
   if (PIANO.active.has(note)) return;
   PIANO.active.add(note);
+  PIANO.mouseHeld.add(note);
   handleNote('noteon', note, { source:'local', velocity:PIANO.velocity,
-    peerColor:S.color, peerName:S.name });
+    peerColor:S.color || PEER_COLORS[0], peerName:S.name });
 }
 
 function pianoNoteOff(note, el) {
   if (!PIANO.active.has(note)) return;
   PIANO.active.delete(note);
+  PIANO.mouseHeld.delete(note);
   handleNote('noteoff', note, { source:'local' });
 }
 
@@ -2668,18 +2679,34 @@ function toggleKbdMidi() {
       : 'לחץ M להפעיל מקלדת כ-MIDI';
   }
   toast(PIANO.kbdOn ? '🎹 מקלדת = MIDI פעיל (ASDF...)' : 'מקלדת = MIDI כבוי', PIANO.kbdOn ? 'g' : '');
-  if (PIANO.kbdOn) {
-    // release any sticky notes when turning on
-    PIANO.active.clear();
-  } else {
-    // send noteoff for any still-held keys
-    for (const note of PIANO.active) {
+  // Always release every held note — local + peers — regardless of direction
+  releaseAllNotes();
+}
+
+function releaseAllNotes() {
+  // Stop local audio + highlight + send noteoff to peers for every active note
+  const held = [...PIANO.active];
+  PIANO.active.clear();
+  for (const note of held) {
+    stopPianoNote(note);
+    highlightKey(note, false);
+    if (MY.midi) {
       broadcast({ type:'remote:midi', action:'noteoff', note, velocity:0, channel:0,
         from:S.cid, fromName:S.name });
     }
-    PIANO.active.clear();
+  }
+  // Belt & suspenders: also stop any orphaned voices
+  if (AUDIO.voices) {
+    for (const note of [...AUDIO.voices.keys()]) stopPianoNote(note);
   }
 }
+
+// Emergency stop: ESC releases everything; blur/hidden releases everything.
+window.addEventListener('blur', releaseAllNotes);
+document.addEventListener('visibilitychange', () => { if (document.hidden) releaseAllNotes(); });
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') releaseAllNotes();
+});
 
 function kbdMidiNoteOn(note) {
   if (PIANO.active.has(note)) return;
@@ -2741,12 +2768,25 @@ document.addEventListener('keydown', e => {
 });
 
 document.addEventListener('keyup', e => {
-  if (!PIANO.kbdOn) return;
+  // Always process keyup for known piano keys, even if user toggled M off mid-press.
   const k = e.key?.toLowerCase();
   const semi = PIANO.keyMap[k];
-  if (semi !== undefined) {
-    kbdMidiNoteOff(PIANO.octave * 12 + semi);
+  if (semi === undefined) return;
+  // Try every octave — user may have shifted octave while holding.
+  for (const note of [...PIANO.active]) {
+    if (((note - semi) % 12) === 0) kbdMidiNoteOff(note);
   }
+});
+
+// Track mouse-held piano notes so we can release them even if mouseup lands outside the key.
+PIANO.mouseHeld = new Set();
+document.addEventListener('mouseup', () => {
+  if (!PIANO.mouseHeld.size) return;
+  for (const note of [...PIANO.mouseHeld]) {
+    const el = document.querySelector('[data-note="' + note + '"]');
+    pianoNoteOff(note, el);
+  }
+  PIANO.mouseHeld.clear();
 });
 
 // ── Keyboard shortcuts ────────────────────────────────────
