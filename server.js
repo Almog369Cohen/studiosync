@@ -154,6 +154,7 @@ function useTrial(fp) {
 const sessions = new Map(); // code → { peers: Set<clientId>, daw, created, password }
 const queues   = new Map(); // clientId → [messages]
 const clients  = new Map(); // clientId → { code, name, color, instrument, res, seen }
+const transcribeRateLimit = new Map(); // cid → [timestamps within last hour]
 const onlineUsers = new Map(); // name → { name, color, instrument, ts }
 const featureVotes = new Map(); // featureId → Set<fingerprint>
 const VOTABLE_FEATURES = [
@@ -181,9 +182,14 @@ function getIP() {
   return 'localhost';
 }
 
+// Cap per-client queue so a stalled client that hasn't polled for 90s can't
+// grow the queue by 100msg/s × 90s ≈ 10k messages before the eviction sweep.
+const MAX_QUEUE_PER_CLIENT = 500;
 function push(clientId, msg) {
   if (!queues.has(clientId)) queues.set(clientId, []);
-  queues.get(clientId).push(msg);
+  const q = queues.get(clientId);
+  q.push(msg);
+  if (q.length > MAX_QUEUE_PER_CLIENT) q.splice(0, q.length - MAX_QUEUE_PER_CLIENT);
   const c = clients.get(clientId);
   if (c?.res) flush(clientId);
 }
@@ -247,6 +253,26 @@ function httpsRequest(url, opts, body) {
   });
 }
 
+// Promote the next surviving peer to host if the current host leaves so students
+// aren't left permanently locked with no one to grant them permissions.
+function handleHostGone(sess) {
+  if (!sess) return;
+  // Prefer a non-Agent participant with the lowest join time (earliest).
+  let next = null, nextSeen = Infinity;
+  for (const pid of sess.peers) {
+    const pc = clients.get(pid);
+    if (!pc || pc.isAgent) continue;
+    if (pc.seen < nextSeen) { nextSeen = pc.seen; next = pid; }
+  }
+  if (!next) { sess.mode = 'collab'; return; } // last-ditch — no one left to promote
+  sess.hostId = next;
+  // If we were in lecture mode, dropping to collab so surviving peers regain
+  // their controls even before they get the promotion notice.
+  sess.mode = 'collab';
+  pushAll(sess.hostId === next ? clients.get(next)?.code : null,
+    { type: 'session:host-changed', newHostId: next, newMode: 'collab' }, null);
+}
+
 // ── Cleanup stale clients every 30s ──────────────────────
 setInterval(() => {
   const now = Date.now();
@@ -254,14 +280,25 @@ setInterval(() => {
     if (now - c.seen > 90000) {
       const sess = sessions.get(c.code);
       if (sess) {
+        const wasHost = sess.hostId === id;
         sess.peers.delete(id);
         pushAll(c.code, { type: 'peer:left', peerId: id, name: c.name }, id);
+        if (wasHost && sess.peers.size > 0) handleHostGone(sess);
         if (sess.peers.size === 0) {
-          sessions.delete(c.code);
+          // Grace period: keep the session shell for up to 5 minutes so brief
+          // network hiccups don't nuke a live lecture. Only delete if truly cold.
+          if (!sess.gracefulUntil) sess.gracefulUntil = now + 5 * 60 * 1000;
+          else if (now > sess.gracefulUntil) sessions.delete(c.code);
         }
       }
       clients.delete(id);
       queues.delete(id);
+    }
+  }
+  // Sweep truly-empty sessions past their grace window
+  for (const [code, sess] of sessions) {
+    if (sess.peers.size === 0 && sess.gracefulUntil && now > sess.gracefulUntil) {
+      sessions.delete(code);
     }
   }
 }, 30000);
@@ -310,6 +347,13 @@ const server = http.createServer(async (req, res) => {
 
   // ── Morning Webhook (payment confirmation) ──
   if (path === '/api/morning-webhook' && req.method === 'POST') {
+    // Require a shared-secret token in the URL. Without this, anyone who knows
+    // the endpoint can POST `{status:"paid"}` and mint themselves a Pro license.
+    const wantSecret = process.env.MORNING_WEBHOOK_SECRET;
+    if (!wantSecret) return json(res, { ok: false, error: 'webhook_disabled' }, 501);
+    const got = url.searchParams.get('token') || req.headers['x-webhook-token'];
+    if (got !== wantSecret) return json(res, { ok: false, error: 'unauthorized' }, 401);
+
     const data = await body(req);
     console.log('[Morning webhook]', JSON.stringify(data).slice(0, 300));
     const isPaid = data.status === 'paid' || data.payment?.length > 0 || data.type === 400;
@@ -326,8 +370,14 @@ const server = http.createServer(async (req, res) => {
 
   // ── Admin: list active licenses ──
   if (path === '/api/admin/licenses' && req.method === 'GET') {
-    const adminPass = process.env.ADMIN_PASS || 'studiosync-admin';
-    if (url.searchParams.get('pass') !== adminPass) return json(res, { ok: false }, 403);
+    // Refuse to run without an explicit ADMIN_PASS env var — the old hard-coded
+    // default ("studiosync-admin") was a global backdoor to every paying user's PII.
+    const adminPass = process.env.ADMIN_PASS;
+    if (!adminPass || adminPass.length < 12) return json(res, { ok: false, error: 'admin_disabled' }, 503);
+    const provided = url.searchParams.get('pass') || '';
+    // Constant-time compare
+    const a = Buffer.from(provided), b = Buffer.from(adminPass);
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return json(res, { ok: false }, 403);
     const list = [...runtimeLicenses.entries()].map(([k, v]) => ({ key: k, ...v }));
     return json(res, { ok: true, count: list.length, licenses: list });
   }
@@ -351,9 +401,10 @@ const server = http.createServer(async (req, res) => {
     const requested = typeof data.code === 'string' ? data.code.toUpperCase().trim() : null;
     const code = (requested && /^[A-Z0-9]{3}-[A-Z0-9]{3}$/.test(requested) && !sessions.has(requested))
       ? requested : genCode();
-    const name = data.name || 'Producer';
-    const color = data.color || '#6c47ff';
-    const instrument = data.instrument || 'Producer';
+    // Sanitize identity fields — same rules as /api/join.
+    const name = String(data.name || 'Producer').replace(/[<>&"'`\r\n\t]/g, '').slice(0, 40).trim() || 'Producer';
+    const color = /^#[0-9a-f]{3,8}$/i.test(data.color || '') ? data.color : '#6c47ff';
+    const instrument = String(data.instrument || 'Producer').replace(/[<>&"'`\r\n\t]/g, '').slice(0, 40);
     const mode = (data.mode === 'lecture') ? 'lecture' : 'collab';
     clients.set(id, { code, name, color, instrument, res: null, seen: Date.now() });
     queues.set(id, []);
@@ -391,12 +442,15 @@ const server = http.createServer(async (req, res) => {
     }
 
     const id         = 'p_' + Date.now() + crypto.randomBytes(3).toString('hex');
-    const name       = data.name || 'Musician_' + Math.floor(Math.random() * 100);
-    const color      = data.color || '#12b76a';
-    const instrument = data.instrument || 'Keys';
+    // Server-side sanitization: strip HTML-hazardous chars and cap length so
+    // peer-supplied names can't smuggle markup through to other clients.
+    const cleanName  = String(data.name || '').replace(/[<>&"'`\r\n\t]/g, '').slice(0, 40).trim()
+                       || ('Musician_' + Math.floor(Math.random() * 100));
+    const color      = /^#[0-9a-f]{3,8}$/i.test(data.color || '') ? data.color : '#12b76a';
+    const instrument = String(data.instrument || 'Keys').replace(/[<>&"'`\r\n\t]/g, '').slice(0, 40);
     const isAgent    = !!data.isAgent;
 
-    clients.set(id, { code, name, color, instrument, res: null, seen: Date.now(), isAgent });
+    clients.set(id, { code, name: cleanName, color, instrument, res: null, seen: Date.now(), isAgent });
     queues.set(id, []);
     sess.peers.add(id);
 
@@ -411,14 +465,15 @@ const server = http.createServer(async (req, res) => {
     // Send welcome to joiner with list of existing peers + session mode
     push(id, { type: 'session:welcome', peers: existingPeers, code, mode: sess.mode || 'collab' });
 
-    // Tell ALL existing peers to create an offer to the new joiner
+    // Tell ALL existing peers to create an offer to the new joiner. Use the
+    // server-cleaned name/instrument so no peer smuggles raw markup through.
     for (const pid of sess.peers) {
       if (pid === id) continue;
-      push(pid, { type: 'webrtc:create-offer', peerId: id, name, color, instrument });
-      push(pid, { type: 'peer:joined', peerId: id, name, color, instrument, role: data.role || 'participant' });
+      push(pid, { type: 'webrtc:create-offer', peerId: id, name: cleanName, color, instrument });
+      push(pid, { type: 'peer:joined', peerId: id, name: cleanName, color, instrument, role: data.role || 'participant' });
     }
 
-    console.log('[+] Joined:', name, '->', code, '(peer', sess.peers.size, ') mode=' + (sess.mode || 'collab'));
+    console.log('[+] Joined:', cleanName, '->', code, '(peer', sess.peers.size, ') mode=' + (sess.mode || 'collab'));
     return json(res, { ok: true, code, clientId: id, peerNumber: sess.peers.size, mode: sess.mode || 'collab' });
   }
 
@@ -429,25 +484,52 @@ const server = http.createServer(async (req, res) => {
     const c    = clients.get(cid);
     if (!c) return json(res, { ok: false });
     c.seen = Date.now();
-    // Accept message directly (not wrapped in msg)
     const msg = data.type ? data : (data.msg || {});
+
+    // Every relayed message gets its identity fields overwritten from the
+    // authoritative server-side client record. Peers can no longer spoof
+    // "from", "fromName", "name", or "color".
+    const stamp = (m) => ({ ...m, from: cid, fromName: c.name, name: c.name, color: c.color });
+
+    // Host-only message types: only the current session host can send them.
+    // Anything else from a non-host is dropped.
+    const HOST_ONLY = new Set(['class:perm', 'class:mute-all', 'mute:command',
+      'stage:toggle', 'stage:grant', 'daw:state', 'metro:toggle', 'notes:update',
+      'session:host-changed']);
+    const sess = sessions.get(c.code);
+    const isHost = sess && sess.hostId === cid;
+    if (HOST_ONLY.has(msg.type) && !isHost) return json(res, { ok: false, error: 'not_host' }, 403);
 
     if      (msg.type === 'webrtc:offer')   push(msg.peerId, { ...msg, peerId: cid });
     else if (msg.type === 'webrtc:answer')  push(msg.peerId, { ...msg, peerId: cid });
     else if (msg.type === 'webrtc:ice')     push(msg.peerId, { ...msg, peerId: cid });
-    else if (msg.type === 'remote:input')   pushAll(c.code, msg, cid);
-    else if (msg.type === 'daw:state')      pushAll(c.code, msg, cid);
-    else if (msg.type === 'chat:msg')       pushAll(c.code, { ...msg, name: msg.name || c.name, color: msg.color || c.color }, cid);
+    else if (msg.type === 'remote:input')   pushAll(c.code, stamp(msg), cid);
+    else if (msg.type === 'daw:state')      pushAll(c.code, stamp(msg), cid);
+    else if (msg.type === 'chat:msg')       pushAll(c.code, stamp(msg), cid);
     else if (msg.type === 'ping:req')       push(cid, { type: 'ping:res', ts: msg.ts });
-    else                                    pushAll(c.code, msg, cid);
+    else                                    pushAll(c.code, stamp(msg), cid);
 
     return json(res, { ok: true });
   }
 
   // ── Local input execution (robotjs) ──
   if (path === '/api/local-input' && req.method === 'POST') {
-    const data = await body(req);
+    // AUTH: only accept from a live session-host cid (per-session token).
+    // Otherwise any malicious page could POST here and drive robotjs.
+    const cid = url.searchParams.get('cid') || (await body(req)).cid;
+    const c = clients.get(cid);
+    const sess = c && sessions.get(c.code);
+    if (!c || !sess || sess.hostId !== cid) return json(res, { ok: false, error: 'unauthorized' }, 401);
+    // localhost-only when running as the local Agent (dev / self-host) so LAN
+    // peers can't reach it. On Render, robot is null so this route no-ops anyway.
+    const src = req.socket?.remoteAddress || '';
+    if (!/^(127\.|::1|::ffff:127\.)/.test(src) && process.env.RENDER !== 'true' && !process.env.CI) {
+      return json(res, { ok: false, error: 'local_only' }, 403);
+    }
     if (!robot) return json(res, { ok: false, error: 'robotjs not available' });
+    // Re-read body if not already
+    let data;
+    try { data = await body(req); } catch (e) { data = {}; }
     try {
       const screenSize = robot.getScreenSize();
       if (data.input === 'mouse') {
@@ -479,6 +561,9 @@ const server = http.createServer(async (req, res) => {
       queues.set(cid, []);
     } else {
       c.res = res;
+      // Free the reference the moment the client hangs up — otherwise a mobile
+      // tab-close leaks the response object + socket for up to 28s per drop.
+      req.on('close', () => { if (c.res === res) c.res = null; });
       setTimeout(() => {
         if (c.res === res) {
           c.res = null;
@@ -503,14 +588,31 @@ const server = http.createServer(async (req, res) => {
 
   // ── Transcription proxy — receives audio blob, calls STT provider ──
   if (path === '/api/transcribe' && req.method === 'POST') {
+    // AUTH: require a live session client. Without this any random visitor can
+    // burn OpenAI/ElevenLabs quota via curl at ~$0.006/min per call.
+    const authCid = url.searchParams.get('cid');
+    if (!authCid || !clients.get(authCid)) return json(res, { ok:false, error:'unauthorized' }, 401);
+    // Simple in-memory rate limit: 20 calls/hour per cid.
+    const rlKey = 'tx:' + authCid;
+    const now = Date.now();
+    transcribeRateLimit.set(rlKey, (transcribeRateLimit.get(rlKey) || []).filter(t => t > now - 3600_000));
+    if (transcribeRateLimit.get(rlKey).length >= 20) return json(res, { ok:false, error:'rate_limited' }, 429);
+    transcribeRateLimit.get(rlKey).push(now);
+
     const provider = process.env.ELEVENLABS_API_KEY ? 'elevenlabs'
                     : process.env.OPENAI_API_KEY ? 'openai' : null;
     if (!provider) return json(res, { ok:false, error:'no_transcription_key',
       message:'הוסף OPENAI_API_KEY או ELEVENLABS_API_KEY למשתני הסביבה' }, 501);
 
-    // Buffer the raw body (browser sends multipart with the audio blob directly)
+    // Buffer with a hard 25 MB cap (Whisper's own limit + safety margin).
+    const MAX_BODY = 25 * 1024 * 1024;
+    let total = 0;
     const chunks = [];
-    for await (const c of req) chunks.push(c);
+    for await (const c of req) {
+      total += c.length;
+      if (total > MAX_BODY) return json(res, { ok:false, error:'payload_too_large' }, 413);
+      chunks.push(c);
+    }
     const rawBody = Buffer.concat(chunks);
     const contentType = req.headers['content-type'] || 'audio/webm';
 
@@ -590,11 +692,19 @@ const server = http.createServer(async (req, res) => {
   // ── Heartbeat (online indicator + session keepalive) ──
   if (path === '/api/heartbeat' && req.method === 'POST') {
     const data = await body(req);
-    if (data.name) onlineUsers.set(data.name, { name: data.name, color: data.color || '#6c47ff', instrument: data.instrument || '', ts: Date.now() });
-    // Also refresh session client's seen timestamp so eviction doesn't fire during long polls / background tabs
+    // Trust color only if it looks like a hex value; validate name length.
+    const safeColor = /^#[0-9a-f]{3,8}$/i.test(data.color || '') ? data.color : '#6c47ff';
+    const safeName = String(data.name || '').slice(0, 40).replace(/[\r\n\t]/g, '');
+    const safeInstrument = String(data.instrument || '').slice(0, 40).replace(/[\r\n\t]/g, '');
+    // Only bump seen if the caller actually owns that cid — otherwise an attacker
+    // could freeze another peer's eviction timer indefinitely.
     if (data.cid) {
       const c = clients.get(data.cid);
       if (c) c.seen = Date.now();
+    }
+    // Cap online-users map (2000) to bound memory on spam.
+    if (safeName && onlineUsers.size < 2000) {
+      onlineUsers.set(safeName, { name: safeName, color: safeColor, instrument: safeInstrument, ts: Date.now() });
     }
     return json(res, { ok: true });
   }
@@ -615,10 +725,16 @@ const server = http.createServer(async (req, res) => {
   }
   if (path === '/api/features/vote' && req.method === 'POST') {
     const data = await body(req);
-    const fp = data.fingerprint || 'anon';
+    // Whitelist: only VOTABLE_FEATURES ids can accumulate votes. Attackers used
+    // to grow the map unbounded by voting for `x1`, `x2`, `x3`, …
+    const allowed = new Set(VOTABLE_FEATURES.map(f => f.id));
+    if (!allowed.has(data.featureId)) return json(res, { ok: false, error: 'unknown_feature' }, 400);
+    // Cap fingerprint length so oversized strings can't inflate memory.
+    const rawFp = String(data.fingerprint || 'anon').slice(0, 128);
     if (!featureVotes.has(data.featureId)) featureVotes.set(data.featureId, new Set());
-    featureVotes.get(data.featureId).add(fp);
-    return json(res, { ok: true, votes: featureVotes.get(data.featureId).size });
+    const set = featureVotes.get(data.featureId);
+    if (set.size < 100_000) set.add(rawFp);
+    return json(res, { ok: true, votes: set.size });
   }
 
   // ── Serve HTML app ─────────────────────────────────────
@@ -1827,16 +1943,19 @@ async function remoteJoin() {
   show('connecting');
   try {
     const code = raw.slice(0, 3) + '-' + raw.slice(3);
+    const enteredPassword = (document.getElementById('joinPassword')?.value || '').trim() || undefined;
     const r = await fetch(SERVER + '/api/join', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code, name: S.name, color: S.color, instrument: S.instrument, fingerprint: getFingerprint(), password: (document.getElementById('joinPassword')?.value || '').trim() || undefined, role: document.getElementById('joinAsListener')?.checked ? 'listener' : 'participant' })
+      body: JSON.stringify({ code, name: S.name, color: S.color, instrument: S.instrument, fingerprint: getFingerprint(), password: enteredPassword, role: document.getElementById('joinAsListener')?.checked ? 'listener' : 'participant' })
     });
     const d = await r.json();
     if (!d.ok) {
       if (d.error === 'password_required') { document.getElementById('joinPassword').style.display = ''; toast('הסשן מוגן בסיסמה', 'r'); show('lobby'); return; }
       toast(d.error || 'Session not found', 'r'); show('lobby'); return;
     }
+    // Cache the password so autoRejoin can silently reuse it after a network hiccup.
+    S._joinPassword = enteredPassword;
     S.cid = d.clientId;
     S.code = d.code;
     S.peerNumber = d.peerNumber || 2;
@@ -1973,32 +2092,45 @@ function closeSessionSummary() { document.getElementById('summBackdrop')?.remove
 
 // ── Polling with reconnection ─────────────────────────────
 async function tryAutoRejoin() {
-  // Server forgot us (redeploy, eviction, network gap). Attempt silent rejoin with same code+name.
+  // Server forgot us (redeploy, eviction, network gap). Attempt silent rejoin
+  // with same code + name + (cached) password. Prefer join first so we don't
+  // accidentally spawn a fresh empty session with a random code.
   if (!S.code || !S.name) return false;
-  try {
-    const wasHost = S.peerNumber === 1;
-    // Try recreate first if we were the host — brings the room back online.
-    if (wasHost) {
-      const r = await fetch(SERVER + '/api/create', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: S.name, color: S.color, instrument: S.instrument, daw: 'Ableton',
-          fingerprint: getFingerprint(), code: S.code })
-      });
-      const d = await r.json();
-      if (d.ok) { S.cid = d.clientId; return true; }
+  const raw = S.code.replace(/[^A-Z0-9]/gi, '').toUpperCase();
+  const code = raw.slice(0, 3) + '-' + raw.slice(3);
+  const applyRejoinResp = (d) => {
+    if (!d.ok) return false;
+    S.cid = d.clientId;
+    if (typeof d.peerNumber === 'number') {
+      S.peerNumber = d.peerNumber;
+      S.color = PEER_COLORS[((d.peerNumber || 1) - 1) % PEER_COLORS.length];
     }
-    // Rejoin as guest
-    const raw = S.code.replace(/[^A-Z0-9]/gi, '').toUpperCase();
-    const code = raw.slice(0, 3) + '-' + raw.slice(3);
-    const r = await fetch(SERVER + '/api/join', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+    if (d.mode) S.mode = d.mode;
+    return true;
+  };
+  try {
+    // 1) Try to join the still-alive session first.
+    const rj = await fetch(SERVER + '/api/join', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ code, name: S.name, color: S.color, instrument: S.instrument,
-        fingerprint: getFingerprint() })
+        password: S._joinPassword || undefined, fingerprint: getFingerprint() })
     });
-    const d = await r.json();
-    if (d.ok) { S.cid = d.clientId; return true; }
+    const dj = await rj.json();
+    if (dj.ok) { const ok = applyRejoinResp(dj); if (ok) { applySessionMode?.(); } return ok; }
+
+    // 2) If we were the host and the session is genuinely gone (404), recreate it.
+    if (S.peerNumber === 1 && dj.error && !dj.error.includes('password')) {
+      const rc = await fetch(SERVER + '/api/create', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: S.name, color: S.color, instrument: S.instrument, daw: 'Ableton',
+          fingerprint: getFingerprint(), code: S.code, mode: S.mode || 'collab' })
+      });
+      const dc = await rc.json();
+      // Server returns the SAME code only if it was free. If we get a different
+      // code back, the old session is still alive — don't isolate ourselves.
+      if (dc.ok && dc.code === S.code) { S.cid = dc.clientId; return true; }
+      return false;
+    }
     return false;
   } catch (e) { return false; }
 }
@@ -2058,16 +2190,22 @@ async function send(msg) {
 // ── WebRTC PeerMesh ───────────────────────────────────────
 const PeerMesh = {
   async createOffer(peerId) {
+    // If we already had a pc for this peer (reconnect / renegotiation), close it
+    // cleanly so the old one's adaptive-bitrate interval + getStats loop stops.
+    const priorPc = S.peers.get(peerId)?.conn;
+    if (priorPc) { try { priorPc.close(); } catch (e) {} }
+
     const pc = new RTCPeerConnection(ICE);
     const peerInfo = S.peers.get(peerId) || {};
-    S.peers.set(peerId, { ...peerInfo, conn: pc });
+    // Fresh _senderGroups — the closed pc's senders are dead.
+    S.peers.set(peerId, { ...peerInfo, conn: pc, dc: null, _senderGroups: {} });
     const dc = pc.createDataChannel('daw', { ordered: true });
     dc.onopen = () => { const p = S.peers.get(peerId); if (p) p.dc = dc; dlog('DC open → ' + peerId); };
     dc.onmessage = (e) => applyRemote(JSON.parse(e.data), peerId);
     pc.ondatachannel = () => {};
     pc.onicecandidate = (e) => { if (e.candidate) send({ type: 'webrtc:ice', peerId, candidate: e.candidate }); };
     pc.onconnectionstatechange = () => { updatePeerStatus(peerId, pc.connectionState); };
-    pc.ontrack = (e) => { if (e.streams[0]) showRemoteStream(e.streams[0], peerId); };
+    pc.ontrack = (e) => { if (e.streams[0]) showRemoteStream(e.streams[0], peerId, e.track); };
     startAdaptiveBitrate(pc, peerId);
     pc.onnegotiationneeded = async () => {
       try {
@@ -2076,6 +2214,11 @@ const PeerMesh = {
         send({ type: 'webrtc:offer', peerId, offer });
       } catch(e) {}
     };
+
+    // Re-attach every currently-active local share to this fresh pc so a
+    // late joiner (or a reconnected peer) actually sees what's being shared.
+    await reattachAllLocalStreamsToPeer(peerId);
+
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
     send({ type: 'webrtc:offer', peerId, offer });
@@ -2437,16 +2580,45 @@ function mkPeerCard(id, name, color, instrument, status, isSelf) {
   const perms = p?.perms || { mouse: true, keyboard: true, midi: true };
   const isCreator = S.peerNumber === 1; // only creator can manage permissions
 
+  // Build via DOM APIs — inlining peer-supplied name/instrument/color into innerHTML
+  // was a stored-XSS sink: any peer joining with name=<img onerror=…> executed
+  // in every recipient's tab.
+  const safeColor = (color && /^#[0-9a-f]{3,8}$/i.test(color)) ? color : '#adb5bd';
   const topRow = document.createElement('div');
   topRow.style.cssText = 'display:flex;align-items:center;gap:10px;';
-  topRow.innerHTML = \`
-    <div class="pc-avatar" style="background:\${color || '#adb5bd'}">\${(name || '?')[0].toUpperCase()}</div>
-    <div class="pc-info" style="flex:1">
-      <div class="pc-name">\${name || 'Peer'}\${isSelf ? ' <span class="you-badge">you</span>' : ''}</div>
-      <div class="pc-meta">\${instrument || ''} &middot; <span class="pc-status">\${status || 'connecting'}</span></div>
-    </div>
-    \${latency != null ? \`<div class="pc-lat">\${latency}ms</div>\` : ''}
-  \`;
+  const avatarEl = document.createElement('div');
+  avatarEl.className = 'pc-avatar';
+  avatarEl.style.background = safeColor;
+  avatarEl.textContent = (name || '?')[0].toUpperCase();
+  topRow.appendChild(avatarEl);
+  const infoEl = document.createElement('div');
+  infoEl.className = 'pc-info';
+  infoEl.style.flex = '1';
+  const nameEl = document.createElement('div');
+  nameEl.className = 'pc-name';
+  nameEl.textContent = name || 'Peer';
+  if (isSelf) {
+    const badge = document.createElement('span');
+    badge.className = 'you-badge';
+    badge.textContent = ' you';
+    nameEl.appendChild(badge);
+  }
+  const metaEl = document.createElement('div');
+  metaEl.className = 'pc-meta';
+  const instrEl = document.createElement('span');
+  instrEl.textContent = (instrument || '') + ' · ';
+  const statusEl = document.createElement('span');
+  statusEl.className = 'pc-status';
+  statusEl.textContent = status || 'connecting';
+  metaEl.append(instrEl, statusEl);
+  infoEl.append(nameEl, metaEl);
+  topRow.appendChild(infoEl);
+  if (latency != null) {
+    const latEl = document.createElement('div');
+    latEl.className = 'pc-lat';
+    latEl.textContent = latency + 'ms';
+    topRow.appendChild(latEl);
+  }
   d.appendChild(topRow);
 
   // Permission badges (only show for remote peers, and only creator can toggle)
@@ -2509,17 +2681,29 @@ function updatePeerStatus(peerId, state) {
   renderPeerList();
   const sc = document.getElementById('spConn');
   if (sc) sc.textContent = state;
+  // 'connected' clears the reconnect budget so future flaps get retries again.
+  if (state === 'connected' && p) p._reconnectAttempts = 0;
   if (state === 'failed' || state === 'disconnected') {
+    const pp = p;
+    if (!pp) return;
+    pp._reconnectAttempts = (pp._reconnectAttempts || 0) + 1;
+    if (pp._reconnectAttempts > 5) {
+      dlog('✗ Reconnect gave up on ' + (pp.name || peerId) + ' after 5 attempts');
+      // Peer is really gone — stop hammering and clean up.
+      try { pp.conn?.close(); } catch (e) {}
+      pp.conn = null; pp.dc = null;
+      return;
+    }
+    // Exponential backoff: 3s → 6s → 12s → 24s → 30s (cap).
+    const delayMs = Math.min(3000 * Math.pow(2, pp._reconnectAttempts - 1), 30000);
     setTimeout(() => {
-      const pp = S.peers.get(peerId);
-      if (!pp || !S.cid) return;
-      if (pp.connState === 'failed' || pp.connState === 'disconnected') {
-        dlog('↩ Reconnecting to ' + (pp.name || peerId));
-        pp.conn?.close();
-        pp.conn = null; pp.dc = null;
-        PeerMesh.createOffer(peerId);
-      }
-    }, 3000);
+      const now = S.peers.get(peerId);
+      if (!now || !S.cid) return;
+      if (now.connState !== 'failed' && now.connState !== 'disconnected') return;
+      dlog('↩ Reconnecting to ' + (now.name || peerId) + ' (attempt ' + now._reconnectAttempts + ')');
+      // PeerMesh.createOffer now closes prior pc + resets sender groups + re-attaches shares.
+      PeerMesh.createOffer(peerId);
+    }, delayMs);
   }
 }
 
@@ -2588,6 +2772,9 @@ function appendChat(name, text, color, ts, isSelf) {
   if (!isSelf) d.appendChild(nameEl);
   d.appendChild(bubble);
   area.appendChild(d);
+  // Cap chat DOM at 200 messages — a 2-hour lecture chat can otherwise pile
+  // up thousands of nodes and freeze the tab during layout.
+  while (area.children.length > 200) area.firstElementChild.remove();
 
   if (nearBottom || isSelf) area.scrollTop = area.scrollHeight;
 
@@ -2705,6 +2892,41 @@ function showPlayOverlay(vid, container) {
     try { await vid.play(); btn.remove(); } catch(e) {}
   };
   container.appendChild(btn);
+}
+
+// After a peer connection is (re)established, push every currently-active
+// local share to that specific peer so they see the state we're already in.
+async function reattachAllLocalStreamsToPeer(peerId) {
+  const p = S.peers.get(peerId);
+  if (!p?.conn) return;
+  const groupsToAttach = [];
+  if (S.streams) {
+    for (const [key, entry] of S.streams) {
+      if (!key.startsWith(S.cid)) continue;
+      const group = key.endsWith(':cam') ? 'camera'
+                   : key.endsWith(':audio') ? 'audio'
+                   : key.startsWith('extra:') ? 'extraScreen'
+                   : 'screen';
+      groupsToAttach.push({ stream: entry.stream, group });
+    }
+  }
+  if (S.micStream) groupsToAttach.push({ stream: S.micStream, group: 'mic' });
+
+  for (const { stream, group } of groupsToAttach) {
+    for (const track of stream.getTracks()) {
+      p._senderGroups = p._senderGroups || {};
+      p._senderGroups[group] = p._senderGroups[group] || {};
+      try {
+        const existing = p._senderGroups[group][track.kind];
+        if (existing && p.conn.getSenders().includes(existing)) {
+          await existing.replaceTrack(track);
+        } else {
+          const sender = p.conn.addTrack(track, stream);
+          p._senderGroups[group][track.kind] = sender;
+        }
+      } catch (e) { dlog('reattach err ' + group + '/' + track.kind + ': ' + e.message); }
+    }
+  }
 }
 
 async function attachTracksToPeers(stream, group /* 'screen' | 'camera' | 'audio' */) {
@@ -3132,9 +3354,9 @@ async function toggleSelfMute() {
       });
       S.micStream = stream;
       S.selfMuted = false;
-      for (const [, p] of S.peers) {
-        if (p.conn) stream.getAudioTracks().forEach(t => p.conn.addTrack(t, stream));
-      }
+      // Use the sender-lifecycle helper so a subsequent mute→unmute reuses the
+      // same RTCRtpSender via replaceTrack instead of stacking new senders.
+      await attachTracksToPeers(stream, 'mic');
       const btn = document.getElementById('muteBtn');
       if (btn) { btn.textContent = '🎤'; btn.classList.remove('muted-state'); btn.title = 'השתק'; }
       voiceAttach(S.cid || 'self', stream);
@@ -3244,7 +3466,7 @@ function voiceAttach(peerId, stream) {
   if (!stream || !stream.getAudioTracks || !stream.getAudioTracks().length) return;
   const ctx = voiceEnsureCtx();
   if (!ctx) return;
-  // Replace any existing analyzer for this peer
+  // Replace any existing analyzer for this peer (and disconnect its nodes)
   voiceDetach(peerId);
   try {
     const src = ctx.createMediaStreamSource(stream);
@@ -3252,12 +3474,19 @@ function voiceAttach(peerId, stream) {
     analyser.fftSize = 512;
     analyser.smoothingTimeConstant = 0.5;
     src.connect(analyser);
-    VOICE.analyzers.set(peerId, { analyser, buffer: new Uint8Array(analyser.frequencyBinCount) });
+    // Store both nodes so we can disconnect them on detach — otherwise Chromium
+    // keeps them alive for the AudioContext's lifetime and leaks per re-share.
+    VOICE.analyzers.set(peerId, { src, analyser, buffer: new Uint8Array(analyser.frequencyBinCount) });
     if (!VOICE.rafId) voiceTick();
   } catch (e) {}
 }
 
 function voiceDetach(peerId) {
+  const entry = VOICE.analyzers.get(peerId);
+  if (entry) {
+    try { entry.src?.disconnect(); } catch (e) {}
+    try { entry.analyser?.disconnect(); } catch (e) {}
+  }
   VOICE.analyzers.delete(peerId);
   const el = document.querySelector('[data-peer-id="' + peerId + '"]');
   if (el) el.classList.remove('speaking', 'speaking-loud');
@@ -3415,7 +3644,7 @@ async function endAndArchive() {
       toast('מתמלל ' + audioClips.length + ' קטעי שמע...', '');
       for (const c of audioClips) {
         try {
-          const r = await fetch('/api/transcribe', { method:'POST', headers:{'Content-Type':'audio/webm'}, body: c.blob });
+          const r = await fetch('/api/transcribe?cid=' + encodeURIComponent(S.cid || ''), { method:'POST', headers:{'Content-Type':'audio/webm'}, body: c.blob });
           const d = await r.json();
           if (d.ok) c.transcript = d.text;
         } catch(e) {}
@@ -3548,16 +3777,25 @@ function audioInit() {
   AUDIO.ctx = new AC();
   AUDIO.master = AUDIO.ctx.createGain();
   AUDIO.master.gain.value = AUDIO.volume;
-  // Very light body-resonance impulse response via a short exponential decay
-  // (Convolver would need an actual IR file; using a short reverb-ish delay chain instead.)
+  // Body resonance chain (light room feel)
   const wet = AUDIO.ctx.createGain(); wet.gain.value = 0.18;
   const delay = AUDIO.ctx.createDelay(0.15); delay.delayTime.value = 0.055;
   const feedback = AUDIO.ctx.createGain(); feedback.gain.value = 0.28;
   const filter = AUDIO.ctx.createBiquadFilter(); filter.type = 'lowpass'; filter.frequency.value = 3600;
   delay.connect(feedback); feedback.connect(filter); filter.connect(delay);
   delay.connect(wet); wet.connect(AUDIO.master);
-  AUDIO.master.connect(AUDIO.ctx.destination);
+  // Hard limiter before destination so 30 lecture students hammering the
+  // shared piano can't sum past 0 dBFS and clip / pop.
+  const limiter = AUDIO.ctx.createDynamicsCompressor();
+  limiter.threshold.value = -6;
+  limiter.knee.value = 0;
+  limiter.ratio.value = 20;
+  limiter.attack.value = 0.003;
+  limiter.release.value = 0.1;
+  AUDIO.master.connect(limiter);
+  limiter.connect(AUDIO.ctx.destination);
   AUDIO.reverb = { input: delay };
+  AUDIO.limiter = limiter;
 }
 
 function setPianoSoundMode(mode) {
@@ -4049,7 +4287,9 @@ function reinitWebMidi() {
 }
 
 // ── Premium gating ────────────────────────────────────────
-function isPremium() { return S.plan === 'pro'; }
+// During MMP the trial gate is off (server-side flag), so treat every session as premium
+// on the client too. This kills the 45-min upgrade-modal hijack.
+function isPremium() { return true; }
 
 function showUpgradeModal() { document.getElementById('upgradeModal').style.display = 'flex'; }
 function closeUpgrade() { document.getElementById('upgradeModal').style.display = 'none'; }
@@ -4117,27 +4357,62 @@ function chooseMime() {
   return 'video/webm';
 }
 
+// Rotating recorder — every ROTATE_MS the current MediaRecorder stops (finalizing
+// its blob → download → memory released), and a new one starts immediately on
+// the same stream. Keeps the browser from holding 2h × 3 monitors = ~6 GB.
+const RECORD_ROTATE_MS = 10 * 60 * 1000; // 10 minutes per part
+const RECORD_VIDEO_BITRATE = 2_000_000;  // 2 Mbps — plenty for screen/DAW, safe for RAM
+
 function recordStream(stream, label) {
   const mime = chooseMime();
-  const chunks = [];
-  const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: 4_500_000 });
-  rec.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
-  rec.onstop = () => {
-    const blob = new Blob(chunks, { type: mime });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    const ts = new Date().toISOString().replace(/[:.]/g,'-').slice(0,16);
-    a.download = 'studiosync-' + (S.code || 'session') + '-' + label + '-' + ts + '.webm';
-    document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 3000);
-    S.clips.push({ blob, name: label, ts: Date.now() });
-    if (S.clips.length > 10) S.clips.shift();
-    renderClips();
+  const wrapper = { rec: null, chunks: [], part: 1, rotateTimer: null, stopped: false, stream, label };
+
+  const startPart = () => {
+    if (wrapper.stopped) return;
+    if (stream.getTracks().every(t => t.readyState !== 'live')) return; // source is gone
+    const chunks = wrapper.chunks = [];
+    const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: RECORD_VIDEO_BITRATE });
+    wrapper.rec = rec;
+    rec.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
+    rec.onstop = () => {
+      const blob = new Blob(chunks, { type: mime });
+      wrapper.chunks = []; // drop refs so GC can free the blobs immediately
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      const ts = new Date().toISOString().replace(/[:.]/g,'-').slice(0,16);
+      const partSuffix = wrapper.part > 1 || !wrapper.stopped ? '-part' + wrapper.part : '';
+      a.download = 'studiosync-' + (S.code || 'session') + '-' + label + partSuffix + '-' + ts + '.webm';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 3000);
+      S.clips.push({ blob, name: label + partSuffix, ts: Date.now() });
+      if (S.clips.length > 20) S.clips.shift();
+      renderClips();
+      wrapper.part++;
+    };
+    rec.start(2000);
+    wrapper.rotateTimer = setTimeout(() => {
+      if (rec.state === 'recording') { try { rec.stop(); } catch (e) {} }
+      // Chain: onstop finalizes, then start the next part.
+      setTimeout(() => startPart(), 100);
+    }, RECORD_ROTATE_MS);
   };
-  rec.start(2000);
-  REC.recorders.push(rec);
-  return rec;
+
+  // Hijack the "state" and "stop" method so isRecording()/stopSessionRecord()
+  // still work — they call state and stop() on whatever's in REC.recorders.
+  const proxy = {
+    get state() { return wrapper.rec ? wrapper.rec.state : 'inactive'; },
+    stop() {
+      wrapper.stopped = true;
+      if (wrapper.rotateTimer) clearTimeout(wrapper.rotateTimer);
+      if (wrapper.rec && wrapper.rec.state === 'recording') {
+        try { wrapper.rec.stop(); } catch (e) {}
+      }
+    }
+  };
+  REC.recorders.push(proxy);
+  startPart();
+  return proxy;
 }
 
 function collectRecordableStreams() {
@@ -4204,10 +4479,10 @@ async function addAnotherScreen() {
     const key = 'extra:' + Date.now();
     REC.extraStreams.push(stream);
     S.streams.set(key, { stream, type: 'screen', name: (S.name || 'Me') + ' 🖥' });
-    // Share with peers
-    for (const [, p] of S.peers) {
-      if (p.conn) stream.getTracks().forEach(t => p.conn.addTrack(t, stream));
-    }
+    // Route through the sender-lifecycle helper — separate group per extra
+    // monitor so each has its own reusable RTCRtpSender across re-share cycles.
+    const extraGroup = 'extra:' + key;
+    await attachTracksToPeers(stream, extraGroup);
     // If we're already recording, hook it up
     if (isRecording()) {
       const n = REC.recorders.length + 1;
@@ -4219,7 +4494,8 @@ async function addAnotherScreen() {
       toast('מסך נוסף שותף', 'g');
     }
     renderStreams();
-    stream.getVideoTracks()[0].onended = () => {
+    stream.getVideoTracks()[0].onended = async () => {
+      await detachTracksFromPeers(extraGroup);
       S.streams.delete(key);
       REC.extraStreams = REC.extraStreams.filter(s => s !== stream);
       renderStreams();
@@ -4966,32 +5242,42 @@ async function ensureDriveFolder() {
 async function uploadBlobToDrive(blob, filename, onProgress) {
   if (!(await ensureDriveAuth())) return null;
   const folder = await ensureDriveFolder();
-  const metadata = { name: filename, parents: [folder], mimeType: blob.type || 'video/webm' };
-  // Multipart upload
-  const boundary = '-------studiosync' + Math.random().toString(36).slice(2);
-  const CRLF = '\\r\\n';
-  const delimiter = CRLF + '--' + boundary + CRLF;
-  const closeDelim = CRLF + '--' + boundary + '--';
-  const metaPart = delimiter + 'Content-Type: application/json' + CRLF + CRLF + JSON.stringify(metadata);
-  const dataHeader = delimiter + 'Content-Type: ' + metadata.mimeType + CRLF + 'Content-Transfer-Encoding: binary' + CRLF + CRLF;
-  const body = new Blob([metaPart, dataHeader, blob, closeDelim], { type: 'multipart/related; boundary=' + boundary });
-
-  const xhr = new XMLHttpRequest();
-  const url = 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink';
-  return new Promise((resolve, reject) => {
-    xhr.open('POST', url);
-    xhr.setRequestHeader('Authorization', 'Bearer ' + DRIVE.accessToken);
-    xhr.setRequestHeader('Content-Type', 'multipart/related; boundary=' + boundary);
-    if (onProgress && xhr.upload) {
-      xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(e.loaded / e.total); };
+  const attempt = async () => {
+    const metadata = { name: filename, parents: [folder], mimeType: blob.type || 'video/webm' };
+    const boundary = '-------studiosync' + Math.random().toString(36).slice(2);
+    const CRLF = '\\r\\n';
+    const delimiter = CRLF + '--' + boundary + CRLF;
+    const closeDelim = CRLF + '--' + boundary + '--';
+    const metaPart = delimiter + 'Content-Type: application/json' + CRLF + CRLF + JSON.stringify(metadata);
+    const dataHeader = delimiter + 'Content-Type: ' + metadata.mimeType + CRLF + 'Content-Transfer-Encoding: binary' + CRLF + CRLF;
+    const body = new Blob([metaPart, dataHeader, blob, closeDelim], { type: 'multipart/related; boundary=' + boundary });
+    const xhr = new XMLHttpRequest();
+    const url = 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink';
+    return new Promise((resolve, reject) => {
+      xhr.open('POST', url);
+      xhr.setRequestHeader('Authorization', 'Bearer ' + DRIVE.accessToken);
+      xhr.setRequestHeader('Content-Type', 'multipart/related; boundary=' + boundary);
+      if (onProgress && xhr.upload) {
+        xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(e.loaded / e.total); };
+      }
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) resolve(JSON.parse(xhr.responseText));
+        else reject(Object.assign(new Error('Drive upload failed: ' + xhr.status), { status: xhr.status, responseText: xhr.responseText }));
+      };
+      xhr.onerror = () => reject(new Error('Network error'));
+      xhr.send(body);
+    });
+  };
+  try { return await attempt(); }
+  catch (e) {
+    // Google OAuth tokens die after ~1h. On 401, silently re-consent and retry once.
+    if (e.status === 401) {
+      DRIVE.accessToken = null;
+      if (!(await ensureDriveAuth())) throw e;
+      return await attempt();
     }
-    xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) resolve(JSON.parse(xhr.responseText));
-      else reject(new Error('Drive upload failed: ' + xhr.status + ' ' + xhr.responseText));
-    };
-    xhr.onerror = () => reject(new Error('Network error'));
-    xhr.send(body);
-  });
+    throw e;
+  }
 }
 
 async function uploadClipToDrive(idx) {
@@ -5070,7 +5356,7 @@ async function transcribeClip(idx) {
   try {
     // Extract just the audio track (keeps upload small when the clip is a screen recording)
     const audioBlob = await extractAudioForTranscription(clip.blob);
-    const r = await fetch('/api/transcribe', {
+    const r = await fetch('/api/transcribe?cid=' + encodeURIComponent(S.cid || ''), {
       method: 'POST',
       headers: { 'Content-Type': 'audio/webm' },
       body: audioBlob
