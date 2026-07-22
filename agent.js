@@ -107,6 +107,16 @@ function handleInput(msg) {
     case 'move':
       robot.moveMouse(x, y);
       break;
+    case 'mousedown':
+      robot.moveMouse(x, y);
+      robot.mouseToggle('down', msg.button === 2 ? 'right' : 'left');
+      log('🖱  ↓ @ ' + x + ',' + y);
+      break;
+    case 'mouseup':
+      robot.moveMouse(x, y);
+      robot.mouseToggle('up', msg.button === 2 ? 'right' : 'left');
+      log('🖱  ↑ @ ' + x + ',' + y);
+      break;
     case 'click':
       robot.moveMouse(x, y);
       robot.mouseClick(msg.button === 2 ? 'right' : 'left');
@@ -134,9 +144,27 @@ function handleInput(msg) {
       if (msg.alt)   mods.push('alt');
       if (msg.meta)  mods.push('command');
       try {
-        mods.length ? robot.keyTap(key, mods) : robot.keyTap(key);
-        log('⌨️  ' + (mods.length ? mods.join('+') + '+' : '') + key);
+        // Hold the key down (allows chords, held keys, click-and-drag combos).
+        // Modifiers are also toggled so they compose across events.
+        for (const m of mods) robot.keyToggle(m, 'down');
+        robot.keyToggle(key, 'down');
+        log('⌨️  ↓ ' + (mods.length ? mods.join('+') + '+' : '') + key);
       } catch(e) { /* unsupported key */ }
+      break;
+    }
+    case 'keyup': {
+      const key = mapKey(msg.key);
+      if (!key) break;
+      const mods = [];
+      if (msg.shift) mods.push('shift');
+      if (msg.ctrl)  mods.push('control');
+      if (msg.alt)   mods.push('alt');
+      if (msg.meta)  mods.push('command');
+      try {
+        robot.keyToggle(key, 'up');
+        for (const m of mods) robot.keyToggle(m, 'up');
+        log('⌨️  ↑ ' + key);
+      } catch(e) {}
       break;
     }
   }

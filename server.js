@@ -1,7 +1,43 @@
 const http  = require('http');
 const https = require('https');
 const os    = require('os');
+const fs    = require('fs');
+const path  = require('path');
 const crypto = require('crypto');
+
+// ── Load .env for local dev (in production Render supplies env vars directly) ──
+try {
+  const envPath = path.join(__dirname, '.env');
+  if (fs.existsSync(envPath)) {
+    for (const line of fs.readFileSync(envPath, 'utf8').split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const eq = trimmed.indexOf('=');
+      if (eq < 0) continue;
+      const key = trimmed.slice(0, eq).trim();
+      const val = trimmed.slice(eq + 1).trim();
+      if (key && !process.env[key]) process.env[key] = val;
+    }
+  }
+} catch (e) { /* .env optional */ }
+
+// Optional: robotjs for remote mouse/keyboard control
+let robot = null;
+try { robot = require('robotjs'); } catch(e) { /* robotjs not available — remote control will be limited */ }
+
+function mapKeyToRobot(webKey) {
+  const map = {
+    ' ': 'space', Enter: 'enter', Escape: 'escape', Tab: 'tab',
+    Backspace: 'backspace', Delete: 'delete',
+    ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right',
+    Home: 'home', End: 'end', PageUp: 'pageup', PageDown: 'pagedown',
+    F1:'f1',F2:'f2',F3:'f3',F4:'f4',F5:'f5',F6:'f6',F7:'f7',F8:'f8',F9:'f9',F10:'f10',F11:'f11',F12:'f12',
+    Control: 'control', Shift: 'shift', Alt: 'alt', Meta: 'command',
+  };
+  if (map[webKey]) return map[webKey];
+  if (webKey.length === 1) return webKey.toLowerCase();
+  return null;
+}
 
 // ── Morning (Green Invoice) API ────────────────────────────
 const MORNING_API_ID     = process.env.MORNING_API_ID     || '';
@@ -94,7 +130,12 @@ function checkLicense(key) {
   return VALID_LICENSES.has(k) || runtimeLicenses.has(k);
 }
 
+// Trial gate — disabled during MMP so real testing isn't blocked.
+// Re-enable by setting DISABLE_TRIAL_LIMIT=false in Render env when ready to monetize.
+const TRIAL_LIMIT_DISABLED = process.env.DISABLE_TRIAL_LIMIT !== 'false';
+
 function checkTrial(fp) {
+  if (TRIAL_LIMIT_DISABLED) return true;
   const today = new Date().toISOString().slice(0, 10);
   const rec = trialSessions.get(fp);
   if (!rec || rec.date !== today) return true;
@@ -102,6 +143,7 @@ function checkTrial(fp) {
 }
 
 function useTrial(fp) {
+  if (TRIAL_LIMIT_DISABLED) return;
   const today = new Date().toISOString().slice(0, 10);
   const rec = trialSessions.get(fp);
   if (!rec || rec.date !== today) { trialSessions.set(fp, { count: 1, date: today }); return; }
@@ -112,6 +154,7 @@ function useTrial(fp) {
 const sessions = new Map(); // code → { peers: Set<clientId>, daw, created, password }
 const queues   = new Map(); // clientId → [messages]
 const clients  = new Map(); // clientId → { code, name, color, instrument, res, seen }
+const transcribeRateLimit = new Map(); // cid → [timestamps within last hour]
 const onlineUsers = new Map(); // name → { name, color, instrument, ts }
 const featureVotes = new Map(); // featureId → Set<fingerprint>
 const VOTABLE_FEATURES = [
@@ -139,9 +182,14 @@ function getIP() {
   return 'localhost';
 }
 
+// Cap per-client queue so a stalled client that hasn't polled for 90s can't
+// grow the queue by 100msg/s × 90s ≈ 10k messages before the eviction sweep.
+const MAX_QUEUE_PER_CLIENT = 500;
 function push(clientId, msg) {
   if (!queues.has(clientId)) queues.set(clientId, []);
-  queues.get(clientId).push(msg);
+  const q = queues.get(clientId);
+  q.push(msg);
+  if (q.length > MAX_QUEUE_PER_CLIENT) q.splice(0, q.length - MAX_QUEUE_PER_CLIENT);
   const c = clients.get(clientId);
   if (c?.res) flush(clientId);
 }
@@ -184,21 +232,73 @@ function json(res, data, code = 200) {
   res.end(JSON.stringify(data));
 }
 
+function httpsRequest(url, opts, body) {
+  return new Promise((resolve, reject) => {
+    const u = new URL(url);
+    const req = https.request({
+      hostname: u.hostname, path: u.pathname + u.search, port: u.port || 443,
+      method: opts.method || 'GET', headers: opts.headers || {}
+    }, resp => {
+      const chunks = [];
+      resp.on('data', c => chunks.push(c));
+      resp.on('end', () => {
+        const text = Buffer.concat(chunks).toString('utf8');
+        if (resp.statusCode >= 200 && resp.statusCode < 300) resolve(text);
+        else reject(new Error('HTTP ' + resp.statusCode + ': ' + text.slice(0, 200)));
+      });
+    });
+    req.on('error', reject);
+    if (body) req.write(body);
+    req.end();
+  });
+}
+
+// Promote the next surviving peer to host if the current host leaves so students
+// aren't left permanently locked with no one to grant them permissions.
+function handleHostGone(sess) {
+  if (!sess) return;
+  // Prefer a non-Agent participant with the lowest join time (earliest).
+  let next = null, nextSeen = Infinity;
+  for (const pid of sess.peers) {
+    const pc = clients.get(pid);
+    if (!pc || pc.isAgent) continue;
+    if (pc.seen < nextSeen) { nextSeen = pc.seen; next = pid; }
+  }
+  if (!next) { sess.mode = 'collab'; return; } // last-ditch — no one left to promote
+  sess.hostId = next;
+  // If we were in lecture mode, dropping to collab so surviving peers regain
+  // their controls even before they get the promotion notice.
+  sess.mode = 'collab';
+  pushAll(sess.hostId === next ? clients.get(next)?.code : null,
+    { type: 'session:host-changed', newHostId: next, newMode: 'collab' }, null);
+}
+
 // ── Cleanup stale clients every 30s ──────────────────────
 setInterval(() => {
   const now = Date.now();
   for (const [id, c] of clients) {
-    if (now - c.seen > 45000) {
+    if (now - c.seen > 90000) {
       const sess = sessions.get(c.code);
       if (sess) {
+        const wasHost = sess.hostId === id;
         sess.peers.delete(id);
         pushAll(c.code, { type: 'peer:left', peerId: id, name: c.name }, id);
+        if (wasHost && sess.peers.size > 0) handleHostGone(sess);
         if (sess.peers.size === 0) {
-          sessions.delete(c.code);
+          // Grace period: keep the session shell for up to 5 minutes so brief
+          // network hiccups don't nuke a live lecture. Only delete if truly cold.
+          if (!sess.gracefulUntil) sess.gracefulUntil = now + 5 * 60 * 1000;
+          else if (now > sess.gracefulUntil) sessions.delete(c.code);
         }
       }
       clients.delete(id);
       queues.delete(id);
+    }
+  }
+  // Sweep truly-empty sessions past their grace window
+  for (const [code, sess] of sessions) {
+    if (sess.peers.size === 0 && sess.gracefulUntil && now > sess.gracefulUntil) {
+      sessions.delete(code);
     }
   }
 }, 30000);
@@ -247,6 +347,13 @@ const server = http.createServer(async (req, res) => {
 
   // ── Morning Webhook (payment confirmation) ──
   if (path === '/api/morning-webhook' && req.method === 'POST') {
+    // Require a shared-secret token in the URL. Without this, anyone who knows
+    // the endpoint can POST `{status:"paid"}` and mint themselves a Pro license.
+    const wantSecret = process.env.MORNING_WEBHOOK_SECRET;
+    if (!wantSecret) return json(res, { ok: false, error: 'webhook_disabled' }, 501);
+    const got = url.searchParams.get('token') || req.headers['x-webhook-token'];
+    if (got !== wantSecret) return json(res, { ok: false, error: 'unauthorized' }, 401);
+
     const data = await body(req);
     console.log('[Morning webhook]', JSON.stringify(data).slice(0, 300));
     const isPaid = data.status === 'paid' || data.payment?.length > 0 || data.type === 400;
@@ -263,8 +370,14 @@ const server = http.createServer(async (req, res) => {
 
   // ── Admin: list active licenses ──
   if (path === '/api/admin/licenses' && req.method === 'GET') {
-    const adminPass = process.env.ADMIN_PASS || 'studiosync-admin';
-    if (url.searchParams.get('pass') !== adminPass) return json(res, { ok: false }, 403);
+    // Refuse to run without an explicit ADMIN_PASS env var — the old hard-coded
+    // default ("studiosync-admin") was a global backdoor to every paying user's PII.
+    const adminPass = process.env.ADMIN_PASS;
+    if (!adminPass || adminPass.length < 12) return json(res, { ok: false, error: 'admin_disabled' }, 503);
+    const provided = url.searchParams.get('pass') || '';
+    // Constant-time compare
+    const a = Buffer.from(provided), b = Buffer.from(adminPass);
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return json(res, { ok: false }, 403);
     const list = [...runtimeLicenses.entries()].map(([k, v]) => ({ key: k, ...v }));
     return json(res, { ok: true, count: list.length, licenses: list });
   }
@@ -284,15 +397,20 @@ const server = http.createServer(async (req, res) => {
     }
 
     const id   = 'p_' + Date.now() + crypto.randomBytes(3).toString('hex');
-    const code = genCode();
-    const name = data.name || 'Producer';
-    const color = data.color || '#6c47ff';
-    const instrument = data.instrument || 'Producer';
+    // Allow reusing a specific code (auto-rejoin after server restart) if it's free.
+    const requested = typeof data.code === 'string' ? data.code.toUpperCase().trim() : null;
+    const code = (requested && /^[A-Z0-9]{3}-[A-Z0-9]{3}$/.test(requested) && !sessions.has(requested))
+      ? requested : genCode();
+    // Sanitize identity fields — same rules as /api/join.
+    const name = String(data.name || 'Producer').replace(/[<>&"'`\r\n\t]/g, '').slice(0, 40).trim() || 'Producer';
+    const color = /^#[0-9a-f]{3,8}$/i.test(data.color || '') ? data.color : '#6c47ff';
+    const instrument = String(data.instrument || 'Producer').replace(/[<>&"'`\r\n\t]/g, '').slice(0, 40);
+    const mode = (data.mode === 'lecture') ? 'lecture' : 'collab';
     clients.set(id, { code, name, color, instrument, res: null, seen: Date.now() });
     queues.set(id, []);
-    sessions.set(code, { peers: new Set([id]), daw: data.daw, created: Date.now(), licensed, password: data.password || null });
-    console.log('[+] Session created:', code, licensed ? '(PRO)' : '(trial)', data.password ? '(password)' : '');
-    return json(res, { ok: true, code, clientId: id, peerNumber: 1, plan: licensed ? 'pro' : 'trial' });
+    sessions.set(code, { peers: new Set([id]), daw: data.daw, created: Date.now(), licensed, password: data.password || null, mode, hostId: id });
+    console.log('[+] Session created:', code, licensed ? '(PRO)' : '(trial)', data.password ? '(password)' : '', 'mode=' + mode);
+    return json(res, { ok: true, code, clientId: id, peerNumber: 1, plan: licensed ? 'pro' : 'trial', mode });
   }
 
   // ── Join session ──
@@ -307,8 +425,13 @@ const server = http.createServer(async (req, res) => {
     // Password check
     if (sess.password && data.password !== sess.password) return json(res, { ok: false, error: 'password_required' }, 403);
     const isProSession = sess.licensed || checkLicense(data.license);
-    const maxPeers = isProSession ? 10 : 3;
-    if (sess.peers.size >= maxPeers) return json(res, { ok: false, error: isProSession ? 'הסשן מלא (עד 10 משתתפים)' : 'הסשן החינמי מלא (עד 3). שדרג ל-Pro עבור 10 משתתפים.' }, 403);
+    // Lecture mode gets a much bigger cap since traffic is mostly one-way from the lecturer
+    const isLecture = sess.mode === 'lecture';
+    const maxPeers = isLecture ? 30 : (isProSession ? 10 : 3);
+    if (sess.peers.size >= maxPeers) return json(res, { ok: false,
+      error: isLecture ? 'ההרצאה מלאה (עד 30 תלמידים)' :
+             isProSession ? 'הסשן מלא (עד 10 משתתפים)' :
+             'הסשן החינמי מלא (עד 3). שדרג ל-Pro עבור 10 משתתפים.' }, 403);
 
     const licensed = checkLicense(data.license);
     if (!licensed && !sess.licensed) {
@@ -319,11 +442,15 @@ const server = http.createServer(async (req, res) => {
     }
 
     const id         = 'p_' + Date.now() + crypto.randomBytes(3).toString('hex');
-    const name       = data.name || 'Musician_' + Math.floor(Math.random() * 100);
-    const color      = data.color || '#12b76a';
-    const instrument = data.instrument || 'Keys';
+    // Server-side sanitization: strip HTML-hazardous chars and cap length so
+    // peer-supplied names can't smuggle markup through to other clients.
+    const cleanName  = String(data.name || '').replace(/[<>&"'`\r\n\t]/g, '').slice(0, 40).trim()
+                       || ('Musician_' + Math.floor(Math.random() * 100));
+    const color      = /^#[0-9a-f]{3,8}$/i.test(data.color || '') ? data.color : '#12b76a';
+    const instrument = String(data.instrument || 'Keys').replace(/[<>&"'`\r\n\t]/g, '').slice(0, 40);
+    const isAgent    = !!data.isAgent;
 
-    clients.set(id, { code, name, color, instrument, res: null, seen: Date.now() });
+    clients.set(id, { code, name: cleanName, color, instrument, res: null, seen: Date.now(), isAgent });
     queues.set(id, []);
     sess.peers.add(id);
 
@@ -335,18 +462,19 @@ const server = http.createServer(async (req, res) => {
       if (pc) existingPeers.push({ id: pid, name: pc.name, color: pc.color, instrument: pc.instrument });
     }
 
-    // Send welcome to joiner with list of existing peers
-    push(id, { type: 'session:welcome', peers: existingPeers, code });
+    // Send welcome to joiner with list of existing peers + session mode
+    push(id, { type: 'session:welcome', peers: existingPeers, code, mode: sess.mode || 'collab' });
 
-    // Tell ALL existing peers to create an offer to the new joiner
+    // Tell ALL existing peers to create an offer to the new joiner. Use the
+    // server-cleaned name/instrument so no peer smuggles raw markup through.
     for (const pid of sess.peers) {
       if (pid === id) continue;
-      push(pid, { type: 'webrtc:create-offer', peerId: id, name, color, instrument });
-      push(pid, { type: 'peer:joined', peerId: id, name, color, instrument, role: data.role || 'participant' });
+      push(pid, { type: 'webrtc:create-offer', peerId: id, name: cleanName, color, instrument });
+      push(pid, { type: 'peer:joined', peerId: id, name: cleanName, color, instrument, role: data.role || 'participant' });
     }
 
-    console.log('[+] Joined:', name, '->', code, '(peer', sess.peers.size, ')');
-    return json(res, { ok: true, code, clientId: id, peerNumber: sess.peers.size });
+    console.log('[+] Joined:', cleanName, '->', code, '(peer', sess.peers.size, ') mode=' + (sess.mode || 'collab'));
+    return json(res, { ok: true, code, clientId: id, peerNumber: sess.peers.size, mode: sess.mode || 'collab' });
   }
 
   // ── Send / relay messages ──
@@ -356,19 +484,68 @@ const server = http.createServer(async (req, res) => {
     const c    = clients.get(cid);
     if (!c) return json(res, { ok: false });
     c.seen = Date.now();
-    // Accept message directly (not wrapped in msg)
     const msg = data.type ? data : (data.msg || {});
+
+    // Every relayed message gets its identity fields overwritten from the
+    // authoritative server-side client record. Peers can no longer spoof
+    // "from", "fromName", "name", or "color".
+    const stamp = (m) => ({ ...m, from: cid, fromName: c.name, name: c.name, color: c.color });
+
+    // Host-only message types: only the current session host can send them.
+    // Anything else from a non-host is dropped.
+    const HOST_ONLY = new Set(['class:perm', 'class:mute-all', 'mute:command',
+      'stage:toggle', 'stage:grant', 'daw:state', 'metro:toggle', 'notes:update',
+      'session:host-changed']);
+    const sess = sessions.get(c.code);
+    const isHost = sess && sess.hostId === cid;
+    if (HOST_ONLY.has(msg.type) && !isHost) return json(res, { ok: false, error: 'not_host' }, 403);
 
     if      (msg.type === 'webrtc:offer')   push(msg.peerId, { ...msg, peerId: cid });
     else if (msg.type === 'webrtc:answer')  push(msg.peerId, { ...msg, peerId: cid });
     else if (msg.type === 'webrtc:ice')     push(msg.peerId, { ...msg, peerId: cid });
-    else if (msg.type === 'remote:input')   pushAll(c.code, msg, cid);
-    else if (msg.type === 'daw:state')      pushAll(c.code, msg, cid);
-    else if (msg.type === 'chat:msg')       pushAll(c.code, { ...msg, name: msg.name || c.name, color: msg.color || c.color }, cid);
+    else if (msg.type === 'remote:input')   pushAll(c.code, stamp(msg), cid);
+    else if (msg.type === 'daw:state')      pushAll(c.code, stamp(msg), cid);
+    else if (msg.type === 'chat:msg')       pushAll(c.code, stamp(msg), cid);
     else if (msg.type === 'ping:req')       push(cid, { type: 'ping:res', ts: msg.ts });
-    else                                    pushAll(c.code, msg, cid);
+    else                                    pushAll(c.code, stamp(msg), cid);
 
     return json(res, { ok: true });
+  }
+
+  // ── Local input execution (robotjs) ──
+  if (path === '/api/local-input' && req.method === 'POST') {
+    // AUTH: only accept from a live session-host cid (per-session token).
+    // Otherwise any malicious page could POST here and drive robotjs.
+    const cid = url.searchParams.get('cid') || (await body(req)).cid;
+    const c = clients.get(cid);
+    const sess = c && sessions.get(c.code);
+    if (!c || !sess || sess.hostId !== cid) return json(res, { ok: false, error: 'unauthorized' }, 401);
+    // localhost-only when running as the local Agent (dev / self-host) so LAN
+    // peers can't reach it. On Render, robot is null so this route no-ops anyway.
+    const src = req.socket?.remoteAddress || '';
+    if (!/^(127\.|::1|::ffff:127\.)/.test(src) && process.env.RENDER !== 'true' && !process.env.CI) {
+      return json(res, { ok: false, error: 'local_only' }, 403);
+    }
+    if (!robot) return json(res, { ok: false, error: 'robotjs not available' });
+    // Re-read body if not already
+    let data;
+    try { data = await body(req); } catch (e) { data = {}; }
+    try {
+      const screenSize = robot.getScreenSize();
+      if (data.input === 'mouse') {
+        const x = Math.round(data.x * screenSize.width);
+        const y = Math.round(data.y * screenSize.height);
+        if (data.action === 'move') robot.moveMouse(x, y);
+        else if (data.action === 'click') { robot.moveMouse(x, y); robot.mouseClick(data.button === 2 ? 'right' : 'left'); }
+      } else if (data.input === 'keyboard') {
+        const key = mapKeyToRobot(data.key);
+        if (key) {
+          if (data.action === 'keydown') robot.keyToggle(key, 'down');
+          else if (data.action === 'keyup') robot.keyToggle(key, 'up');
+        }
+      }
+      return json(res, { ok: true });
+    } catch(e) { return json(res, { ok: false, error: e.message }); }
   }
 
   // ── Long-poll ──
@@ -384,6 +561,9 @@ const server = http.createServer(async (req, res) => {
       queues.set(cid, []);
     } else {
       c.res = res;
+      // Free the reference the moment the client hangs up — otherwise a mobile
+      // tab-close leaks the response object + socket for up to 28s per drop.
+      req.on('close', () => { if (c.res === res) c.res = null; });
       setTimeout(() => {
         if (c.res === res) {
           c.res = null;
@@ -395,10 +575,137 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // ── Heartbeat (online indicator) ──
+  // ── Public runtime config (Google Client ID is public by design) ──
+  if (path === '/api/config' && req.method === 'GET') {
+    return json(res, {
+      ok: true,
+      googleClientId: process.env.GDRIVE_CLIENT_ID || '',
+      driveEnabled: !!process.env.GDRIVE_CLIENT_ID,
+      transcribeEnabled: !!(process.env.OPENAI_API_KEY || process.env.ELEVENLABS_API_KEY),
+      transcribeProvider: process.env.ELEVENLABS_API_KEY ? 'elevenlabs' : (process.env.OPENAI_API_KEY ? 'openai' : null)
+    });
+  }
+
+  // ── Transcription proxy — receives audio blob, calls STT provider ──
+  if (path === '/api/transcribe' && req.method === 'POST') {
+    // AUTH: require a live session client. Without this any random visitor can
+    // burn OpenAI/ElevenLabs quota via curl at ~$0.006/min per call.
+    const authCid = url.searchParams.get('cid');
+    if (!authCid || !clients.get(authCid)) return json(res, { ok:false, error:'unauthorized' }, 401);
+    // Simple in-memory rate limit: 20 calls/hour per cid.
+    const rlKey = 'tx:' + authCid;
+    const now = Date.now();
+    transcribeRateLimit.set(rlKey, (transcribeRateLimit.get(rlKey) || []).filter(t => t > now - 3600_000));
+    if (transcribeRateLimit.get(rlKey).length >= 20) return json(res, { ok:false, error:'rate_limited' }, 429);
+    transcribeRateLimit.get(rlKey).push(now);
+
+    const provider = process.env.ELEVENLABS_API_KEY ? 'elevenlabs'
+                    : process.env.OPENAI_API_KEY ? 'openai' : null;
+    if (!provider) return json(res, { ok:false, error:'no_transcription_key',
+      message:'הוסף OPENAI_API_KEY או ELEVENLABS_API_KEY למשתני הסביבה' }, 501);
+
+    // Buffer with a hard 25 MB cap (Whisper's own limit + safety margin).
+    const MAX_BODY = 25 * 1024 * 1024;
+    let total = 0;
+    const chunks = [];
+    for await (const c of req) {
+      total += c.length;
+      if (total > MAX_BODY) return json(res, { ok:false, error:'payload_too_large' }, 413);
+      chunks.push(c);
+    }
+    const rawBody = Buffer.concat(chunks);
+    const contentType = req.headers['content-type'] || 'audio/webm';
+
+    try {
+      if (provider === 'openai') {
+        // Rebuild as OpenAI multipart with model=whisper-1
+        const boundary = '----ss' + Math.random().toString(36).slice(2);
+        const CRLF = '\r\n';
+        const filePart = Buffer.from(
+          '--' + boundary + CRLF +
+          'Content-Disposition: form-data; name="file"; filename="audio.webm"' + CRLF +
+          'Content-Type: audio/webm' + CRLF + CRLF, 'utf8');
+        const modelPart = Buffer.from(
+          CRLF + '--' + boundary + CRLF +
+          'Content-Disposition: form-data; name="model"' + CRLF + CRLF + 'whisper-1', 'utf8');
+        const endPart = Buffer.from(CRLF + '--' + boundary + '--' + CRLF, 'utf8');
+        const body = Buffer.concat([filePart, rawBody, modelPart, endPart]);
+
+        const result = await httpsRequest('https://api.openai.com/v1/audio/transcriptions', {
+          method: 'POST',
+          headers: {
+            'Authorization': 'Bearer ' + process.env.OPENAI_API_KEY,
+            'Content-Type': 'multipart/form-data; boundary=' + boundary,
+            'Content-Length': body.length
+          }
+        }, body);
+        const parsed = JSON.parse(result);
+        return json(res, { ok:true, provider:'openai', text: parsed.text || '' });
+      } else {
+        // ElevenLabs STT — send audio directly with model_id as a query/form field
+        const boundary = '----ss' + Math.random().toString(36).slice(2);
+        const CRLF = '\r\n';
+        const filePart = Buffer.from(
+          '--' + boundary + CRLF +
+          'Content-Disposition: form-data; name="file"; filename="audio.webm"' + CRLF +
+          'Content-Type: audio/webm' + CRLF + CRLF, 'utf8');
+        const modelPart = Buffer.from(
+          CRLF + '--' + boundary + CRLF +
+          'Content-Disposition: form-data; name="model_id"' + CRLF + CRLF + 'scribe_v1', 'utf8');
+        const endPart = Buffer.from(CRLF + '--' + boundary + '--' + CRLF, 'utf8');
+        const body = Buffer.concat([filePart, rawBody, modelPart, endPart]);
+
+        const result = await httpsRequest('https://api.elevenlabs.io/v1/speech-to-text', {
+          method: 'POST',
+          headers: {
+            'xi-api-key': process.env.ELEVENLABS_API_KEY,
+            'Content-Type': 'multipart/form-data; boundary=' + boundary,
+            'Content-Length': body.length
+          }
+        }, body);
+        const parsed = JSON.parse(result);
+        return json(res, { ok:true, provider:'elevenlabs', text: parsed.text || '' });
+      }
+    } catch (e) {
+      return json(res, { ok:false, error:'stt_failed', message: e.message }, 500);
+    }
+  }
+
+  // ── Session health (Agent connection + peer count) ──
+  if (path === '/api/health' && req.method === 'GET') {
+    const code = url.searchParams.get('code');
+    if (!code) return json(res, { ok:false, error:'no_code' }, 400);
+    const sess = sessions.get(code);
+    if (!sess) return json(res, { ok:true, agent:false, agentSeen:0, peers:0 });
+    let agentSeen = 0;
+    let peers = 0;
+    const now = Date.now();
+    for (const pid of sess.peers) {
+      const c = clients.get(pid);
+      if (!c) continue;
+      if (c.isAgent) agentSeen = Math.max(agentSeen, c.seen);
+      else peers++;
+    }
+    return json(res, { ok:true, agent: (now - agentSeen) < 15000, agentSeen, peers });
+  }
+
+  // ── Heartbeat (online indicator + session keepalive) ──
   if (path === '/api/heartbeat' && req.method === 'POST') {
     const data = await body(req);
-    if (data.name) onlineUsers.set(data.name, { name: data.name, color: data.color || '#6c47ff', instrument: data.instrument || '', ts: Date.now() });
+    // Trust color only if it looks like a hex value; validate name length.
+    const safeColor = /^#[0-9a-f]{3,8}$/i.test(data.color || '') ? data.color : '#6c47ff';
+    const safeName = String(data.name || '').slice(0, 40).replace(/[\r\n\t]/g, '');
+    const safeInstrument = String(data.instrument || '').slice(0, 40).replace(/[\r\n\t]/g, '');
+    // Only bump seen if the caller actually owns that cid — otherwise an attacker
+    // could freeze another peer's eviction timer indefinitely.
+    if (data.cid) {
+      const c = clients.get(data.cid);
+      if (c) c.seen = Date.now();
+    }
+    // Cap online-users map (2000) to bound memory on spam.
+    if (safeName && onlineUsers.size < 2000) {
+      onlineUsers.set(safeName, { name: safeName, color: safeColor, instrument: safeInstrument, ts: Date.now() });
+    }
     return json(res, { ok: true });
   }
   if (path === '/api/online' && req.method === 'GET') {
@@ -418,16 +725,28 @@ const server = http.createServer(async (req, res) => {
   }
   if (path === '/api/features/vote' && req.method === 'POST') {
     const data = await body(req);
-    const fp = data.fingerprint || 'anon';
+    // Whitelist: only VOTABLE_FEATURES ids can accumulate votes. Attackers used
+    // to grow the map unbounded by voting for `x1`, `x2`, `x3`, …
+    const allowed = new Set(VOTABLE_FEATURES.map(f => f.id));
+    if (!allowed.has(data.featureId)) return json(res, { ok: false, error: 'unknown_feature' }, 400);
+    // Cap fingerprint length so oversized strings can't inflate memory.
+    const rawFp = String(data.fingerprint || 'anon').slice(0, 128);
     if (!featureVotes.has(data.featureId)) featureVotes.set(data.featureId, new Set());
-    featureVotes.get(data.featureId).add(fp);
-    return json(res, { ok: true, votes: featureVotes.get(data.featureId).size });
+    const set = featureVotes.get(data.featureId);
+    if (set.size < 100_000) set.add(rawFp);
+    return json(res, { ok: true, votes: set.size });
   }
 
   // ── Serve HTML app ─────────────────────────────────────
   res.writeHead(200, hdrs({ 'Content-Type': 'text/html; charset=utf-8' }));
   res.end(APP_HTML);
 });
+
+// ── Keep-alive: prevent Render free tier cold starts ──────
+setInterval(() => {
+  const url = APP_URL + '/api/ice';
+  https.get(url, () => {}).on('error', () => {});
+}, 13 * 60 * 1000); // every 13 minutes
 
 // ── Start ─────────────────────────────────────────────────
 const PORT = process.env.PORT || 4444;
@@ -474,16 +793,28 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 .screen.on { display:flex; }
 
 /* ── Landing ─────────────────────────────────────────── */
-.land-nav { padding:16px 32px; display:flex; align-items:center; border-bottom:1px solid var(--b1); }
-.brand { font-size:18px; font-weight:700; color:var(--hi); }
+.land-nav { padding:18px 32px; display:flex; align-items:center; border-bottom:1px solid var(--b1); backdrop-filter:blur(10px); position:sticky; top:0; z-index:10; background:rgba(255,255,255,.85); }
+[data-theme="dark"] .land-nav { background:rgba(11,17,32,.85); }
+.brand { font-size:19px; font-weight:700; color:var(--hi); letter-spacing:-.3px; }
 .brand span { color:var(--accent); }
-.hero { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; padding:40px 24px; }
-.hero-badge { background:var(--accentD); color:var(--accent); padding:6px 14px; border-radius:100px; font-size:13px; font-weight:600; margin-bottom:24px; display:inline-block; }
-.hero h1 { font-size:clamp(28px,5vw,52px); font-weight:700; line-height:1.15; margin-bottom:16px; color:var(--hi); }
-.hero-sub { font-size:16px; color:var(--mid); max-width:520px; line-height:1.6; margin-bottom:36px; }
-.hero-ctas { display:flex; gap:12px; flex-wrap:wrap; justify-content:center; }
+.brand span { color:var(--accent); }
+.hero { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; padding:56px 24px 32px; position:relative; overflow:hidden; }
+.hero::before { content:''; position:absolute; inset:0; background:radial-gradient(ellipse at top, rgba(108,71,255,.14), transparent 60%); pointer-events:none; z-index:0; }
+.hero > * { position:relative; z-index:1; }
+.hero-badge { background:var(--accentD); color:var(--accent); padding:6px 14px; border-radius:100px; font-size:13px; font-weight:600; margin-bottom:24px; display:inline-block; animation:fadeInDown .5s ease-out; }
+.hero h1 { font-size:clamp(30px,5.5vw,56px); font-weight:800; line-height:1.1; margin-bottom:18px; color:var(--hi); letter-spacing:-.5px; animation:fadeInUp .6s ease-out; }
+.hero-sub { font-size:17px; color:var(--mid); max-width:560px; line-height:1.6; margin-bottom:36px; animation:fadeInUp .7s ease-out; }
+.hero-ctas { display:flex; gap:14px; flex-wrap:wrap; justify-content:center; animation:fadeInUp .8s ease-out; }
+@keyframes fadeInUp { from { opacity:0; transform:translateY(14px); } to { opacity:1; transform:translateY(0); } }
+@keyframes fadeInDown { from { opacity:0; transform:translateY(-8px); } to { opacity:1; transform:translateY(0); } }
 .features { display:flex; gap:16px; justify-content:center; padding:0 24px 40px; flex-wrap:wrap; }
-.feat-card { background:var(--s1); border:1px solid var(--b1); border-radius:var(--radiusL); padding:24px; max-width:200px; text-align:center; }
+.feat-card { background:var(--s1); border:1px solid var(--b1); border-radius:var(--radiusL); padding:28px 24px; max-width:220px; text-align:center; transition:transform .2s ease, box-shadow .2s ease, border-color .2s ease; }
+.feat-card:hover { transform:translateY(-4px); border-color:var(--accent); box-shadow:0 12px 32px rgba(108,71,255,.15); }
+.feat-icon { font-size:32px; margin-bottom:12px; display:inline-block; transition:transform .2s ease; }
+.feat-card:hover .feat-icon { transform:scale(1.15); }
+.feat-title { font-size:15px; font-weight:700; color:var(--hi); margin-bottom:6px; }
+.feat-desc { font-size:13px; color:var(--mid); line-height:1.5; }
+.features { display:flex; gap:18px; justify-content:center; padding:20px 24px 48px; flex-wrap:wrap; }
 .feat-icon { font-size:28px; margin-bottom:12px; }
 .feat-title { font-weight:600; font-size:14px; margin-bottom:6px; color:var(--hi); }
 .feat-desc { font-size:12px; color:var(--mid); line-height:1.5; }
@@ -519,11 +850,19 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 .vote-btn.voted { background:var(--b2); color:var(--dim); cursor:default; }
 
 /* ── Buttons ─────────────────────────────────────────── */
-.btn-accent { background:var(--accent); color:#fff; border:none; border-radius:var(--radius); padding:12px 28px; font-size:15px; font-weight:600; cursor:pointer; font-family:var(--sans); transition:opacity .15s; }
-.btn-accent:hover { opacity:.9; }
-.btn-ghost { background:transparent; color:var(--accent); border:1.5px solid var(--accent); border-radius:var(--radius); padding:12px 28px; font-size:15px; font-weight:600; cursor:pointer; font-family:var(--sans); }
-.btn-ghost:hover { background:var(--accentH); }
+.btn-accent { background:linear-gradient(135deg, var(--accent), #8a68ff); color:#fff; border:none; border-radius:var(--radius); padding:13px 30px; font-size:15px; font-weight:600; cursor:pointer; font-family:var(--sans); transition:all .15s ease; box-shadow:0 4px 14px rgba(108,71,255,.35); }
+.btn-accent:hover { transform:translateY(-2px); box-shadow:0 6px 20px rgba(108,71,255,.5); }
+.btn-accent:active { transform:translateY(0); box-shadow:0 2px 8px rgba(108,71,255,.35); }
+.btn-ghost { background:transparent; color:var(--accent); border:1.5px solid var(--accent); border-radius:var(--radius); padding:13px 30px; font-size:15px; font-weight:600; cursor:pointer; font-family:var(--sans); transition:all .15s ease; }
+.btn-ghost:hover { background:var(--accentH); transform:translateY(-1px); }
 .btn-full { width:100%; }
+.btn-primary { background:var(--accent); color:#fff; border:none; border-radius:var(--radius); padding:9px 16px; font-size:13px; font-weight:600; cursor:pointer; font-family:var(--sans); transition:all .15s ease; }
+.btn-primary:hover { background:#5a3fd6; transform:translateY(-1px); }
+.btn-primary:active { transform:translateY(0); }
+.modal-backdrop { position:fixed; inset:0; background:rgba(0,0,0,.55); backdrop-filter:blur(6px); display:flex; align-items:center; justify-content:center; z-index:1000; animation:mbFade .2s ease-out; padding:20px; }
+.modal-panel { background:var(--bg); border:1px solid var(--b1); border-radius:16px; padding:24px; max-width:520px; width:100%; box-shadow:0 24px 60px rgba(0,0,0,.35); animation:mpSlide .25s ease-out; max-height:90vh; overflow-y:auto; }
+@keyframes mbFade { from { opacity:0; } to { opacity:1; } }
+@keyframes mpSlide { from { opacity:0; transform:translateY(20px) scale(.97); } to { opacity:1; transform:translateY(0) scale(1); } }
 .btn-link { background:none; border:none; color:var(--mid); cursor:pointer; font-size:13px; text-align:center; margin-top:8px; font-family:var(--sans); }
 
 /* ── Lobby ───────────────────────────────────────────── */
@@ -537,6 +876,13 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 .lc-title { font-weight:600; font-size:15px; color:var(--hi); }
 .lc-sub { font-size:12px; color:var(--mid); margin-top:2px; }
 .lob-input { width:100%; padding:10px 12px; border:1.5px solid var(--b1); border-radius:var(--radius); font-size:14px; font-family:var(--sans); color:var(--txt); background:var(--bg); margin-bottom:14px; outline:none; transition:border .15s; }
+.mode-picker { display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:14px; }
+.mode-btn { display:flex; flex-direction:column; align-items:center; gap:4px; padding:10px 8px; background:var(--s1); border:1.5px solid var(--b1); border-radius:var(--radius); cursor:pointer; transition:all .15s; font-family:var(--sans); }
+.mode-btn:hover { border-color:var(--accent); background:var(--bg); }
+.mode-btn.active { border-color:var(--accent); background:rgba(108,71,255,.1); }
+.mode-ico { font-size:20px; }
+.mode-name { font-size:13px; font-weight:600; color:var(--txt); }
+.mode-desc { font-size:10px; color:var(--dim); }
 .lob-input:focus { border-color:var(--accent); }
 .code-input { font-family:var(--mono); font-size:18px; text-transform:uppercase; letter-spacing:2px; text-align:center; }
 .color-label,.instr-label { font-size:12px; font-weight:600; color:var(--mid); text-transform:uppercase; letter-spacing:.5px; margin-bottom:8px; }
@@ -561,11 +907,19 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 .tb-brand { font-size:15px; font-weight:700; color:var(--hi); white-space:nowrap; }
 .tb-brand span { color:var(--accent); }
 .tb-sep { width:1px; height:24px; background:var(--b1); }
-.session-code-chip { display:flex; align-items:center; gap:6px; background:var(--s1); border:1px solid var(--b1); border-radius:6px; padding:4px 10px; cursor:pointer; font-family:var(--mono); font-size:13px; font-weight:600; color:var(--hi); }
-.session-code-chip:hover { border-color:var(--accent); color:var(--accent); }
+.session-code-chip { display:flex; align-items:center; gap:6px; background:var(--accentD); border:1px solid var(--accent); border-radius:8px; padding:6px 14px; cursor:pointer; font-family:var(--mono); font-size:14px; font-weight:700; color:var(--accent); transition:all .15s; letter-spacing:1px; }
+.session-code-chip:hover { background:var(--accent); color:#fff; transform:translateY(-1px); box-shadow:0 4px 12px rgba(108,71,255,.3); }
+.session-code-chip::before { content:'📋'; font-size:12px; opacity:.7; }
 .copy-icon { font-size:14px; color:var(--mid); }
 .peer-avatars { display:flex; margin-left:4px; }
-.peer-avatar { width:28px; height:28px; border-radius:50%; border:2px solid var(--bg); display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:700; color:#fff; cursor:default; margin-left:-6px; }
+.peer-avatar { width:28px; height:28px; border-radius:50%; border:2px solid var(--bg); display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:700; color:#fff; cursor:default; margin-left:-6px; transition:box-shadow .1s ease-out, transform .1s ease-out; }
+.peer-avatar.speaking { box-shadow:0 0 0 3px #03b28c, 0 0 12px rgba(3,178,140,.6); transform:scale(1.08); }
+.peer-avatar.speaking-loud { box-shadow:0 0 0 4px #03b28c, 0 0 18px rgba(3,178,140,.9); transform:scale(1.15); }
+.peer-avatar { position:relative; }
+.peer-avatar .conn-dot { position:absolute; bottom:-1px; right:-1px; width:9px; height:9px; border-radius:50%; border:2px solid var(--bg); background:#adb5bd; }
+.peer-avatar .conn-dot.good { background:#03b28c; }
+.peer-avatar .conn-dot.ok   { background:#f79009; }
+.peer-avatar .conn-dot.bad  { background:#f04438; }
 .peer-avatar.self { margin-left:0; }
 .tb-flex { flex:1; }
 .tb-status { font-size:12px; color:var(--mid); white-space:nowrap; }
@@ -592,12 +946,13 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 .email-btn:hover { background:var(--b1); }
 
 /* ── Quick join (landing) ──────────────────────────── */
-.quick-join { display:flex; gap:8px; margin-top:12px; width:100%; max-width:320px; }
-.quick-join input { flex:1; border:1px solid var(--b1); border-radius:8px; padding:10px 14px; font-family:var(--mono); font-size:15px; text-align:center; letter-spacing:.12em; text-transform:uppercase; color:var(--hi); outline:none; direction:ltr; }
-.quick-join input:focus { border-color:var(--accent); }
+.quick-join { display:flex; gap:8px; margin:14px auto 0; width:100%; max-width:340px; align-items:center; }
+.quick-join input { flex:1; min-width:0; border:1.5px solid var(--b1); border-radius:8px; padding:11px 14px; font-family:var(--mono); font-size:15px; text-align:center; letter-spacing:.12em; text-transform:uppercase; color:var(--hi); outline:none; direction:ltr; background:var(--s1); transition:border-color .15s; }
+.quick-join input:focus { border-color:var(--accent); background:var(--bg); }
 .quick-join input::placeholder { color:var(--dim); letter-spacing:0; text-transform:none; font-family:var(--sans); font-size:13px; }
-.quick-join button { padding:10px 16px; border-radius:8px; background:var(--accent); color:#fff; border:none; font-weight:600; cursor:pointer; white-space:nowrap; }
-.quick-join-divider { color:var(--dim); font-size:12px; margin-top:16px; }
+.quick-join button { flex-shrink:0; padding:11px 18px; border-radius:8px; background:var(--accent); color:#fff; border:none; font-weight:600; cursor:pointer; white-space:nowrap; transition:all .15s; }
+.quick-join button:hover { background:#5a3fd6; transform:translateY(-1px); }
+.quick-join-divider { color:var(--dim); font-size:12px; margin-top:20px; }
 
 /* ── Session timer ─────────────────────────────────── */
 .session-timer { display:flex; align-items:center; gap:4px; font-family:var(--mono); font-size:12px; color:var(--mid); background:var(--s1); border:1px solid var(--b1); border-radius:100px; padding:3px 10px; }
@@ -638,11 +993,36 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 .main-area-empty-icon { font-size:48px; opacity:.5; }
 .main-area-empty-text { font-size:15px; font-weight:500; }
 .main-area-empty-sub { font-size:12px; color:var(--dim); max-width:280px; line-height:1.5; }
+.pulse-dot { width:14px; height:14px; border-radius:50%; background:var(--accent); margin:0 auto; animation:pulseDot 1.5s ease-in-out infinite; box-shadow:0 0 0 0 rgba(108,71,255,.7); }
+@keyframes pulseDot { 0% { box-shadow:0 0 0 0 rgba(108,71,255,.7); } 70% { box-shadow:0 0 0 12px rgba(108,71,255,0); } 100% { box-shadow:0 0 0 0 rgba(108,71,255,0); } }
+.is-student #emptyText, .is-student #emptySub, .is-student #emptyIcon { display:none; }
+.is-student #studentWaiting { display:block !important; }
 .main-video { width:100%; height:100%; object-fit:contain; border-radius:var(--radiusL); background:#000; display:none; }
 .main-video.active { display:block; }
-.participant-panel { width:260px; border-left:1px solid var(--b1); display:flex; flex-direction:column; flex-shrink:0; }
-.panel-tabs { display:flex; border-bottom:1px solid var(--b1); flex-shrink:0; }
-.ptab { flex:1; padding:10px; background:none; border:none; border-bottom:2px solid transparent; font-size:13px; font-weight:500; cursor:pointer; color:var(--mid); font-family:var(--sans); }
+
+/* ── Multi-stream container ───────────────────────── */
+.stream-container { display:flex; width:100%; height:100%; gap:6px; }
+.stream-main { flex:1; position:relative; background:#000; border-radius:var(--radiusL); overflow:hidden; min-height:0; }
+.stream-main video { width:100%; height:100%; object-fit:contain; }
+.stream-main .stream-label { position:absolute; top:8px; left:8px; padding:2px 8px; font-size:11px; background:rgba(0,0,0,.65); color:#fff; border-radius:4px; pointer-events:none; }
+.stream-thumbs { width:150px; display:flex; flex-direction:column; gap:6px; padding:4px; overflow-y:auto; flex-shrink:0; }
+.stream-thumb { position:relative; border-radius:8px; overflow:hidden; cursor:pointer; border:2px solid var(--b1); aspect-ratio:16/9; background:#000; transition:border-color .2s, opacity .2s, transform .2s; }
+.stream-thumb:hover { border-color:var(--mid); }
+.stream-thumb.active { border-color:var(--accent); box-shadow:0 0 0 1px var(--accent); }
+.stream-thumb video { width:100%; height:100%; object-fit:cover; pointer-events:none; }
+.stream-thumb .stream-label { position:absolute; bottom:0; left:0; right:0; padding:2px 6px; font-size:10px; background:rgba(0,0,0,.7); color:#fff; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.stream-thumb.dragging { opacity:.4; transform:scale(.95); }
+/* Grid mode */
+.stream-container.grid-mode .stream-main { display:none; }
+.stream-container.grid-mode .stream-thumbs { width:100%; flex-direction:row; flex-wrap:wrap; padding:8px; gap:8px; overflow-y:auto; }
+.stream-container.grid-mode .stream-thumb { flex:1 1 calc(50% - 8px); min-width:200px; max-height:none; aspect-ratio:16/9; border-radius:var(--radiusL); }
+.stream-container.grid-mode .stream-thumb video { object-fit:contain; }
+.stream-container.grid-mode .stream-thumb .stream-label { font-size:12px; padding:4px 8px; }
+.participant-panel { width:300px; border-left:1px solid var(--b1); display:flex; flex-direction:column; flex-shrink:0; }
+.panel-tabs { display:flex; border-bottom:1px solid var(--b1); flex-shrink:0; background:var(--bg); }
+.ptab { flex:1; padding:12px; background:none; border:none; border-bottom:2px solid transparent; font-size:13px; font-weight:600; cursor:pointer; color:var(--mid); font-family:var(--sans); transition:all .15s; }
+.ptab:hover { color:var(--fg); background:var(--s1); }
+.ptab.active { color:var(--accent); border-bottom-color:var(--accent); }
 .ptab.active { color:var(--accent); border-bottom-color:var(--accent); }
 .tab-content { flex:1; overflow-y:auto; display:flex; flex-direction:column; }
 
@@ -658,20 +1038,55 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 .pc-lat { font-size:11px; color:var(--dim); font-family:var(--mono); }
 
 /* ── Chat ────────────────────────────────────────────── */
-#chatArea { flex:1; overflow-y:auto; padding:8px; display:flex; flex-direction:column; gap:6px; }
-.chat-msg { display:flex; flex-direction:column; gap:2px; }
-.chat-name { font-size:11px; font-weight:600; }
-.chat-text { font-size:13px; color:var(--txt); line-height:1.4; }
-.chat-input-row { display:flex; gap:6px; padding:8px; border-top:1px solid var(--b1); flex-shrink:0; }
-.chat-input-row input { flex:1; padding:7px 10px; border:1.5px solid var(--b1); border-radius:6px; font-size:13px; font-family:var(--sans); color:var(--txt); background:var(--bg); outline:none; }
-.chat-input-row input:focus { border-color:var(--accent); }
-.chat-input-row button { background:var(--accent); color:#fff; border:none; border-radius:6px; width:32px; cursor:pointer; font-size:16px; }
+#chatArea { flex:1; overflow-y:auto; padding:12px; display:flex; flex-direction:column; gap:6px; background:var(--s1); scroll-behavior:smooth; }
+#chatArea::-webkit-scrollbar { width:6px; }
+#chatArea::-webkit-scrollbar-thumb { background:var(--b1); border-radius:3px; }
+#chatArea:empty::before { content:'💬  אין הודעות עדיין. תתחיל שיחה!'; display:block; text-align:center; font-size:12px; color:var(--dim); padding:20px 12px; }
+.chat-msg { display:flex; flex-direction:column; max-width:82%; animation:chatIn .2s ease-out; }
+.chat-msg.self { align-self:flex-start; }
+.chat-msg.other { align-self:flex-end; }
+.chat-name { font-size:10px; font-weight:700; color:var(--dim); margin-bottom:3px; padding:0 4px; letter-spacing:.2px; }
+.chat-msg.self .chat-name { text-align:left; }
+.chat-msg.other .chat-name { text-align:right; }
+.chat-bubble { background:var(--bg); border:1px solid var(--b1); padding:8px 12px 6px; border-radius:14px; font-size:14px; color:var(--txt); line-height:1.45; word-wrap:break-word; white-space:pre-wrap; box-shadow:0 1px 2px rgba(0,0,0,.04); position:relative; }
+.chat-msg.self .chat-bubble { background:var(--accent); color:#fff; border-color:var(--accent); border-bottom-left-radius:4px; }
+.chat-msg.other .chat-bubble { border-bottom-right-radius:4px; }
+.chat-time { font-size:10px; opacity:.65; margin-top:3px; font-family:var(--mono); }
+.chat-msg.self .chat-time { color:rgba(255,255,255,.85); }
+@keyframes chatIn { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:translateY(0); } }
+.chat-input-row { display:flex; gap:8px; padding:10px 12px; border-top:1px solid var(--b1); flex-shrink:0; background:var(--bg); }
+.chat-input-row input { flex:1; padding:10px 14px; border:1.5px solid var(--b1); border-radius:100px; font-size:14px; font-family:var(--sans); color:var(--txt); background:var(--s1); outline:none; transition:border-color .15s; }
+.chat-input-row input:focus { border-color:var(--accent); background:var(--bg); }
+.chat-input-row button { background:var(--accent); color:#fff; border:none; border-radius:50%; width:38px; height:38px; cursor:pointer; font-size:17px; font-weight:700; transition:all .15s; flex-shrink:0; }
+.chat-input-row button:hover { background:#5a3fd6; transform:scale(1.05); }
+.chat-input-row button:active { transform:scale(0.95); }
+.ptab { position:relative; }
+.chat-unread-badge { position:absolute; top:4px; right:4px; min-width:16px; height:16px; padding:0 4px; background:#f04438; color:#fff; border-radius:8px; font-size:10px; font-weight:700; display:flex; align-items:center; justify-content:center; animation:badgePop .3s ease-out; }
+@keyframes badgePop { from { transform:scale(0); } to { transform:scale(1); } }
 
 /* (tracks removed — not connected to real DAW) */
 
 /* ── Virtual Piano ───────────────────────────────────── */
-#pianoWrap { position:fixed; bottom:56px; left:0; right:0; background:var(--bg); border-top:1px solid var(--b1); z-index:48; display:none; flex-direction:column; }
+#pianoWrap { position:fixed; bottom:56px; left:0; right:0; background:var(--bg); border-top:1px solid var(--b1); z-index:48; display:none; flex-direction:column; box-shadow:0 -4px 16px rgba(0,0,0,.15); }
 #pianoWrap.open { display:flex; }
+.pk-w.on, .pk-b.on { transition:background .05s; }
+.piano-size-picker { display:flex; gap:2px; background:var(--s1); border:1px solid var(--b1); border-radius:6px; padding:2px; }
+.piano-size-btn { font-size:11px; padding:3px 10px; border:none; background:none; color:var(--mid); border-radius:4px; cursor:pointer; font-family:var(--sans); }
+.piano-size-btn:hover { color:var(--fg); }
+.piano-size-btn.active { background:var(--accent); color:#fff; font-weight:600; }
+.snd-mode-picker { display:flex; gap:2px; background:var(--s1); border:1px solid var(--b1); border-radius:6px; padding:2px; }
+.snd-mode-btn { font-size:11px; padding:3px 10px; border:none; background:none; color:var(--mid); border-radius:4px; cursor:pointer; font-family:var(--sans); }
+.snd-mode-btn:hover { color:var(--fg); }
+.snd-mode-btn.active { background:var(--accent); color:#fff; font-weight:600; }
+.snd-vol-wrap { display:flex; align-items:center; gap:6px; }
+.snd-vol-wrap input[type=range] { width:70px; height:4px; -webkit-appearance:none; appearance:none; background:var(--b1); border-radius:2px; outline:none; }
+.snd-vol-wrap input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:12px; height:12px; border-radius:50%; background:var(--accent); cursor:pointer; }
+.pk-w[data-peer], .pk-b[data-peer] { position:relative; }
+.pk-w[data-peer]::after, .pk-b[data-peer]::after {
+  content:attr(data-peer); position:absolute; top:2px; left:50%; transform:translateX(-50%);
+  font-size:9px; font-weight:700; color:#fff; background:rgba(0,0,0,.5); padding:1px 4px; border-radius:8px;
+  pointer-events:none; white-space:nowrap; max-width:90%; overflow:hidden; text-overflow:ellipsis;
+}
 .piano-header { display:flex; align-items:center; gap:10px; padding:6px 16px; border-bottom:1px solid var(--b1); }
 .piano-header-label { font-size:12px; font-weight:600; color:var(--mid); flex:1; }
 .piano-oct { padding:3px 10px; font-size:11px; border:1px solid var(--b1); border-radius:4px; background:none; cursor:pointer; color:var(--mid); }
@@ -679,10 +1094,12 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 .piano-close { background:none; border:none; cursor:pointer; color:var(--mid); font-size:16px; padding:0 4px; }
 .piano-ch select { font-size:11px; border:1px solid var(--b1); border-radius:4px; padding:2px 4px; color:var(--txt); background:var(--bg); }
 .piano-keys { position:relative; height:84px; display:flex; padding:6px 16px 0; overflow-x:auto; user-select:none; }
-.pk-w { width:32px; height:72px; background:#fff; border:1px solid #bbb; border-radius:0 0 4px 4px; cursor:pointer; flex-shrink:0; transition:background .05s; position:relative; z-index:1; display:flex; align-items:flex-end; justify-content:center; padding-bottom:4px; }
-.pk-w:hover,.pk-w.on { background:#e0d8ff; border-color:var(--accent); }
-.pk-b { width:22px; height:46px; background:#222; border-radius:0 0 3px 3px; cursor:pointer; flex-shrink:0; position:relative; z-index:2; margin:0 -11px; transition:background .05s; display:flex; align-items:flex-end; justify-content:center; padding-bottom:3px; }
-.pk-b:hover,.pk-b.on { background:var(--accent); }
+.pk-w { width:32px; height:78px; background:linear-gradient(180deg, #fefefe 0%, #ececec 100%); border:1px solid #b8b8b8; border-radius:0 0 5px 5px; cursor:pointer; flex-shrink:0; transition:all .06s ease-out; position:relative; z-index:1; display:flex; align-items:flex-end; justify-content:center; padding-bottom:5px; box-shadow:inset 0 -3px 0 rgba(0,0,0,.08), 0 1px 2px rgba(0,0,0,.15); }
+.pk-w:hover { background:linear-gradient(180deg, #f5f0ff 0%, #e5d8ff 100%); border-color:var(--accent); }
+.pk-w.on { background:linear-gradient(180deg, #d8c8ff 0%, #b8a0ff 100%); border-color:var(--accent); transform:translateY(1px); box-shadow:inset 0 -1px 0 rgba(0,0,0,.15); }
+.pk-b { width:22px; height:52px; background:linear-gradient(180deg, #333 0%, #111 100%); border-radius:0 0 4px 4px; cursor:pointer; flex-shrink:0; position:relative; z-index:2; margin:0 -11px; transition:all .06s ease-out; display:flex; align-items:flex-end; justify-content:center; padding-bottom:3px; box-shadow:inset 0 -3px 0 rgba(255,255,255,.08), 0 2px 4px rgba(0,0,0,.35); }
+.pk-b:hover { background:linear-gradient(180deg, #555 0%, #333 100%); }
+.pk-b.on { background:linear-gradient(180deg, var(--accent) 0%, #4a2fbe 100%); transform:translateY(1px); }
 .pk-label { font-size:8px; color:#aaa; pointer-events:none; }
 .pk-w .pk-label { color:var(--mid); }
 .piano-vel { display:flex; align-items:center; gap:8px; padding:4px 16px; font-size:11px; color:var(--mid); border-top:1px solid var(--b1); }
@@ -704,36 +1121,70 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 .perm-badge.on-green { background:var(--gD); border-color:var(--green); color:var(--green); }
 
 /* ── Transport bar ───────────────────────────────────── */
-.transport-bar { height:56px; border-top:1px solid var(--b1); display:flex; align-items:center; gap:8px; padding:0 16px; background:var(--bg); flex-shrink:0; position:fixed; bottom:0; left:0; right:0; z-index:50; }
-.tc { width:34px; height:34px; border:1.5px solid var(--b1); border-radius:6px; background:none; cursor:pointer; font-size:14px; display:flex; align-items:center; justify-content:center; color:var(--txt); }
-.tc:hover { border-color:var(--accent); color:var(--accent); }
-.play-btn { background:var(--accent); border-color:var(--accent); color:#fff; }
-.play-btn:hover { opacity:.9; }
-.bpm-ctrl { display:flex; align-items:center; gap:2px; background:var(--s1); border:1px solid var(--b1); border-radius:6px; overflow:hidden; }
-.bpm-btn { width:24px; height:34px; border:none; background:none; cursor:pointer; color:var(--mid); font-size:16px; font-family:var(--sans); }
-.bpm-btn:hover { color:var(--accent); background:var(--accentH); }
-.bpm-val { font-size:16px; font-weight:700; color:var(--hi); min-width:36px; text-align:center; font-family:var(--mono); }
-.bpm-lbl { font-size:10px; color:var(--mid); padding-right:8px; }
-.pos-display { font-family:var(--mono); font-size:13px; color:var(--mid); min-width:50px; }
+.transport-bar { height:60px; border-top:1px solid var(--b1); display:flex; align-items:center; gap:6px; padding:0 16px; background:linear-gradient(180deg, var(--bg), var(--s1)); flex-shrink:0; position:fixed; bottom:0; left:0; right:0; z-index:50; backdrop-filter:blur(8px); box-shadow:0 -2px 12px rgba(0,0,0,.06); }
+.tc { min-width:36px; height:36px; padding:0 6px; border:1.5px solid var(--b1); border-radius:8px; background:none; cursor:pointer; font-size:13px; display:inline-flex; align-items:center; justify-content:center; gap:5px; color:var(--txt); transition:all .12s; white-space:nowrap; font-family:var(--sans); font-weight:500; }
+.tc:hover { border-color:var(--accent); color:var(--accent); transform:translateY(-1px); box-shadow:0 2px 6px rgba(108,71,255,.15); }
+.tc:active { transform:translateY(0); }
+.tc.active-share, .tc.active { background:rgba(108,71,255,.12); border-color:var(--accent); color:var(--accent); }
+.tc.recording { background:rgba(240,68,56,.15); border-color:#f04438; color:#f04438; animation:recPulse 1.8s ease-in-out infinite; }
+@keyframes recPulse { 0%,100% { box-shadow:0 0 0 0 rgba(240,68,56,.4); } 50% { box-shadow:0 0 0 6px rgba(240,68,56,0); } }
+.tc.muted-state { background:rgba(240,68,56,.12); border-color:#f04438; color:#f04438; }
 .latency-pill { background:var(--s1); border:1px solid var(--b1); border-radius:100px; padding:3px 10px; font-size:11px; font-family:var(--mono); color:var(--mid); }
-.share-btn { padding:0 14px; font-size:13px; font-family:var(--sans); white-space:nowrap; }
-.cam-btn { padding:0 14px; font-size:13px; font-family:var(--sans); white-space:nowrap; display:none; }
-@media (max-width: 768px) { .cam-btn { display:flex; } }
-.tap-tempo { font-size:10px; font-weight:700; }
-.tap-tempo:active { background:var(--accentD); color:var(--accent); }
-.metro-btn.on { background:var(--green); border-color:var(--green); color:#fff; }
-.vu-wrap { display:flex; align-items:center; gap:4px; background:var(--s1); border:1px solid var(--b1); border-radius:6px; padding:0 6px; height:34px; }
-.vu-label { font-size:9px; color:var(--dim); }
-.vu-meter { display:flex; align-items:flex-end; gap:1px; height:24px; }
-.vu-bar { width:3px; border-radius:1px; background:var(--green); transition:height 60ms linear; min-height:2px; }
-.vu-bar.warn { background:#f79009; }
-.vu-bar.clip { background:var(--red); }
-.uptime-pill { font-size:10px; color:var(--dim); font-family:var(--mono); }
-.clip-panel { position:fixed; bottom:60px; right:16px; width:280px; max-height:240px; overflow-y:auto; background:var(--s1); border:1px solid var(--b1); border-radius:var(--radiusL); padding:8px; display:none; z-index:51; }
-.clip-card { display:flex; align-items:center; gap:8px; padding:6px 8px; background:var(--bg); border:1px solid var(--b1); border-radius:6px; margin-bottom:4px; }
-.clip-name { flex:1; font-size:12px; font-family:var(--mono); color:var(--txt); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.clip-dl { font-size:12px; color:var(--accent); cursor:pointer; text-decoration:none; }
-.share-audio-btn { padding:0 10px; font-size:12px; font-family:var(--sans); white-space:nowrap; }
+.midi-pill { background:var(--s1); border:1px solid var(--b1); border-radius:100px; padding:3px 10px; font-size:11px; color:var(--mid); cursor:pointer; user-select:none; transition:all .15s; }
+.midi-pill:hover { border-color:var(--accent); color:var(--fg); }
+.midi-pill.connected { border-color:#03b28c; color:#03b28c; }
+.midi-pill.playing { background:rgba(3,178,140,.15); border-color:#03b28c; color:#03b28c; box-shadow:0 0 8px rgba(3,178,140,.4); }
+#kbdMidiBtn { font-family:var(--mono); font-size:10px; letter-spacing:1px; padding:6px 8px; opacity:.6; }
+#kbdMidiBtn.active { background:rgba(3,178,140,.15); border-color:#03b28c; color:#03b28c; opacity:1; box-shadow:0 0 8px rgba(3,178,140,.3); }
+#raiseHandBtn.active { background:rgba(247,144,9,.15); border-color:#f79009; color:#f79009; animation:handWave .8s ease-in-out infinite; }
+@keyframes handWave { 0%,100% { transform:rotate(-6deg); } 50% { transform:rotate(6deg); } }
+/* Lecture-mode: hide sharing controls for students */
+.is-student .share-btn, .is-student .cam-btn, .is-student .share-audio-btn { display:none !important; }
+.is-student .my-controls { display:none !important; }
+/* Class control panel */
+.cc-list { max-height:340px; overflow-y:auto; display:flex; flex-direction:column; gap:6px; }
+.cc-row { display:flex; align-items:center; gap:8px; padding:8px 10px; background:var(--s1); border:1px solid var(--b1); border-radius:8px; }
+.cc-name { flex:1; font-size:13px; font-weight:500; }
+.cc-toggles { display:flex; gap:4px; }
+.cc-toggle { width:30px; height:30px; border:1px solid var(--b1); background:none; border-radius:6px; font-size:14px; cursor:pointer; transition:all .15s; }
+.cc-toggle:hover { border-color:var(--accent); }
+.cc-toggle.on { background:rgba(3,178,140,.15); border-color:#03b28c; }
+.ss-grid { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+.ss-tile { padding:14px; background:var(--s1); border:1px solid var(--b1); border-radius:8px; text-align:center; }
+.ss-tile-val { font-size:20px; font-weight:700; color:var(--accent); }
+.ss-tile-lbl { font-size:11px; color:var(--dim); margin-top:2px; }
+.ss-peer { display:inline-flex; width:26px; height:26px; border-radius:50%; align-items:center; justify-content:center; color:#fff; font-size:11px; font-weight:700; }
+/* Self preview — floating cards in the bottom-right corner */
+#selfPreview { position:fixed; bottom:76px; left:16px; display:flex; flex-direction:column; gap:6px; z-index:60; pointer-events:none; }
+.self-preview-tile { position:relative; width:160px; aspect-ratio:16/9; border-radius:8px; overflow:hidden; background:#000; box-shadow:0 6px 20px rgba(0,0,0,.35); border:1.5px solid var(--accent); pointer-events:auto; }
+.self-preview-tile video { width:100%; height:100%; object-fit:cover; transform:scaleX(-1); }
+.self-preview-lbl { position:absolute; bottom:0; left:0; right:0; padding:3px 6px; background:linear-gradient(0deg, rgba(0,0,0,.7), transparent); color:#fff; font-size:10px; font-weight:600; text-align:center; }
+@media (max-width:700px) { .self-preview-tile { width:100px; } }
+.agent-pill { background:var(--s1); border:1px solid var(--b1); border-radius:100px; padding:3px 10px; font-size:11px; color:var(--dim); font-family:var(--sans); transition:all .2s; }
+.agent-pill.connected { border-color:#03b28c; color:#03b28c; background:rgba(3,178,140,.08); }
+.agent-pill.disconnected { border-color:#f04438; color:#f04438; background:rgba(240,68,56,.08); animation:agentBlink 1.4s ease-in-out infinite; }
+@keyframes agentBlink { 0%,100% { opacity:.7; } 50% { opacity:1; } }
+/* Click-to-control hint overlay on the shared video */
+.remote-hint { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; pointer-events:none;
+  background:rgba(0,0,0,.15); color:#fff; font-size:14px; font-weight:600; text-shadow:0 2px 6px rgba(0,0,0,.6);
+  opacity:0; transition:opacity .3s; z-index:5; }
+.stream-thumb:hover .remote-hint, .main-video-wrap:hover .remote-hint { opacity:1; }
+.remote-hint-inner { background:rgba(0,0,0,.6); padding:8px 16px; border-radius:100px; }
+.play-overlay { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,.65); color:#fff; font-size:18px; font-weight:600; cursor:pointer; z-index:20; }
+.play-overlay:hover { background:rgba(0,0,0,.75); }
+.share-btn { width:auto; padding:0 14px; font-size:13px; font-family:var(--sans); white-space:nowrap; }
+.cam-btn { width:auto; padding:0 14px; font-size:13px; font-family:var(--sans); white-space:nowrap; }
+.active-share { border:2px solid var(--accent) !important; background:rgba(0,255,136,.15) !important; }
+.muted-state { border:2px solid var(--rD) !important; background:rgba(255,60,60,.15) !important; color:var(--red) !important; }
+.recording { border:2px solid var(--rD) !important; background:rgba(255,60,60,.2) !important; animation:rec-pulse 1s ease infinite; }
+@keyframes rec-pulse { 0%,100%{opacity:1} 50%{opacity:.6} }
+.active-tool { border-color:var(--accent) !important; color:var(--accent) !important; }
+.tb-group-sep { width:1px; height:28px; background:var(--b1); margin:0 6px; flex-shrink:0; opacity:.6; }
+.is-guest .host-only { display:none !important; }
+.guest-only { display:none !important; }
+.is-guest .guest-only { display:flex !important; }
+.share-audio-btn { width:auto; padding:0 10px; font-size:12px; font-family:var(--sans); white-space:nowrap; }
+.rec-btn-transport { width:auto; padding:0 10px; font-size:12px; font-family:var(--sans); white-space:nowrap; }
 
 /* ── Settings panel ──────────────────────────────────── */
 #settingsOverlay { position:fixed; inset:0; background:rgba(0,0,0,.4); z-index:200; display:flex; justify-content:flex-end; }
@@ -749,10 +1200,10 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 .dlog-entry { font-size:11px; font-family:var(--mono); color:var(--mid); padding:2px 0; border-bottom:1px solid var(--b1); }
 
 /* ── Toast ───────────────────────────────────────────── */
-#toastEl { position:fixed; bottom:72px; left:50%; transform:translateX(-50%); background:var(--hi); color:var(--bg); padding:10px 20px; border-radius:100px; font-size:13px; font-weight:500; opacity:0; transition:opacity .2s; pointer-events:none; z-index:300; white-space:nowrap; }
-#toastEl.toast-show { opacity:1; }
-#toastEl.toast-g { background:var(--green); color:#fff; }
-#toastEl.toast-r { background:var(--red); color:#fff; }
+#toastEl { position:fixed; bottom:80px; left:50%; transform:translateX(-50%) translateY(20px); background:var(--hi); color:var(--bg); padding:12px 22px; border-radius:100px; font-size:13px; font-weight:500; opacity:0; transition:all .25s cubic-bezier(.2,.9,.3,1.2); pointer-events:none; z-index:2000; white-space:nowrap; box-shadow:0 8px 24px rgba(0,0,0,.25); max-width:90vw; overflow:hidden; text-overflow:ellipsis; }
+#toastEl.toast-show { opacity:1; transform:translateX(-50%) translateY(0); }
+#toastEl.toast-g { background:linear-gradient(135deg, #03b28c, #059cc0); color:#fff; }
+#toastEl.toast-r { background:linear-gradient(135deg, #f04438, #d43128); color:#fff; }
 .rvb-mute:hover { background:rgba(255,255,255,.15); }
 .rvb-close { background:none; border:none; color:rgba(255,255,255,.7); cursor:pointer; font-size:18px; padding:0 2px; line-height:1; }
 .rvb-close:hover { color:#fff; }
@@ -895,26 +1346,28 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 
   .workspace { flex-direction:column; }
   .participant-panel { width:100%; height:auto; max-height:180px; border-left:none; border-top:1px solid var(--b1); }
+  .stream-container { flex-direction:column; }
+  .stream-thumbs { width:100%; flex-direction:row; height:80px; overflow-x:auto; overflow-y:hidden; flex-shrink:0; }
+  .stream-thumb { min-width:110px; height:70px; flex-shrink:0; aspect-ratio:auto; }
+  .stream-container.grid-mode .stream-thumbs { height:auto; flex-direction:row; flex-wrap:wrap; overflow-y:auto; overflow-x:hidden; }
+  .stream-container.grid-mode .stream-thumb { flex:1 1 100%; min-width:unset; height:auto; flex-shrink:1; aspect-ratio:16/9; }
 
-  .transport-bar { height:auto; min-height:52px; flex-wrap:wrap; gap:4px; padding:6px 8px; position:relative; }
-  .bpm-ctrl { order:10; }
-  .pos-display { order:11; }
-  .my-controls { order:20; width:100%; justify-content:center; padding-top:4px; }
-  .my-ctrl-sep { display:none; }
-  .latency-pill { order:12; }
+  .transport-bar { height:auto; min-height:40px; flex-wrap:wrap; gap:2px; padding:4px 6px; position:relative; }
+  .transport-bar .tc { width:28px; height:28px; font-size:12px; }
+  .my-controls { order:20; width:100%; justify-content:center; padding-top:2px; gap:4px; }
+  .my-controls .my-ctrl-btn { font-size:11px; padding:3px 8px; }
+  .tb-group-sep { display:none; }
+  .latency-pill { order:12; font-size:10px; padding:2px 6px; }
 
-  #pianoWrap { bottom:104px; }
+  #pianoWrap { bottom:90px; }
   .piano-keys { padding:4px 8px 0; }
   .pk-w { width:26px; height:60px; }
   .pk-b { width:18px; height:38px; margin:0 -9px; }
 
-  /* Mobile: hide controls not usable on phone */
-  .share-btn { display:none; }
-  #pianoBtn { display:none; }
-  .vu-wrap { display:none; }
-  .share-audio-btn { display:none; }
-  .uptime-pill { display:none; }
-  .clip-panel { width:100%; right:0; left:0; bottom:52px; border-radius:12px 12px 0 0; }
+  /* Mobile: compact action buttons */
+  .transport-bar .share-btn, .transport-bar .cam-btn { width:auto; padding:0 8px; font-size:11px; height:28px; }
+  .transport-bar .share-audio-btn { width:auto; padding:0 6px; font-size:11px; height:28px; }
+  .transport-bar .rec-btn-transport { width:auto; padding:0 6px; font-size:10px; height:28px; }
 
   .lobby-wrap { padding:20px 12px; }
 }
@@ -935,14 +1388,12 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
   <nav class="land-nav">
     <div class="brand">🎛 <span>Studio</span>Sync</div>
     <div style="flex:1"></div>
-    <button class="tb-btn" onclick="showHistory()">📋 היסטוריה</button>
-    <button class="tb-btn" onclick="openHelp()">? עזרה</button>
     <button class="tb-btn" id="themeToggleLand" onclick="toggleTheme()">🌙</button>
   </nav>
   <div class="hero" dir="rtl">
-    <div class="hero-badge">שיתוף פעולה מוסיקלי בזמן אמת</div>
-    <h1>עשו מוזיקה ביחד,<br>בזמן אמת</h1>
-    <p class="hero-sub">שתפו את מסך ה-DAW שלכם, שדרו אודיו איכותי, ותנו לכולם לשלוט בסשן — מכל מקום בעולם.</p>
+    <div class="hero-badge">✨ סטודיו משותף · MIDI חי · הרצאות אונליין</div>
+    <h1>ה-DAW שלכם.<br>הסטודיו של כולם.</h1>
+    <p class="hero-sub">שתפו מסך + שמע איכות מוזיקלית · נגנו MIDI מכל דפדפן · הקליטו והעלו ל-Drive · העבירו הרצאות עד 30 תלמידים. הכל בקוד קצר אחד.</p>
     <div class="hero-ctas">
       <button class="btn-accent" onclick="showLobby('create')">צור סשן</button>
       <button class="btn-ghost" onclick="showLobby('join')">הצטרף לסשן</button>
@@ -955,54 +1406,23 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
   </div>
   <div class="features">
     <div class="feat-card" dir="rtl">
-      <div class="feat-icon">🔊</div>
-      <div class="feat-title">אודיו סטודיו</div>
-      <div class="feat-desc">שדר אודיו DAW בזמן אמת, לא דרך מיקרופון</div>
+      <div class="feat-icon">🎹</div>
+      <div class="feat-title">MIDI חי</div>
+      <div class="feat-desc">מקלדת חיצונית או ASDF במקלדת המחשב — נכתב ישר לטראק MIDI ב-DAW</div>
     </div>
     <div class="feat-card" dir="rtl">
-      <div class="feat-icon">🖱</div>
-      <div class="feat-title">שליטה מלאה</div>
-      <div class="feat-desc">כל משתתף יכול לשלוט ב-DAW — נגינה, עצירה, עריכה</div>
+      <div class="feat-icon">🖥</div>
+      <div class="feat-title">שיתוף מלא</div>
+      <div class="feat-desc">מסך, שמע DAW באיכות מוזיקלית, מיקרופון, ושליטת עכבר ומקלדת מרחוק</div>
     </div>
     <div class="feat-card" dir="rtl">
-      <div class="feat-icon">👥</div>
-      <div class="feat-title">עד 10 אנשים</div>
-      <div class="feat-desc">שתפו פעולה עם כל הלהקה או הכיתה בסשן אחד</div>
+      <div class="feat-icon">🎓</div>
+      <div class="feat-title">מצב הרצאה</div>
+      <div class="feat-desc">עד 30 תלמידים בסשן אחד, המרצה שולט מי מדבר ומי מנגן</div>
     </div>
   </div>
 
-  <!-- Online Now -->
-  <div id="onlineSection" class="online-section" dir="rtl" style="display:none">
-    <div class="online-header">🟢 מחוברים עכשיו</div>
-    <div id="onlineList" class="online-list"></div>
-  </div>
 
-  <!-- Upcoming Scheduled Sessions -->
-  <div id="scheduleSection" class="schedule-section" dir="rtl" style="display:none">
-    <div class="schedule-header">📅 סשנים מתוכננים</div>
-    <div id="scheduleList" class="schedule-list"></div>
-    <button class="btn-ghost" style="margin-top:8px;font-size:13px" onclick="showScheduleModal()">+ תזמן סשן חדש</button>
-  </div>
-
-  <!-- Feature Voting -->
-  <div id="votingSection" class="voting-section" dir="rtl">
-    <div class="voting-header">🗳 הצביעו לפיצ׳ר הבא</div>
-    <div id="votingList" class="voting-list"></div>
-  </div>
-</div>
-
-<!-- Schedule Modal -->
-<div id="scheduleModal" class="modal-overlay" style="display:none" onclick="if(event.target===this)closeScheduleModal()">
-  <div class="modal-box" dir="rtl" style="max-width:360px">
-    <h3 style="margin:0 0 12px">📅 תזמן סשן</h3>
-    <input id="schedTitle" class="lob-input" placeholder="שם הסשן" dir="rtl" />
-    <input id="schedDate" class="lob-input" type="date" />
-    <input id="schedTime" class="lob-input" type="time" />
-    <div style="display:flex;gap:8px;margin-top:12px">
-      <button class="btn-accent" style="flex:1" onclick="addSchedule()">שמור</button>
-      <button class="btn-ghost" style="flex:1" onclick="closeScheduleModal()">ביטול</button>
-    </div>
-  </div>
 </div>
 
 <!-- LOBBY -->
@@ -1019,12 +1439,22 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
         </div>
       </div>
       <input id="createName" placeholder="השם שלך" class="lob-input" dir="rtl" />
-      <div class="color-label">בחר צבע</div>
-      <div class="color-picker" id="createColors"></div>
-      <div class="instr-label">כלי נגינה</div>
-      <div class="instr-grid" id="createInstrs"></div>
-      <input id="createPassword" placeholder="סיסמה (אופציונלי)" class="lob-input" dir="rtl" type="password" />
-      <button class="btn-accent btn-full" onclick="hostStart()">צור סשן ←</button>
+      <input id="createPassword" placeholder="סיסמה (אופציונלי)" type="password" class="lob-input" dir="rtl" />
+      <div class="color-picker" id="createColors" style="display:none"></div>
+      <div class="instr-grid" id="createInstrs" style="display:none"></div>
+      <div class="mode-picker" dir="rtl">
+        <button class="mode-btn active" data-mode="collab" onclick="selectMode('collab')">
+          <span class="mode-ico">🤝</span>
+          <span class="mode-name">משותף</span>
+          <span class="mode-desc">כולם שווים · עד 10</span>
+        </button>
+        <button class="mode-btn" data-mode="lecture" onclick="selectMode('lecture')">
+          <span class="mode-ico">🎓</span>
+          <span class="mode-name">הרצאה</span>
+          <span class="mode-desc">מרצה שולט · עד 30</span>
+        </button>
+      </div>
+      <button class="btn-accent btn-full" onclick="hostStart()">צור סשן</button>
     </div>
 
     <div class="lobby-divider">או הצטרף עם קוד</div>
@@ -1038,14 +1468,11 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
         </div>
       </div>
       <input id="joinNameInput" placeholder="השם שלך" class="lob-input" dir="rtl" />
-      <div class="color-label">בחר צבע</div>
-      <div class="color-picker" id="joinColors"></div>
-      <div class="instr-label">כלי נגינה</div>
-      <div class="instr-grid" id="joinInstrs"></div>
+      <div class="color-picker" id="joinColors" style="display:none"></div>
+      <div class="instr-grid" id="joinInstrs" style="display:none"></div>
       <input id="joinCode" placeholder="ABC-123" class="lob-input code-input" dir="ltr" />
-      <input id="joinPassword" placeholder="סיסמה (אם נדרשת)" class="lob-input" dir="rtl" type="password" style="display:none" />
-      <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--mid);margin-top:4px;cursor:pointer"><input type="checkbox" id="joinAsListener" /> הצטרף כמאזין בלבד</label>
-      <button class="btn-accent btn-full" onclick="remoteJoin()">הצטרף ←</button>
+      <input id="joinPassword" placeholder="סיסמה (אם נדרשת)" type="password" class="lob-input" dir="rtl" />
+      <button class="btn-accent btn-full" onclick="remoteJoin()">הצטרף</button>
     </div>
 
     <button class="btn-link" onclick="show('landing')">→ חזרה</button>
@@ -1071,25 +1498,28 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
     </div>
     <div class="peer-avatars" id="peerAvatars"></div>
     <div class="tb-flex"></div>
-    <div class="session-timer" id="sessionTimer">⏱ 00:00</div>
     <div class="tb-status" id="tbStatus">0 peers</div>
     <button class="tb-btn tb-invite-btn" onclick="openInvite()">📨 הזמן</button>
-    <button class="tb-btn" id="dndBtn" onclick="toggleDND()" title="מצב שקט">🔔</button>
-    <button class="tb-btn" id="themeToggleSession" onclick="toggleTheme()">🌙</button>
-    <button class="tb-btn" onclick="toggleSettings()">⚙</button>
     <button class="tb-btn tb-leave" onclick="leaveSession()">עזוב</button>
   </div>
 
   <!-- Workspace -->
   <div class="workspace">
-    <!-- Main: shared screen video -->
+    <!-- Main: shared screen video(s) -->
     <div class="main-area" id="mainArea">
-      <video id="mainVideo" class="main-video" autoplay playsinline></video>
+      <div class="stream-container" id="streamContainer">
+        <div class="stream-main" id="streamMain"></div>
+        <div class="stream-thumbs" id="streamThumbs"></div>
+      </div>
       <div class="main-area-empty" id="mainEmpty" dir="rtl">
-        <div class="main-area-empty-icon">🖥</div>
-        <div class="main-area-empty-text">ממתין לשיתוף מסך...</div>
-        <div class="main-area-empty-sub">לחץ על <b>"Share"</b> בסרגל למטה כדי לשתף את מסך ה-DAW והשמע.</div>
-        <button class="btn-ghost" style="margin-top:12px;font-size:13px" onclick="doShareCam()">📷 או שתף מצלמה</button>
+        <div class="main-area-empty-icon" id="emptyIcon">🖥</div>
+        <div class="main-area-empty-text" id="emptyText">ממתין לשיתוף מסך...</div>
+        <div class="main-area-empty-sub" id="emptySub">לחץ על <b>"שתף מסך"</b> בסרגל למטה כדי לשתף את מסך ה-DAW והשמע.</div>
+        <button class="btn-ghost host-only" id="emptyShareCam" style="margin-top:12px;font-size:13px" onclick="doShareCam()">📷 או שתף מצלמה</button>
+        <div class="student-waiting" id="studentWaiting" style="display:none;margin-top:16px">
+          <div class="pulse-dot"></div>
+          <div style="font-size:12px;color:var(--dim);margin-top:8px">ממתין שהמרצה יתחיל</div>
+        </div>
       </div>
     </div>
 
@@ -1098,7 +1528,6 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
       <div class="panel-tabs">
         <button class="ptab active" id="tabPeers" onclick="switchTab('peers')">משתתפים</button>
         <button class="ptab" id="tabChat" onclick="switchTab('chat')">צ'אט</button>
-        <button class="ptab" id="tabNotes" onclick="switchTab('notes')">📝 הערות</button>
       </div>
       <div id="peersTab" class="tab-content">
         <div id="peerList"></div>
@@ -1106,100 +1535,73 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
       <div id="chatTab" class="tab-content" style="display:none">
         <div id="chatArea"></div>
         <div class="chat-input-row">
-          <input id="chatIn" placeholder="Send a message..." onkeydown="if(event.key==='Enter')sendChat()" />
+          <input id="chatIn" placeholder="כתוב הודעה..." dir="rtl" onkeydown="if(event.key==='Enter')sendChat()" />
           <button onclick="sendChat()">↑</button>
         </div>
       </div>
-      <div id="notesTab" class="tab-content">
-        <textarea id="sharedNotes" placeholder="הערות משותפות..." oninput="onNotesInput()"></textarea>
-      </div>
     </div>
   </div>
 
-  <!-- Transport bar (fixed bottom) -->
-  <!-- Virtual Piano (hidden by default) -->
+  <div class="transport-bar">
+    <!-- Mute — everyone -->
+    <button class="tc" id="muteBtn" onclick="toggleSelfMute()" title="השתק">🎤</button>
+    <div class="tb-group-sep"></div>
+    <!-- Sharing — everyone -->
+    <button class="tc share-btn" id="shareBtn" onclick="doShare()">🖥 שתף מסך</button>
+    <button class="tc cam-btn" id="camBtn" onclick="doShareCam()">📷 מצלמה</button>
+    <button class="tc share-audio-btn host-only" id="shareAudioBtn" onclick="doShareAudio()" title="שתף שמע בלבד">🔊 שתף שמע</button>
+    <div class="tb-group-sep"></div>
+    <!-- Remote Controls — guest only (host doesn't send remote:input to self) -->
+    <div class="my-controls guest-only" id="myControls" title="שליטה מרחוק">
+      <span class="my-ctrl-btn" id="myMouse" onclick="toggleMyCtrl('mouse')">🖱 עכבר</span>
+      <span class="my-ctrl-btn" id="myKeys" onclick="toggleMyCtrl('keyboard')">⌨ מקלדת</span>
+    </div>
+    <div class="tb-flex"></div>
+    <!-- Tools -->
+    <button class="tc rec-btn-transport host-only" id="recSessionBtn" onclick="toggleSessionRecord()">⏺ הקלט</button>
+    <button class="tc host-only" id="addScreenBtn" onclick="addAnotherScreen()" title="הוסף מסך נוסף (עד 3 מוניטורים)">＋ מסך</button>
+    <button class="tc" id="viewToggle" onclick="toggleStreamView()" title="תצוגת גריד">⊞</button>
+    <button class="tc" id="fullscreenBtn" onclick="toggleFullscreen()" title="מסך מלא">⛶</button>
+    <button class="tc" id="raiseHandBtn" onclick="toggleRaiseHand()" title="הרם יד לבקש רשות דיבור" style="display:none">✋ הרם יד</button>
+    <button class="tc" id="classCtrlBtn" onclick="showClassControl()" title="שליטת הרצאה" style="display:none">🎓 כיתה</button>
+    <button class="tc" id="endArchiveBtn" onclick="endAndArchive()" title="סיים הרצאה + שמור הכל" style="display:none">🏁 סיים ושמור</button>
+    <button class="tc" id="pianoBtn" onclick="togglePiano()" title="פסנתר משותף">🎹 פסנתר</button>
+    <button class="tc" id="kbdMidiBtn" onclick="toggleKbdMidi()" title="לחץ M להפעיל מקלדת כ-MIDI">ASDF</button>
+    <button class="tc host-only" id="healthBtn" onclick="showHealthCheck()" title="בדוק שהמערכת מוכנה לסשן">🩺</button>
+    <div class="agent-pill host-only" id="agentPill" title="סטטוס Agent (שליטה מרחוק + MIDI)">🤖 —</div>
+    <div class="midi-pill" id="midiPill" onclick="reinitWebMidi()" title="Web MIDI keyboard">🎹 —</div>
+    <div class="latency-pill" id="latPill">-- ms</div>
+  </div>
+
+  <!-- Shared Piano — visible to all participants -->
   <div id="pianoWrap">
     <div class="piano-header">
-      <span class="piano-header-label">🎹 Virtual Piano — MIDI to host</span>
-      <button class="piano-oct" onclick="pianoOctave(-1)">Oct −</button>
-      <span id="pianoOctLbl" style="font-size:11px;color:var(--mid)">C4</span>
-      <button class="piano-oct" onclick="pianoOctave(1)">Oct +</button>
-      <span style="font-size:11px;color:var(--dim);margin-left:8px">CH</span>
-      <select id="pianoChSel" style="font-size:11px;border:1px solid var(--b1);border-radius:4px;padding:2px 4px;color:var(--txt);background:var(--bg)">
-        <option>1</option><option>2</option><option>3</option><option>4</option>
-        <option>5</option><option>6</option><option>7</option><option>8</option>
-        <option>9</option><option>10</option><option>11</option><option>12</option>
-        <option>13</option><option>14</option><option>15</option><option>16</option>
-      </select>
-      <button class="piano-close" onclick="togglePiano()">×</button>
+      <span class="piano-header-label">🎹 פסנתר משותף — לחץ על הקלידים או השתמש במקלדת (M להפעלה)</span>
+      <div class="snd-mode-picker" title="מקור סאונד מקומי">
+        <button class="snd-mode-btn" data-mode="synth" onclick="setPianoSoundMode('synth')">🎹 פסנתר</button>
+        <button class="snd-mode-btn" data-mode="off" onclick="setPianoSoundMode('off')">🔇 דומם</button>
+      </div>
+      <div class="snd-vol-wrap" title="עוצמת פסנתר מקומי">
+        <span style="font-size:11px;color:var(--mid)">🔊</span>
+        <input type="range" id="sndVol" min="0" max="100" step="1" onchange="setPianoVolume(this.value/100)" oninput="setPianoVolume(this.value/100)" />
+        <span id="sndVolLbl" style="font-size:10px;color:var(--dim);min-width:32px">50%</span>
+      </div>
+      <div class="piano-size-picker">
+        <button class="piano-size-btn" data-size="2" onclick="setPianoSize(2)">קומפקטי</button>
+        <button class="piano-size-btn" data-size="4" onclick="setPianoSize(4)">בינוני</button>
+        <button class="piano-size-btn" data-size="7" onclick="setPianoSize(7)">מלא</button>
+      </div>
+      <button class="piano-oct" onclick="pianoOctave(-1)">◀ אוקטבה</button>
+      <span id="pianoOctLbl" style="font-size:11px;color:var(--mid);min-width:28px;text-align:center">C4</span>
+      <button class="piano-oct" onclick="pianoOctave(1)">אוקטבה ▶</button>
+      <button class="piano-close" onclick="togglePiano()" title="סגור">✕</button>
     </div>
     <div class="piano-keys" id="pianoKeys"></div>
-    <div class="piano-vel">
-      <span>Velocity</span>
-      <input type="range" id="pianoVel" min="1" max="127" value="100" />
-      <span id="pianoVelVal">100</span>
-      <span style="margin-left:16px;color:var(--dim)">Keyboard: Z-M (low) · Q-I (high)</span>
-    </div>
-  </div>
-
-  <div id="clipPanel" class="clip-panel"></div>
-  <div class="transport-bar">
-    <button class="tc" onclick="cmd('stop')">⏹</button>
-    <button class="tc play-btn" id="playBtn" onclick="cmd('play')">▶</button>
-    <button class="tc" id="recBtn" onclick="cmd('rec')">⏺</button>
-    <div class="bpm-ctrl">
-      <button class="bpm-btn tap-tempo" id="tapBtn" onclick="tapTempo()" title="Tap Tempo">TAP</button>
-      <button class="bpm-btn" onclick="cmd('bpm',-1)">−</button>
-      <div class="bpm-val" id="bpmDisp">128</div>
-      <div class="bpm-lbl">BPM</div>
-      <button class="bpm-btn" onclick="cmd('bpm',1)">+</button>
-    </div>
-    <button class="tc metro-btn" id="metroBtn" onclick="toggleMetro()" title="מטרונום">🔔</button>
-    <div class="pos-display" id="posDisp">1.1.1</div>
-    <div class="vu-wrap"><span class="vu-label">IN</span><div class="vu-meter" id="vuIn"></div></div>
-    <div class="vu-wrap"><span class="vu-label">OUT</span><div class="vu-meter" id="vuOut"></div></div>
-    <div class="tb-flex"></div>
-    <div class="my-controls" id="myControls" title="What you're sending to the host">
-      <span class="my-ctrl-btn active" id="myMouse" onclick="toggleMyCtrl('mouse')">🖱 Mouse</span>
-      <span class="my-ctrl-btn active" id="myKeys" onclick="toggleMyCtrl('keyboard')">⌨ Keys</span>
-      <span class="my-ctrl-btn active-g" id="myMidi" onclick="toggleMyCtrl('midi')">🎹 MIDI</span>
-    </div>
-    <div class="my-ctrl-sep"></div>
-    <div class="latency-pill" id="latPill">-- ms</div>
-    <span class="uptime-pill" id="uptimePill"></span>
-    <button class="tc" id="pianoBtn" onclick="togglePiano()" title="Virtual Piano / MIDI">🎹</button>
-    <button class="tc" onclick="toggleFullscreen()" title="מסך מלא">⛶</button>
-    <button class="tc" id="clipBtn" onclick="toggleClipBoard()" title="קליפים">📋</button>
-    <button class="tc rec-btn-transport" id="recSessionBtn" onclick="toggleSessionRecord()">⏺ הקלט<span class="lock-icon" id="recLock">🔒</span></button>
-    <button class="tc share-audio-btn" onclick="doShareAudio()" title="שתף שמע בלבד">🔊</button>
-    <button class="tc share-btn" onclick="doShare()">🖥 Share</button>
-    <button class="tc cam-btn" onclick="doShareCam()">📷 Cam</button>
   </div>
 </div>
 
-<!-- Settings slide-in -->
-<div id="settingsOverlay" style="display:none" onclick="if(event.target===this)toggleSettings()">
-  <div id="settingsPanel">
-    <div class="sp-header">
-      <div class="sp-title">Settings</div>
-      <button class="sp-close" onclick="toggleSettings()">×</button>
-    </div>
-    <div class="sp-section">
-      <div class="sp-section-title">Session</div>
-      <div class="sp-row"><span>Session Code</span><span id="spCode" style="font-family:var(--mono)">---</span></div>
-      <div class="sp-row"><span>Peers Connected</span><span id="spPeers">0</span></div>
-    </div>
-    <div class="sp-section">
-      <div class="sp-section-title">Network</div>
-      <div class="sp-row"><span>Latency</span><span id="spLatency">-- ms</span></div>
-      <div class="sp-row"><span>Connection</span><span id="spConn">--</span></div>
-    </div>
-    <div class="sp-section">
-      <div class="sp-section-title">DAW Log</div>
-      <div id="dawLog"></div>
-    </div>
-  </div>
-</div>
+<!-- Settings (hidden - kept for JS compatibility) -->
+<div id="settingsOverlay" style="display:none"></div>
 
 <!-- (remote video now inline in main-area) -->
 
@@ -1370,6 +1772,8 @@ const S = {
   dnd: false,
   peerNumber: 0,
   role: 'participant', // 'participant' | 'listener'
+  mode: 'collab',      // 'collab' | 'lecture'
+  handsRaised: new Set(), // peerIds who raised a hand (host view only)
   stageMode: false,
   stageHolder: null, // peerId of who is on stage
   lastNudge: 0,
@@ -1377,7 +1781,10 @@ const S = {
   metro: false, metroInterval: null, metroBeat: 0,
   clips: [],
   connectedAt: null,
-  analyserIn: null, analyserOut: null, vuAnim: null
+  analyserIn: null, analyserOut: null, vuAnim: null,
+  streams: new Map(),    // peerId → { stream, type:'screen'|'camera'|'audio', name }
+  focusedStream: null,   // peerId of focused stream in thumbnail mode
+  selfMuted: false
 };
 
 // (track defs removed — not connected to real DAW)
@@ -1493,6 +1900,11 @@ function dlog(msg) {
 }
 
 // ── Session lifecycle ─────────────────────────────────────
+function selectMode(mode) {
+  S.mode = (mode === 'lecture') ? 'lecture' : 'collab';
+  document.querySelectorAll('.mode-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === S.mode));
+}
+
 async function hostStart() {
   const name = (document.getElementById('createName')?.value || '').trim() || 'Producer';
   S.name = name;
@@ -1503,7 +1915,7 @@ async function hostStart() {
     const r = await fetch(SERVER + '/api/create', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: S.name, color: S.color, instrument: S.instrument, daw: 'Ableton', fingerprint: getFingerprint(), password: (document.getElementById('createPassword')?.value || '').trim() || undefined })
+      body: JSON.stringify({ name: S.name, color: S.color, instrument: S.instrument, daw: 'Ableton', mode: S.mode || 'collab', fingerprint: getFingerprint(), password: (document.getElementById('createPassword')?.value || '').trim() || undefined })
     });
     const d = await r.json();
     if (!d.ok) { toast('Error: ' + d.error, 'r'); show('lobby'); return; }
@@ -1511,6 +1923,7 @@ async function hostStart() {
     S.code = d.code;
     S.peerNumber = d.peerNumber || 1;
     S.plan = d.plan || 'trial';
+    S.mode = d.mode || S.mode || 'collab';
     S.role = 'participant';
     document.getElementById('connectingCode').textContent = S.code;
     enterSession();
@@ -1530,20 +1943,24 @@ async function remoteJoin() {
   show('connecting');
   try {
     const code = raw.slice(0, 3) + '-' + raw.slice(3);
+    const enteredPassword = (document.getElementById('joinPassword')?.value || '').trim() || undefined;
     const r = await fetch(SERVER + '/api/join', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code, name: S.name, color: S.color, instrument: S.instrument, fingerprint: getFingerprint(), password: (document.getElementById('joinPassword')?.value || '').trim() || undefined, role: document.getElementById('joinAsListener')?.checked ? 'listener' : 'participant' })
+      body: JSON.stringify({ code, name: S.name, color: S.color, instrument: S.instrument, fingerprint: getFingerprint(), password: enteredPassword, role: document.getElementById('joinAsListener')?.checked ? 'listener' : 'participant' })
     });
     const d = await r.json();
     if (!d.ok) {
       if (d.error === 'password_required') { document.getElementById('joinPassword').style.display = ''; toast('הסשן מוגן בסיסמה', 'r'); show('lobby'); return; }
       toast(d.error || 'Session not found', 'r'); show('lobby'); return;
     }
+    // Cache the password so autoRejoin can silently reuse it after a network hiccup.
+    S._joinPassword = enteredPassword;
     S.cid = d.clientId;
     S.code = d.code;
     S.peerNumber = d.peerNumber || 2;
     S.plan = d.plan || 'trial';
+    S.mode = d.mode || 'collab';
     S.role = document.getElementById('joinAsListener')?.checked ? 'listener' : 'participant';
     document.getElementById('connectingCode').textContent = S.code;
     enterSession();
@@ -1555,18 +1972,27 @@ async function remoteJoin() {
 
 function enterSession() {
   S.connectedAt = Date.now();
+  // Auto-assign a distinct color per peer position since we no longer show a color picker.
+  S.color = PEER_COLORS[((S.peerNumber || 1) - 1) % PEER_COLORS.length];
   document.getElementById('codeDisplay').textContent = S.code;
-  document.getElementById('spCode').textContent = S.code;
-  updateBPM();
+  const spCode = document.getElementById('spCode');
+  if (spCode) spCode.textContent = S.code;
   updatePeerAvatars();
   renderPeerList();
   show('session');
   startPoll();
   startTimer();
-  // Show/hide record lock icon
-  const lockEl = document.getElementById('recLock');
-  if (lockEl) lockEl.style.display = isPremium() ? 'none' : 'inline';
-  // Listener mode — hide transport controls
+  initWebMidi();
+  startAgentStatusPoll();
+  applySessionMode();
+  // (Recording is free for MMP — no lock)
+  // Role-based UI: hide host-only controls for guests
+  if (S.peerNumber === 1) {
+    document.body.classList.remove('is-guest');
+  } else {
+    document.body.classList.add('is-guest');
+  }
+  // Listener mode — hide transport controls entirely
   if (S.role === 'listener') {
     document.querySelector('.transport-bar').style.display = 'none';
     toast('מצב מאזין — צפייה בלבד', '');
@@ -1578,6 +2004,10 @@ function enterSession() {
     MY.mouse = false; MY.keyboard = false;
     document.getElementById('myMouse')?.classList.remove('active');
     document.getElementById('myKeys')?.classList.remove('active');
+  } else {
+    // Desktop defaults are ON — reflect that on the toggle buttons
+    if (MY.mouse) document.getElementById('myMouse')?.classList.add('active');
+    if (MY.keyboard) document.getElementById('myKeys')?.classList.add('active');
   }
   // Ping loop
   S.pingInterval = setInterval(() => {
@@ -1594,10 +2024,24 @@ function enterSession() {
 }
 
 function leaveSession() {
+  // Capture summary data BEFORE we tear down
+  const summary = {
+    code: S.code,
+    mode: S.mode,
+    durationSec: S.connectedAt ? Math.floor((Date.now() - S.connectedAt) / 1000) : 0,
+    peers: [...S.peers.values()].map(p => ({ name: p.name || 'Peer', color: p.color })),
+    clipCount: (S.clips || []).length,
+    hostRole: S.peerNumber === 1
+  };
+  // Notify server immediately so peers see instant disconnect
+  if (S.cid) {
+    send({ type: 'peer:left', peerId: S.cid, name: S.name });
+    broadcast({ type: 'peer:left', peerId: S.cid, name: S.name });
+  }
   saveHistory();
   stopTimer();
-  if (sessionRecorder && sessionRecorder.state === 'recording') sessionRecorder.stop();
-  sessionRecorder = null;
+  stopAgentStatusPoll();
+  if (isRecording && isRecording()) stopSessionRecord();
   S.role = 'participant';
   S.stageMode = false; S.stageHolder = null;
   S.poll = false;
@@ -1609,20 +2053,111 @@ function leaveSession() {
   S.playing = false; S.rec = false;
   S.pos = { b: 1, bt: 1, tk: 1 };
   closeRv();
+  document.body.classList.remove('is-guest', 'is-lecture', 'is-lecturer', 'is-student');
   show('landing');
-  showRatingModal();
+  // Show summary only if there was actual session time
+  if (summary.durationSec > 10) showSessionSummary(summary);
+  else showRatingModal();
 }
 
+function showSessionSummary(s) {
+  const m = Math.floor(s.durationSec / 60), sec = s.durationSec % 60;
+  const dur = (m ? m + ' דק\\'  ' : '') + sec + ' שנ\\'';
+  const modeName = s.mode === 'lecture' ? 'הרצאה 🎓' : 'משותף 🤝';
+  const peersHtml = s.peers.length
+    ? s.peers.map(p => \`<span class="ss-peer" style="background:\${p.color}">\${esc(p.name[0].toUpperCase())}</span>\`).join('')
+    : '<span style="font-size:12px;color:var(--dim)">אף אחד לא הצטרף</span>';
+  const html = \`
+    <div class="modal-backdrop" id="summBackdrop" onclick="if(event.target===this)closeSessionSummary()">
+      <div class="modal-panel" style="max-width:440px" dir="rtl">
+        <h3 style="margin:0 0 4px">✨ סיכום סשן</h3>
+        <div style="font-size:11px;color:var(--dim);margin-bottom:16px">\${esc(s.code || '')}</div>
+        <div class="ss-grid">
+          <div class="ss-tile"><div class="ss-tile-val">\${dur}</div><div class="ss-tile-lbl">משך</div></div>
+          <div class="ss-tile"><div class="ss-tile-val">\${s.peers.length + 1}</div><div class="ss-tile-lbl">משתתפים</div></div>
+          <div class="ss-tile"><div class="ss-tile-val">\${s.clipCount}</div><div class="ss-tile-lbl">הקלטות</div></div>
+          <div class="ss-tile"><div class="ss-tile-val" style="font-size:15px">\${modeName}</div><div class="ss-tile-lbl">מצב</div></div>
+        </div>
+        <div style="margin:16px 0 8px;font-size:11px;color:var(--dim)">משתתפים</div>
+        <div style="display:flex;gap:4px;flex-wrap:wrap">\${peersHtml}</div>
+        \${s.clipCount && s.hostRole ? \`<div style="font-size:11px;color:var(--dim);margin-top:12px">\${s.clipCount} הקלטות זמינות בלשונית "היסטוריה" אחרי הסגירה</div>\` : ''}
+        <button onclick="closeSessionSummary()" class="btn-primary" style="width:100%;margin-top:16px">סגור</button>
+      </div>
+    </div>
+  \`;
+  document.getElementById('summBackdrop')?.remove();
+  document.body.insertAdjacentHTML('beforeend', html);
+}
+function closeSessionSummary() { document.getElementById('summBackdrop')?.remove(); }
+
 // ── Polling with reconnection ─────────────────────────────
+async function tryAutoRejoin() {
+  // Server forgot us (redeploy, eviction, network gap). Attempt silent rejoin
+  // with same code + name + (cached) password. Prefer join first so we don't
+  // accidentally spawn a fresh empty session with a random code.
+  if (!S.code || !S.name) return false;
+  const raw = S.code.replace(/[^A-Z0-9]/gi, '').toUpperCase();
+  const code = raw.slice(0, 3) + '-' + raw.slice(3);
+  const applyRejoinResp = (d) => {
+    if (!d.ok) return false;
+    S.cid = d.clientId;
+    if (typeof d.peerNumber === 'number') {
+      S.peerNumber = d.peerNumber;
+      S.color = PEER_COLORS[((d.peerNumber || 1) - 1) % PEER_COLORS.length];
+    }
+    if (d.mode) S.mode = d.mode;
+    return true;
+  };
+  try {
+    // 1) Try to join the still-alive session first.
+    const rj = await fetch(SERVER + '/api/join', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code, name: S.name, color: S.color, instrument: S.instrument,
+        password: S._joinPassword || undefined, fingerprint: getFingerprint() })
+    });
+    const dj = await rj.json();
+    if (dj.ok) { const ok = applyRejoinResp(dj); if (ok) { applySessionMode?.(); } return ok; }
+
+    // 2) If we were the host and the session is genuinely gone (404), recreate it.
+    if (S.peerNumber === 1 && dj.error && !dj.error.includes('password')) {
+      const rc = await fetch(SERVER + '/api/create', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: S.name, color: S.color, instrument: S.instrument, daw: 'Ableton',
+          fingerprint: getFingerprint(), code: S.code, mode: S.mode || 'collab' })
+      });
+      const dc = await rc.json();
+      // Server returns the SAME code only if it was free. If we get a different
+      // code back, the old session is still alive — don't isolate ourselves.
+      if (dc.ok && dc.code === S.code) { S.cid = dc.clientId; return true; }
+      return false;
+    }
+    return false;
+  } catch (e) { return false; }
+}
+
 async function startPoll() {
   S.poll = true;
   let fails = 0;
+  let rejoinAttempts = 0;
   while (S.poll) {
     try {
       const r = await fetch(SERVER + '/api/poll?cid=' + S.cid, { signal: AbortSignal.timeout(30000) });
       if (!r.ok) {
         if (r.status === 404) {
-          showBanner('Session expired — please rejoin', 'err');
+          // Try silent auto-rejoin (server likely restarted or evicted us)
+          if (rejoinAttempts < 3) {
+            rejoinAttempts++;
+            if (rejoinAttempts === 1) showBanner('מתחבר מחדש...', 'warn');
+            const ok = await tryAutoRejoin();
+            if (ok) {
+              showBanner('חובר מחדש', 'ok');
+              rejoinAttempts = 0;
+              continue;
+            }
+            await new Promise(r => setTimeout(r, 2000 * rejoinAttempts));
+            continue;
+          }
+          showBanner('הסשן פג — נא להצטרף מחדש', 'err');
           leaveSession();
           return;
         }
@@ -1631,7 +2166,7 @@ async function startPoll() {
         await new Promise(r => setTimeout(r, Math.min(2000 * fails, 10000)));
         continue;
       }
-      if (fails > 0) { showBanner('Reconnected!', 'ok'); fails = 0; }
+      if (fails > 0 || rejoinAttempts > 0) { showBanner('חובר', 'ok'); fails = 0; rejoinAttempts = 0; }
       const d = await r.json();
       for (const m of (d.messages || [])) handleMsg(m);
     } catch(e) {
@@ -1655,16 +2190,23 @@ async function send(msg) {
 // ── WebRTC PeerMesh ───────────────────────────────────────
 const PeerMesh = {
   async createOffer(peerId) {
+    // If we already had a pc for this peer (reconnect / renegotiation), close it
+    // cleanly so the old one's adaptive-bitrate interval + getStats loop stops.
+    const priorPc = S.peers.get(peerId)?.conn;
+    if (priorPc) { try { priorPc.close(); } catch (e) {} }
+
     const pc = new RTCPeerConnection(ICE);
     const peerInfo = S.peers.get(peerId) || {};
-    S.peers.set(peerId, { ...peerInfo, conn: pc });
+    // Fresh _senderGroups — the closed pc's senders are dead.
+    S.peers.set(peerId, { ...peerInfo, conn: pc, dc: null, _senderGroups: {} });
     const dc = pc.createDataChannel('daw', { ordered: true });
     dc.onopen = () => { const p = S.peers.get(peerId); if (p) p.dc = dc; dlog('DC open → ' + peerId); };
     dc.onmessage = (e) => applyRemote(JSON.parse(e.data), peerId);
     pc.ondatachannel = () => {};
     pc.onicecandidate = (e) => { if (e.candidate) send({ type: 'webrtc:ice', peerId, candidate: e.candidate }); };
     pc.onconnectionstatechange = () => { updatePeerStatus(peerId, pc.connectionState); };
-    pc.ontrack = (e) => { if (e.streams[0]) showRemoteStream(e.streams[0], peerId); };
+    pc.ontrack = (e) => { if (e.streams[0]) showRemoteStream(e.streams[0], peerId, e.track); };
+    startAdaptiveBitrate(pc, peerId);
     pc.onnegotiationneeded = async () => {
       try {
         const offer = await pc.createOffer();
@@ -1672,6 +2214,11 @@ const PeerMesh = {
         send({ type: 'webrtc:offer', peerId, offer });
       } catch(e) {}
     };
+
+    // Re-attach every currently-active local share to this fresh pc so a
+    // late joiner (or a reconnected peer) actually sees what's being shared.
+    await reattachAllLocalStreamsToPeer(peerId);
+
     const offer = await pc.createOffer();
     await pc.setLocalDescription(offer);
     send({ type: 'webrtc:offer', peerId, offer });
@@ -1697,6 +2244,7 @@ const PeerMesh = {
           send({ type: 'webrtc:offer', peerId, offer: o });
         } catch(e) {}
       };
+      startAdaptiveBitrate(pc, peerId);
     }
     pc.ontrack = (e) => { if (e.streams[0]) showRemoteStream(e.streams[0], peerId); };
     await pc.setRemoteDescription(offer);
@@ -1725,6 +2273,7 @@ function broadcast(msg, skipPeer) {
 function applyRemote(msg, fromPeerId) {
   if (msg.type === 'daw:state') applyDAW(msg, fromPeerId);
   if (msg.type === 'chat:msg') appendChat(msg.name || 'Peer', msg.text, msg.color);
+  if (msg.type === 'remote:input') handleMsg(msg);
 }
 
 // ── Message router ────────────────────────────────────────
@@ -1732,13 +2281,15 @@ function handleMsg(msg) {
   switch (msg.type) {
     case 'session:welcome':
       S.connectedAt = Date.now();
+      S.mode = msg.mode || S.mode || 'collab';
       for (const p of (msg.peers || [])) {
-        S.peers.set(p.id, { name: p.name, color: p.color, instrument: p.instrument, dc: null, conn: null, latency: 0 });
+        S.peers.set(p.id, { name: p.name, color: p.color, instrument: p.instrument, dc: null, conn: null, latency: 0, perms: { mouse:true, keyboard:true, midi:true } });
       }
+      applySessionMode();
       updatePeerAvatars(); renderPeerList();
       break;
     case 'peer:joined':
-      S.peers.set(msg.peerId, { name: msg.name, color: msg.color, instrument: msg.instrument, dc: null, conn: null, latency: 0, role: msg.role || 'participant', muted: false });
+      S.peers.set(msg.peerId, { name: msg.name, color: msg.color, instrument: msg.instrument, dc: null, conn: null, latency: 0, role: msg.role || 'participant', muted: false, perms: { mouse:true, keyboard:true, midi:true } });
       updatePeerAvatars(); renderPeerList();
       if (!S.dnd) { playJoinSound(); toast(msg.name + ' הצטרף/ה', 'g'); }
       break;
@@ -1746,14 +2297,58 @@ function handleMsg(msg) {
       const lp = S.peers.get(msg.peerId);
       if (lp) {
         const card = document.querySelector('[data-peer="' + msg.peerId + '"]');
+        S.streams.delete(msg.peerId); S.streams.delete(msg.peerId + ':cam'); renderStreams();
         if (card) { card.classList.add('leaving'); setTimeout(() => { lp?.conn?.close(); S.peers.delete(msg.peerId); updatePeerAvatars(); renderPeerList(); }, 300); }
         else { lp.conn?.close(); S.peers.delete(msg.peerId); updatePeerAvatars(); renderPeerList(); }
       }
+      S.handsRaised.delete(msg.peerId);
+      voiceDetach(msg.peerId);
       if (!S.dnd) { playLeaveSound(); toast((msg.name || 'Peer') + ' עזב/ה', ''); }
       break;
     }
+    // ── Lecture-mode messages ──
+    case 'hand:raise':
+      if (isLecturer()) {
+        S.handsRaised.add(msg.from);
+        toast('✋ ' + (msg.fromName || 'תלמיד') + ' הרים יד', 'g');
+        // Refresh open control panel if visible
+        if (document.getElementById('ccBackdrop')) showClassControl();
+      }
+      break;
+    case 'hand:lower':
+      if (isLecturer()) {
+        S.handsRaised.delete(msg.from);
+        if (document.getElementById('ccBackdrop')) showClassControl();
+      }
+      break;
+    case 'class:perm':
+      if (msg.targetId === S.cid) {
+        // Lecturer granted/revoked a permission for me
+        if (msg.perm === 'mic') {
+          S.selfMuted = !msg.value;
+          if (S.micStream) S.micStream.getAudioTracks().forEach(t => t.enabled = msg.value);
+          for (const [, p] of S.peers) p.conn?.getSenders()?.forEach(s => { if (s.track?.kind === 'audio') s.track.enabled = msg.value; });
+          const btn = document.getElementById('muteBtn');
+          if (btn) { btn.textContent = msg.value ? '🎤' : '🔇'; btn.classList.toggle('muted-state', !msg.value); }
+        } else if (MY.hasOwnProperty(msg.perm)) {
+          MY[msg.perm] = !!msg.value;
+        }
+        toast('המרצה ' + (msg.value ? 'פתח' : 'סגר') + ' לך ' +
+          ({ mic:'מיקרופון', mouse:'עכבר', keyboard:'מקלדת', midi:'MIDI' }[msg.perm] || msg.perm),
+          msg.value ? 'g' : '');
+      }
+      break;
+    case 'class:mute-all':
+      if (isStudent()) {
+        S.selfMuted = !!msg.muted;
+        if (S.micStream) S.micStream.getAudioTracks().forEach(t => t.enabled = !msg.muted);
+        for (const [, p] of S.peers) p.conn?.getSenders()?.forEach(s => { if (s.track?.kind === 'audio') s.track.enabled = !msg.muted; });
+        const btn = document.getElementById('muteBtn');
+        if (btn) { btn.textContent = msg.muted ? '🔇' : '🎤'; btn.classList.toggle('muted-state', !!msg.muted); }
+      }
+      break;
     case 'webrtc:create-offer':
-      S.peers.set(msg.peerId, { name: msg.name || '', color: msg.color || PEER_COLORS[0], instrument: msg.instrument || '', dc: null, conn: null, latency: 0 });
+      S.peers.set(msg.peerId, { name: msg.name || '', color: msg.color || PEER_COLORS[0], instrument: msg.instrument || '', dc: null, conn: null, latency: 0, perms: { mouse:true, keyboard:true, midi:true } });
       PeerMesh.createOffer(msg.peerId).catch(e => dlog('WebRTC offer err: ' + e.message));
       break;
     case 'webrtc:offer':
@@ -1769,7 +2364,7 @@ function handleMsg(msg) {
       applyDAW(msg, msg.from);
       break;
     case 'chat:msg':
-      appendChat(msg.name || 'Peer', msg.text, msg.color);
+      appendChat(msg.name || 'Peer', msg.text, msg.color, msg.ts, false);
       break;
     case 'ping:res': {
       const lat = Date.now() - msg.ts;
@@ -1782,11 +2377,34 @@ function handleMsg(msg) {
     case 'perms:update': {
       const pp = S.peers.get(msg.peerId);
       if (pp) { pp.perms = msg.perms; renderPeerList(); }
+      // If this update is about ME, update MY local send-state
+      if (msg.peerId === S.cid && msg.perms) {
+        MY.mouse = !!msg.perms.mouse;
+        MY.keyboard = !!msg.perms.keyboard;
+        MY.midi = !!msg.perms.midi;
+        const mm = document.getElementById('myMouse');
+        const mk = document.getElementById('myKeys');
+        const mi = document.getElementById('myMidi');
+        if (mm) mm.classList.toggle('active', MY.mouse);
+        if (mk) mk.classList.toggle('active', MY.keyboard);
+        if (mi) mi.classList.toggle('active-g', MY.midi);
+        toast('הרשאות עודכנו: ' + (MY.mouse?'🖱':'') + (MY.keyboard?' ⌨':'') + (MY.midi?' 🎹':''), '');
+      }
       break;
     }
-    case 'remote:midi':
+    case 'remote:midi': {
       dlog('🎹 MIDI ' + msg.action + ' note=' + (msg.note||'-') + ' from ' + (msg.fromName||'peer'));
+      const sender = S.peers.get(msg.from);
+      const color = sender?.color || '#8b5cf6';
+      const name = msg.fromName || sender?.name || 'Peer';
+      if (msg.action === 'noteon') {
+        handleNote('noteon', msg.note, { source:'remote', velocity:msg.velocity,
+          channel:msg.channel, peerColor:color, peerName:name });
+      } else if (msg.action === 'noteoff') {
+        handleNote('noteoff', msg.note, { source:'remote' });
+      }
       break;
+    }
     case 'nudge':
       if (!S.dnd) {
         playTone(1200, .15); setTimeout(() => playTone(1500, .15), 120);
@@ -1798,6 +2416,27 @@ function handleMsg(msg) {
     case 'mute:command':
       if (msg.targetId === S.cid) {
         S.mutedByHost = msg.muted;
+        // Actually mute/unmute all outgoing audio tracks
+        for (const [key, entry] of S.streams) {
+          if (key.startsWith(S.cid)) {
+            entry.stream.getAudioTracks().forEach(t => { t.enabled = !msg.muted; });
+          }
+        }
+        for (const [, p] of S.peers) {
+          if (p.conn) {
+            p.conn.getSenders().forEach(sender => {
+              if (sender.track?.kind === 'audio') sender.track.enabled = !msg.muted;
+            });
+          }
+        }
+        // Update mute button UI
+        const muteBtn = document.getElementById('muteBtn');
+        if (muteBtn) {
+          muteBtn.textContent = msg.muted ? '🔇' : '🎤';
+          muteBtn.classList.toggle('muted-state', msg.muted);
+          muteBtn.title = msg.muted ? 'מושתק ע"י המארח' : 'השתק';
+        }
+        S.selfMuted = msg.muted;
         toast(msg.muted ? 'המארח השתיק אותך' : 'המארח ביטל את ההשתקה', msg.muted ? 'r' : 'g');
       }
       break;
@@ -1830,6 +2469,22 @@ function handleMsg(msg) {
         if (mb) mb.classList.toggle('on', S.metro);
       }
       break;
+    case 'remote:input': {
+      // Only the host (peerNumber 1) processes remote inputs
+      if (S.peerNumber !== 1) break;
+      if (msg.from === S.cid) break; // ignore own inputs
+      const rPeer = S.peers.get(msg.from);
+      if (msg.input === 'mouse' && !rPeer?.perms?.mouse) break;
+      if (msg.input === 'keyboard' && !rPeer?.perms?.keyboard) break;
+      // Forward to server's local execution endpoint
+      fetch(SERVER + '/api/local-input', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(msg)
+      }).catch(() => {});
+      if (msg.action === 'click') toast('🖱 ' + (msg.fromName||'Peer') + ' clicked', '', 1000);
+      break;
+    }
   }
 }
 
@@ -1852,12 +2507,12 @@ function cmd(action, val) {
   if (action === 'play') {
     S.playing = !S.playing; msg.playing = S.playing;
     const pb = document.getElementById('playBtn');
-    if (pb) pb.textContent = S.playing ? '⏸' : '▶';
+    if (pb) { pb.textContent = S.playing ? '⏸' : '▶'; pb.classList.toggle('playing', S.playing); }
   } else if (action === 'stop') {
     S.playing = false; S.pos = { b:1, bt:1, tk:1 };
     msg.playing = false; msg.pos = S.pos;
     const pb = document.getElementById('playBtn');
-    if (pb) pb.textContent = '▶';
+    if (pb) { pb.textContent = '▶'; pb.classList.remove('playing'); }
     updatePos();
   } else if (action === 'bpm') {
     S.bpm = Math.max(40, Math.min(300, S.bpm + (val || 0)));
@@ -1866,7 +2521,7 @@ function cmd(action, val) {
   } else if (action === 'rec') {
     S.rec = !S.rec; msg.rec = S.rec;
     const rb = document.getElementById('recBtn');
-    if (rb) rb.style.background = S.rec ? 'var(--red)' : '';
+    if (rb) { rb.classList.toggle('recording', S.rec); rb.style.background = ''; }
   }
   broadcast(msg);
 }
@@ -1880,16 +2535,21 @@ function updatePeerAvatars() {
   el.innerHTML = '';
   const self = document.createElement('div');
   self.className = 'peer-avatar self';
+  self.dataset.peerId = S.cid || 'self';
   self.style.background = S.color;
   self.textContent = (S.name || '?')[0].toUpperCase();
   self.title = S.name + ' (you)';
   el.appendChild(self);
-  for (const [, p] of S.peers) {
+  for (const [pid, p] of S.peers) {
     const av = document.createElement('div');
     av.className = 'peer-avatar';
+    av.dataset.peerId = pid;
     av.style.background = p.color || '#adb5bd';
     av.textContent = (p.name || '?')[0].toUpperCase();
-    av.title = p.name;
+    av.title = p.name + connQualityLabel(p);
+    const dot = document.createElement('span');
+    dot.className = 'conn-dot ' + connQualityClass(p);
+    av.appendChild(dot);
     el.appendChild(av);
   }
   const count = S.peers.size;
@@ -1920,16 +2580,45 @@ function mkPeerCard(id, name, color, instrument, status, isSelf) {
   const perms = p?.perms || { mouse: true, keyboard: true, midi: true };
   const isCreator = S.peerNumber === 1; // only creator can manage permissions
 
+  // Build via DOM APIs — inlining peer-supplied name/instrument/color into innerHTML
+  // was a stored-XSS sink: any peer joining with name=<img onerror=…> executed
+  // in every recipient's tab.
+  const safeColor = (color && /^#[0-9a-f]{3,8}$/i.test(color)) ? color : '#adb5bd';
   const topRow = document.createElement('div');
   topRow.style.cssText = 'display:flex;align-items:center;gap:10px;';
-  topRow.innerHTML = \`
-    <div class="pc-avatar" style="background:\${color || '#adb5bd'}">\${(name || '?')[0].toUpperCase()}</div>
-    <div class="pc-info" style="flex:1">
-      <div class="pc-name">\${name || 'Peer'}\${isSelf ? ' <span class="you-badge">you</span>' : ''}</div>
-      <div class="pc-meta">\${instrument || ''} &middot; <span class="pc-status">\${status || 'connecting'}</span></div>
-    </div>
-    \${latency != null ? \`<div class="pc-lat">\${latency}ms</div>\` : ''}
-  \`;
+  const avatarEl = document.createElement('div');
+  avatarEl.className = 'pc-avatar';
+  avatarEl.style.background = safeColor;
+  avatarEl.textContent = (name || '?')[0].toUpperCase();
+  topRow.appendChild(avatarEl);
+  const infoEl = document.createElement('div');
+  infoEl.className = 'pc-info';
+  infoEl.style.flex = '1';
+  const nameEl = document.createElement('div');
+  nameEl.className = 'pc-name';
+  nameEl.textContent = name || 'Peer';
+  if (isSelf) {
+    const badge = document.createElement('span');
+    badge.className = 'you-badge';
+    badge.textContent = ' you';
+    nameEl.appendChild(badge);
+  }
+  const metaEl = document.createElement('div');
+  metaEl.className = 'pc-meta';
+  const instrEl = document.createElement('span');
+  instrEl.textContent = (instrument || '') + ' · ';
+  const statusEl = document.createElement('span');
+  statusEl.className = 'pc-status';
+  statusEl.textContent = status || 'connecting';
+  metaEl.append(instrEl, statusEl);
+  infoEl.append(nameEl, metaEl);
+  topRow.appendChild(infoEl);
+  if (latency != null) {
+    const latEl = document.createElement('div');
+    latEl.className = 'pc-lat';
+    latEl.textContent = latency + 'ms';
+    topRow.appendChild(latEl);
+  }
   d.appendChild(topRow);
 
   // Permission badges (only show for remote peers, and only creator can toggle)
@@ -1969,23 +2658,52 @@ function togglePerm(peerId, key, badge, cls) {
   toast((p.name || 'Peer') + ': ' + key + ' ' + (p.perms[key] ? 'on' : 'off'), p.perms[key] ? 'g' : '');
 }
 
+function connQualityClass(p) {
+  if (!p) return '';
+  if (p.connState === 'connected') {
+    if (p.bwTier == null) return 'good';
+    return p.bwTier >= 2 ? 'good' : p.bwTier === 1 ? 'ok' : 'bad';
+  }
+  if (p.connState === 'connecting' || p.connState === 'new') return 'ok';
+  if (p.connState === 'failed' || p.connState === 'disconnected') return 'bad';
+  return '';
+}
+function connQualityLabel(p) {
+  if (!p) return '';
+  const state = p.connState || 'unknown';
+  const tier = p.bwTier == null ? '' : (p.bwTier >= 2 ? ' · איכות טובה' : p.bwTier === 1 ? ' · איכות בינונית' : ' · איכות נמוכה');
+  return ' — ' + state + tier;
+}
+
 function updatePeerStatus(peerId, state) {
   const p = S.peers.get(peerId);
   if (p) p.connState = state;
   renderPeerList();
   const sc = document.getElementById('spConn');
   if (sc) sc.textContent = state;
+  // 'connected' clears the reconnect budget so future flaps get retries again.
+  if (state === 'connected' && p) p._reconnectAttempts = 0;
   if (state === 'failed' || state === 'disconnected') {
+    const pp = p;
+    if (!pp) return;
+    pp._reconnectAttempts = (pp._reconnectAttempts || 0) + 1;
+    if (pp._reconnectAttempts > 5) {
+      dlog('✗ Reconnect gave up on ' + (pp.name || peerId) + ' after 5 attempts');
+      // Peer is really gone — stop hammering and clean up.
+      try { pp.conn?.close(); } catch (e) {}
+      pp.conn = null; pp.dc = null;
+      return;
+    }
+    // Exponential backoff: 3s → 6s → 12s → 24s → 30s (cap).
+    const delayMs = Math.min(3000 * Math.pow(2, pp._reconnectAttempts - 1), 30000);
     setTimeout(() => {
-      const pp = S.peers.get(peerId);
-      if (!pp || !S.cid) return;
-      if (pp.connState === 'failed' || pp.connState === 'disconnected') {
-        dlog('↩ Reconnecting to ' + (pp.name || peerId));
-        pp.conn?.close();
-        pp.conn = null; pp.dc = null;
-        PeerMesh.createOffer(peerId);
-      }
-    }, 3000);
+      const now = S.peers.get(peerId);
+      if (!now || !S.cid) return;
+      if (now.connState !== 'failed' && now.connState !== 'disconnected') return;
+      dlog('↩ Reconnecting to ' + (now.name || peerId) + ' (attempt ' + now._reconnectAttempts + ')');
+      // PeerMesh.createOffer now closes prior pc + resets sender groups + re-attaches shares.
+      PeerMesh.createOffer(peerId);
+    }, delayMs);
   }
 }
 
@@ -1994,30 +2712,92 @@ function switchTab(tab) {
   S.activeTab = tab;
   document.getElementById('peersTab').style.display = tab === 'peers' ? 'flex' : 'none';
   document.getElementById('chatTab').style.display = tab === 'chat' ? 'flex' : 'none';
-  document.getElementById('notesTab').style.display = tab === 'notes' ? 'flex' : 'none';
-  document.getElementById('tabPeers').classList.toggle('active', tab === 'peers');
-  document.getElementById('tabChat').classList.toggle('active', tab === 'chat');
-  document.getElementById('tabNotes').classList.toggle('active', tab === 'notes');
+  const nt = document.getElementById('notesTab');
+  if (nt) nt.style.display = tab === 'notes' ? 'flex' : 'none';
+  document.getElementById('tabPeers')?.classList.toggle('active', tab === 'peers');
+  document.getElementById('tabChat')?.classList.toggle('active', tab === 'chat');
+  const tnb = document.getElementById('tabNotes');
+  if (tnb) tnb.classList.toggle('active', tab === 'notes');
+  if (tab === 'chat') {
+    chatUnread = 0;
+    updateChatBadge();
+    // Autofocus the input + scroll to newest
+    setTimeout(() => {
+      const inp = document.getElementById('chatIn');
+      if (inp) inp.focus();
+      const area = document.getElementById('chatArea');
+      if (area) area.scrollTop = area.scrollHeight;
+    }, 50);
+  }
 }
 
+let chatUnread = 0;
 function sendChat() {
   const inp = document.getElementById('chatIn');
   const text = (inp?.value || '').trim();
   if (!text) return;
   inp.value = '';
-  const msg = { type: 'chat:msg', text, name: S.name, color: S.color };
-  appendChat(S.name, text, S.color);
+  const msg = { type: 'chat:msg', text, name: S.name, color: S.color, ts: Date.now() };
+  appendChat(S.name, text, S.color, msg.ts, true);
   broadcast(msg);
 }
 
-function appendChat(name, text, color) {
+function appendChat(name, text, color, ts, isSelf) {
   const area = document.getElementById('chatArea');
   if (!area) return;
+  const nearBottom = (area.scrollHeight - area.scrollTop - area.clientHeight) < 60;
+
   const d = document.createElement('div');
-  d.className = 'chat-msg';
-  d.innerHTML = \`<span class="chat-name" style="color:\${color || 'var(--accent)'}">\${name}</span><span class="chat-text">\${text}</span>\`;
+  d.className = 'chat-msg ' + (isSelf ? 'self' : 'other');
+  const time = new Date(ts || Date.now()).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' });
+
+  // Escape both name and text to prevent HTML injection via peer messages
+  const nameEl = document.createElement('span');
+  nameEl.className = 'chat-name';
+  nameEl.style.color = isSelf ? 'var(--accent)' : (color || 'var(--mid)');
+  nameEl.textContent = name;
+
+  const bubble = document.createElement('div');
+  bubble.className = 'chat-bubble';
+  const textNode = document.createElement('span');
+  textNode.className = 'chat-text';
+  textNode.textContent = text;
+  bubble.appendChild(textNode);
+
+  const timeEl = document.createElement('div');
+  timeEl.className = 'chat-time';
+  timeEl.textContent = time;
+  bubble.appendChild(timeEl);
+
+  if (!isSelf) d.appendChild(nameEl);
+  d.appendChild(bubble);
   area.appendChild(d);
-  area.scrollTop = area.scrollHeight;
+  // Cap chat DOM at 200 messages — a 2-hour lecture chat can otherwise pile
+  // up thousands of nodes and freeze the tab during layout.
+  while (area.children.length > 200) area.firstElementChild.remove();
+
+  if (nearBottom || isSelf) area.scrollTop = area.scrollHeight;
+
+  // Unread badge if the chat tab isn't active
+  if (!isSelf && S.activeTab !== 'chat') {
+    chatUnread++;
+    updateChatBadge();
+    // Subtle new-message ping
+    if (!S.dnd) { try { playTone(880, .06); } catch(e) {} }
+  }
+}
+
+function updateChatBadge() {
+  const tab = document.getElementById('tabChat');
+  if (!tab) return;
+  let badge = tab.querySelector('.chat-unread-badge');
+  if (chatUnread <= 0) { badge?.remove(); return; }
+  if (!badge) {
+    badge = document.createElement('span');
+    badge.className = 'chat-unread-badge';
+    tab.appendChild(badge);
+  }
+  badge.textContent = chatUnread > 99 ? '99+' : String(chatUnread);
 }
 
 // ── Misc helpers ──────────────────────────────────────────
@@ -2069,75 +2849,811 @@ function toggleSettings() {
   if (ov) ov.style.display = ov.style.display === 'flex' ? 'none' : 'flex';
 }
 
+// ══════════════════════════════════════════════════════════
+// Track lifecycle helpers — prevent "black screen after re-share"
+// bug. When we stop sharing, we replaceTrack(null) instead of just
+// track.stop() so the sender goes clean on the peer side. When we
+// start a new share, we re-use existing senders via replaceTrack
+// whenever possible so we don't stack duplicate video senders.
+// ══════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════
+// Video element playback safety
+// - Retries .play() up to 3 times (in case tracks weren't ready)
+// - Shows a "לחץ להפעלה" overlay if the browser blocked autoplay
+// - Detects frozen/black frames (no dimensions) and forces re-attach
+// ══════════════════════════════════════════════════════════
+function ensureVideoPlays(vid, container) {
+  const tryPlay = async (attempt) => {
+    try { await vid.play(); }
+    catch (e) {
+      if (attempt < 3) return setTimeout(() => tryPlay(attempt + 1), 400);
+      showPlayOverlay(vid, container);
+    }
+  };
+  vid.addEventListener('loadedmetadata', () => tryPlay(0), { once: true });
+  vid.addEventListener('canplay', () => { if (vid.paused) tryPlay(0); }, { once: true });
+  // If dimensions are still 0 after 3s, the stream is likely frozen — reset srcObject to nudge it
+  setTimeout(() => {
+    if (!vid.videoWidth && !vid.videoHeight && vid.srcObject) {
+      const s = vid.srcObject;
+      vid.srcObject = null;
+      setTimeout(() => { vid.srcObject = s; tryPlay(0); }, 50);
+    }
+  }, 3000);
+  tryPlay(0);
+}
+
+function showPlayOverlay(vid, container) {
+  if (!container || container.querySelector('.play-overlay')) return;
+  const btn = document.createElement('div');
+  btn.className = 'play-overlay';
+  btn.textContent = '▶ לחץ להפעלה';
+  btn.onclick = async () => {
+    try { await vid.play(); btn.remove(); } catch(e) {}
+  };
+  container.appendChild(btn);
+}
+
+// After a peer connection is (re)established, push every currently-active
+// local share to that specific peer so they see the state we're already in.
+async function reattachAllLocalStreamsToPeer(peerId) {
+  const p = S.peers.get(peerId);
+  if (!p?.conn) return;
+  const groupsToAttach = [];
+  if (S.streams) {
+    for (const [key, entry] of S.streams) {
+      if (!key.startsWith(S.cid)) continue;
+      const group = key.endsWith(':cam') ? 'camera'
+                   : key.endsWith(':audio') ? 'audio'
+                   : key.startsWith('extra:') ? 'extraScreen'
+                   : 'screen';
+      groupsToAttach.push({ stream: entry.stream, group });
+    }
+  }
+  if (S.micStream) groupsToAttach.push({ stream: S.micStream, group: 'mic' });
+
+  for (const { stream, group } of groupsToAttach) {
+    for (const track of stream.getTracks()) {
+      p._senderGroups = p._senderGroups || {};
+      p._senderGroups[group] = p._senderGroups[group] || {};
+      try {
+        const existing = p._senderGroups[group][track.kind];
+        if (existing && p.conn.getSenders().includes(existing)) {
+          await existing.replaceTrack(track);
+        } else {
+          const sender = p.conn.addTrack(track, stream);
+          p._senderGroups[group][track.kind] = sender;
+        }
+      } catch (e) { dlog('reattach err ' + group + '/' + track.kind + ': ' + e.message); }
+    }
+  }
+}
+
+async function attachTracksToPeers(stream, group /* 'screen' | 'camera' | 'audio' */) {
+  for (const [, p] of S.peers) {
+    if (!p.conn) continue;
+    p._senderGroups = p._senderGroups || {};
+    p._senderGroups[group] = p._senderGroups[group] || {};
+    for (const track of stream.getTracks()) {
+      const existingSender = p._senderGroups[group][track.kind];
+      try {
+        if (existingSender && p.conn.getSenders().includes(existingSender)) {
+          await existingSender.replaceTrack(track);
+        } else {
+          const sender = p.conn.addTrack(track, stream);
+          p._senderGroups[group][track.kind] = sender;
+        }
+      } catch (e) {
+        dlog('attach err (' + group + '/' + track.kind + '): ' + e.message);
+      }
+    }
+  }
+}
+
+async function detachTracksFromPeers(group) {
+  for (const [, p] of S.peers) {
+    if (!p.conn || !p._senderGroups?.[group]) continue;
+    for (const kind of Object.keys(p._senderGroups[group])) {
+      const sender = p._senderGroups[group][kind];
+      try {
+        if (sender && p.conn.getSenders().includes(sender)) {
+          await sender.replaceTrack(null);
+        }
+      } catch (e) {}
+    }
+    // Keep the sender objects around — reused on next share via replaceTrack.
+    // (Removing + re-adding causes m-line churn on renegotiation, which is
+    // exactly what triggered the black-screen bug.)
+  }
+}
+
 async function doShare() {
+  const existing = S.streams.get(S.cid);
+  if (existing) {
+    await detachTracksFromPeers('screen');
+    existing.stream.getTracks().forEach(t => t.stop());
+    S.streams.delete(S.cid); renderStreams(); stopVU('in');
+    updateShareBtn(false);
+    toast('שיתוף מסך הופסק', '');
+    return;
+  }
   try {
     const stream = await navigator.mediaDevices.getDisplayMedia({
       video: true, audio: true,
       selfBrowserSurface: 'include', surfaceSwitching: 'include', systemAudio: 'include'
     });
-    toast('Sharing screen…', 'g');
-    const vid = document.getElementById('mainVideo');
-    const empty = document.getElementById('mainEmpty');
-    if (vid) { vid.srcObject = stream; vid.classList.add('active'); vid.muted = true; }
-    if (empty) empty.style.display = 'none';
+    toast('משתף מסך…', 'g');
+    S.streams.set(S.cid, { stream, type: 'screen', name: S.name });
+    renderStreams();
     initVU(stream, 'in');
-    for (const [, p] of S.peers) {
-      if (p.conn) stream.getTracks().forEach(t => p.conn.addTrack(t, stream));
+    updateShareBtn(true);
+    await attachTracksToPeers(stream, 'screen');
+    stream.getVideoTracks()[0].onended = async () => {
+      toast('שיתוף מסך הסתיים', '');
+      await detachTracksFromPeers('screen');
+      S.streams.delete(S.cid); renderStreams(); stopVU('in'); updateShareBtn(false);
+    };
+    // In lecture mode, auto-arm recording so the lecturer never has to remember
+    if (isLecturer() && !isRecording()) {
+      toast('הרצאה — הקלטה מתחילה אוטומטית', 'g');
+      setTimeout(() => toggleSessionRecord(), 800);
     }
-    stream.getVideoTracks()[0].onended = () => { toast('Screen share ended', ''); closeRv(); stopVU('in'); };
-  } catch(e) { toast('Share cancelled', ''); }
+  } catch(e) {
+    if (e.name === 'NotAllowedError') {
+      toast('שיתוף המסך נדחה — לחץ שוב וכשהדפדפן שואל, אשר', 'r');
+    } else if (e.name === 'NotFoundError') {
+      toast('לא נמצא מסך לשתף', 'r');
+    } else {
+      toast('שיתוף בוטל: ' + (e.message || e.name), '');
+    }
+  }
+}
+function updateShareBtn(active) {
+  const btn = document.getElementById('shareBtn');
+  if (!btn) return;
+  btn.innerHTML = active ? '🖥 הפסק שיתוף' : '🖥 שתף מסך';
+  btn.classList.toggle('active-share', active);
 }
 
 async function doShareCam() {
+  const camKey = S.cid + ':cam';
+  const existing = S.streams.get(camKey);
+  if (existing) {
+    await detachTracksFromPeers('camera');
+    existing.stream.getTracks().forEach(t => t.stop());
+    S.streams.delete(camKey);
+    renderStreams();
+    updateCamBtn(false);
+    toast('מצלמה כבויה', '');
+    return;
+  }
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
     toast('מצלמה משותפת!', 'g');
-    // Show locally
-    const vid = document.getElementById('mainVideo');
-    const empty = document.getElementById('mainEmpty');
-    if (vid) { vid.srcObject = stream; vid.classList.add('active'); vid.muted = true; }
-    if (empty) empty.style.display = 'none';
-    // Send to peers
-    for (const [, p] of S.peers) {
-      if (p.conn) stream.getTracks().forEach(t => p.conn.addTrack(t, stream));
+    S.streams.set(camKey, { stream, type: 'camera', name: S.name + ' 📷' });
+    renderStreams();
+    updateCamBtn(true);
+    await attachTracksToPeers(stream, 'camera');
+    stream.getVideoTracks()[0].onended = async () => {
+      toast('המצלמה נעצרה', '');
+      await detachTracksFromPeers('camera');
+      S.streams.delete(camKey); renderStreams(); updateCamBtn(false);
+    };
+  } catch(e) {
+    if (e.name === 'NotAllowedError') {
+      toast('הרשאת מצלמה נדחתה — פתח הרשאות באתר ואפשר', 'r');
+    } else if (e.name === 'NotFoundError') {
+      toast('לא נמצאה מצלמה במחשב', 'r');
+    } else if (e.name === 'NotReadableError') {
+      toast('המצלמה בשימוש ע"י תוכנה אחרת', 'r');
+    } else {
+      toast('המצלמה לא זמינה: ' + e.name, 'r');
     }
-    stream.getVideoTracks()[0].onended = () => { toast('המצלמה נעצרה', ''); closeRv(); };
-  } catch(e) { toast('המצלמה לא זמינה או שנדחתה', 'r'); }
+  }
+}
+function updateCamBtn(active) {
+  const btn = document.getElementById('camBtn');
+  if (!btn) return;
+  btn.innerHTML = active ? '📷 עצור מצלמה' : '📷 מצלמה';
+  btn.classList.toggle('active-share', active);
 }
 
 async function doShareAudio() {
+  const audioKey = S.cid + ':audio';
+  const existing = S.streams.get(audioKey);
+  if (existing) {
+    await detachTracksFromPeers('audio');
+    existing.stream.getTracks().forEach(t => t.stop());
+    S.streams.delete(audioKey); stopVU('in');
+    updateAudioBtn(false);
+    toast('שיתוף שמע הופסק', '');
+    return;
+  }
   try {
-    const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true, systemAudio: 'include' });
+    const stream = await navigator.mediaDevices.getDisplayMedia({
+      video: true,
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false,
+        sampleRate: 48000, channelCount: 2, sampleSize: 16 },
+      systemAudio: 'include'
+    });
     const vt = stream.getVideoTracks()[0];
     if (vt) { stream.removeTrack(vt); vt.stop(); }
     if (stream.getAudioTracks().length === 0) { toast('לא נמצא אודיו', 'r'); return; }
-    toast('משתף שמע בלבד…', 'g');
+    try { await stream.getAudioTracks()[0].applyConstraints({ echoCancellation:false, noiseSuppression:false, autoGainControl:false }); } catch(e) {}
+    toast('משתף שמע (איכות מוזיקלית)', 'g');
+    S.streams.set(audioKey, { stream, type: 'audio', name: S.name + ' 🔊' });
     initVU(stream, 'in');
-    for (const [, p] of S.peers) {
-      if (p.conn) stream.getAudioTracks().forEach(t => p.conn.addTrack(t, stream));
-    }
-    stream.getAudioTracks()[0].onended = () => { toast('שיתוף השמע הסתיים', ''); stopVU('in'); };
+    updateAudioBtn(true);
+    await attachTracksToPeers(stream, 'audio');
+    // Bump Opus bitrate to 128kbps for the just-attached audio senders (music quality)
+    setTimeout(() => {
+      for (const [, p] of S.peers) {
+        if (!p.conn || !p._senderGroups?.audio?.audio) continue;
+        try {
+          const sender = p._senderGroups.audio.audio;
+          const params = sender.getParameters();
+          params.encodings = params.encodings || [{}];
+          params.encodings[0].maxBitrate = 128_000;
+          params.encodings[0].priority = 'high';
+          sender.setParameters(params);
+        } catch(e) {}
+      }
+    }, 250);
+    stream.getAudioTracks()[0].onended = async () => {
+      toast('שיתוף השמע הסתיים', '');
+      await detachTracksFromPeers('audio');
+      S.streams.delete(audioKey); stopVU('in'); updateAudioBtn(false);
+    };
   } catch(e) { toast('שיתוף שמע בוטל', ''); }
+}
+function updateAudioBtn(active) {
+  const btn = document.getElementById('shareAudioBtn');
+  if (!btn) return;
+  btn.innerHTML = active ? '🔇 עצור שמע' : '🔊 שתף שמע';
+  btn.classList.toggle('active-share', active);
 }
 
 function showRemoteStream(stream, peerId) {
-  const vid   = document.getElementById('mainVideo');
-  const empty = document.getElementById('mainEmpty');
-  if (!vid) return;
-  vid.srcObject = stream;
-  vid.classList.add('active');
-  if (empty) empty.style.display = 'none';
   const p = S.peers.get(peerId);
-  toast((p?.name || 'Peer') + ' is sharing screen', 'g');
+  const name = p?.name || 'Peer';
+  // Same peer re-sharing (or codec renegotiation) — replace their stream reference so
+  // the video element re-binds and doesn't stay stuck on the frozen old stream.
+  const existingEntry = S.streams.get(peerId);
+  if (existingEntry && existingEntry.stream !== stream) voiceDetach(peerId);
+  S.streams.set(peerId, { stream, type: 'screen', name });
+  renderStreams();
+  toast(name + ' משתף/ת מסך', 'g');
   initVU(stream, 'out');
-  stream.getTracks().forEach(t => { t.onended = () => { closeRv(); stopVU('out'); }; });
+  voiceAttach(peerId, stream);
+  // React to track mute/unmute so a peer stopping+restarting a share doesn't
+  // leave us on the frozen last frame — force a re-render + explicit .play().
+  stream.getTracks().forEach(t => {
+    t.onended = () => { S.streams.delete(peerId); renderStreams(); stopVU('out'); voiceDetach(peerId); };
+    t.onmute = () => { dlog('remote track muted: ' + peerId + '/' + t.kind); };
+    t.onunmute = () => { dlog('remote track unmuted: ' + peerId + '/' + t.kind); renderStreams(); };
+  });
+  if (stream.getAudioTracks().length && S.micStream && !S.selfMuted) maybeShowFeedbackWarning();
 }
 
 function closeRv() {
-  const vid   = document.getElementById('mainVideo');
+  S.streams.delete(S.cid);
+  S.streams.delete(S.cid + ':cam');
+  renderStreams();
+}
+
+// ── Multi-stream rendering ────────────────────────────────
+function createStreamEl(peerId, stream, name) {
+  const wrap = document.createElement('div');
+  wrap.className = 'stream-thumb';
+  wrap.dataset.peerId = peerId;
+  const vid = document.createElement('video');
+  vid.srcObject = stream;
+  vid.autoplay = true;
+  vid.playsInline = true;
+  vid.muted = peerId.startsWith(S.cid);
+  ensureVideoPlays(vid, wrap);
+  const label = document.createElement('div');
+  label.className = 'stream-label';
+  label.textContent = name || 'Peer';
+  wrap.appendChild(vid);
+  wrap.appendChild(label);
+  // Drag support
+  wrap.draggable = true;
+  wrap.ondragstart = (e) => { wrap._dragSrc = true; wrap.classList.add('dragging'); e.dataTransfer.effectAllowed = 'move'; };
+  wrap.ondragend = () => { wrap.classList.remove('dragging'); wrap._dragSrc = false; };
+  wrap.ondragover = (e) => e.preventDefault();
+  wrap.ondrop = (e) => {
+    e.preventDefault();
+    const parent = wrap.parentNode;
+    const src = parent.querySelector('.dragging');
+    if (src && src !== wrap) {
+      const srcIdx = [...parent.children].indexOf(src);
+      const tgtIdx = [...parent.children].indexOf(wrap);
+      if (srcIdx < tgtIdx) parent.insertBefore(src, wrap.nextSibling);
+      else parent.insertBefore(src, wrap);
+    }
+  };
+  return wrap;
+}
+
+function throttle(fn, ms) { let last = 0; return function(...a) { const now = Date.now(); if (now - last >= ms) { last = now; fn.apply(this, a); } }; }
+
+function renderStreams() {
+  const mainEl = document.getElementById('streamMain');
+  const thumbsEl = document.getElementById('streamThumbs');
   const empty = document.getElementById('mainEmpty');
-  if (vid) { vid.srcObject = null; vid.classList.remove('active'); }
-  if (empty) empty.style.display = '';
+  const container = document.getElementById('streamContainer');
+  if (!mainEl || !thumbsEl) return;
+
+  // Update the floating self-preview whenever streams change
+  updateSelfPreview();
+
+  // Partition streams: peer streams go in the main view, own streams into the small self-preview only
+  const peerStreamKeys = [...S.streams.keys()].filter(k => !k.startsWith(S.cid));
+
+  if (peerStreamKeys.length === 0) {
+    if (empty) empty.style.display = '';
+    if (container) container.style.display = 'none';
+    mainEl.innerHTML = '';
+    thumbsEl.innerHTML = '';
+    const mc = document.getElementById('myControls');
+    if (mc) mc.style.display = 'none';
+    return;
+  }
+  if (empty) empty.style.display = 'none';
+  if (container) container.style.display = '';
+
+  // Pick focused stream — prefer peer streams over any leftover own stream
+  if (!S.focusedStream || !S.streams.has(S.focusedStream) || S.focusedStream.startsWith(S.cid)) {
+    S.focusedStream = peerStreamKeys[0];
+  }
+
+  // Main view (only in thumbnail mode)
+  mainEl.innerHTML = '';
+  const focused = S.streams.get(S.focusedStream);
+  if (focused) {
+    // Wrap so we can overlay the "click to control" hint
+    const wrap = document.createElement('div');
+    wrap.className = 'main-video-wrap';
+    wrap.style.cssText = 'position:relative;width:100%;height:100%;display:flex';
+    const vid = document.createElement('video');
+    vid.srcObject = focused.stream;
+    vid.autoplay = true; vid.playsInline = true;
+    vid.muted = S.focusedStream.startsWith(S.cid);
+    vid.tabIndex = 0; // make focusable for keyboard events
+    vid.style.cssText = 'width:100%;height:100%;object-fit:contain;background:#000';
+    wrap.appendChild(vid);
+    ensureVideoPlays(vid, wrap);
+    // Show hint only when this isn't our own stream and the guest can send input
+    const isSelf = S.focusedStream.startsWith(S.cid);
+    if (!isSelf && (MY.mouse || MY.keyboard)) {
+      const hint = document.createElement('div');
+      hint.className = 'remote-hint';
+      hint.innerHTML = '<div class="remote-hint-inner">👆 לחץ כדי לשלוט על ה-DAW</div>';
+      wrap.appendChild(hint);
+      // Hide hint after first interaction
+      vid.addEventListener('focus', () => hint.style.display = 'none', { once:true });
+      vid.addEventListener('mousedown', () => hint.style.display = 'none', { once:true });
+    }
+    mainEl.appendChild(wrap);
+
+    // Remote control event listeners — proper drag support
+    let remoteMouseDown = false;
+    const relXY = (e) => {
+      const r = vid.getBoundingClientRect();
+      return { x: (e.clientX - r.left) / r.width, y: (e.clientY - r.top) / r.height };
+    };
+    vid.addEventListener('mousedown', (e) => {
+      if (!MY.mouse) return;
+      remoteMouseDown = true;
+      const p = relXY(e);
+      broadcast({ type:'remote:input', input:'mouse', action:'mousedown',
+        x:p.x, y:p.y, button:e.button, from:S.cid, fromName:S.name });
+    });
+    vid.addEventListener('mouseup', (e) => {
+      if (!remoteMouseDown) return;
+      remoteMouseDown = false;
+      if (!MY.mouse) return;
+      const p = relXY(e);
+      broadcast({ type:'remote:input', input:'mouse', action:'mouseup',
+        x:p.x, y:p.y, button:e.button, from:S.cid });
+    });
+    vid.addEventListener('mouseleave', (e) => {
+      // Still send a mouseup so the host doesn't have a stuck-held button.
+      if (!remoteMouseDown) return;
+      remoteMouseDown = false;
+      if (!MY.mouse) return;
+      const p = relXY(e);
+      broadcast({ type:'remote:input', input:'mouse', action:'mouseup',
+        x:p.x, y:p.y, button:0, from:S.cid });
+    });
+    vid.addEventListener('mousemove', throttle((e) => {
+      if (!MY.mouse) return;
+      const p = relXY(e);
+      broadcast({ type:'remote:input', input:'mouse', action:'move',
+        x:p.x, y:p.y, from:S.cid });
+    }, 30));
+    vid.addEventListener('contextmenu', (e) => {
+      if (!MY.mouse) return;
+      e.preventDefault();
+    });
+    vid.addEventListener('wheel', throttle((e) => {
+      if (!MY.mouse) return;
+      e.preventDefault();
+      broadcast({ type:'remote:input', input:'mouse', action:'scroll',
+        dx: -Math.sign(e.deltaX) * 3, dy: -Math.sign(e.deltaY) * 3, from:S.cid });
+    }, 30));
+    vid.addEventListener('keydown', (e) => {
+      if (!MY.keyboard) return;
+      // If user's keyboard is mapped to MIDI right now, don't hijack it for remote control.
+      if (PIANO.kbdOn && PIANO.keyMap[e.key?.toLowerCase()] !== undefined) return;
+      e.preventDefault();
+      broadcast({ type:'remote:input', input:'keyboard', action:'keydown',
+        key: e.key, code: e.code,
+        shift: e.shiftKey, ctrl: e.ctrlKey, alt: e.altKey, meta: e.metaKey,
+        from: S.cid, fromName: S.name });
+    });
+    vid.addEventListener('keyup', (e) => {
+      if (!MY.keyboard) return;
+      if (PIANO.kbdOn && PIANO.keyMap[e.key?.toLowerCase()] !== undefined) return;
+      broadcast({ type:'remote:input', input:'keyboard', action:'keyup',
+        key: e.key, code: e.code,
+        shift: e.shiftKey, ctrl: e.ctrlKey, alt: e.altKey, meta: e.metaKey,
+        from: S.cid });
+    });
+
+    const lbl = document.createElement('div');
+    lbl.className = 'stream-label';
+    lbl.textContent = focused.name;
+    mainEl.appendChild(lbl);
+  }
+
+  // Thumbnails — peer streams only (own streams are shown in the self-preview overlay)
+  thumbsEl.innerHTML = '';
+  for (const [pid, s] of S.streams) {
+    if (pid.startsWith(S.cid)) continue;
+    const thumb = createStreamEl(pid, s.stream, s.name);
+    if (pid === S.focusedStream) thumb.classList.add('active');
+    thumb.onclick = () => { S.focusedStream = pid; renderStreams(); };
+    thumbsEl.appendChild(thumb);
+  }
+
+  // Hide thumbs sidebar if only 1 stream (in thumbnail mode)
+  const isGrid = container?.classList.contains('grid-mode');
+  thumbsEl.style.display = (!isGrid && S.streams.size <= 1) ? 'none' : '';
+
+  // Hide my-controls when no streams are active (remote control is meaningless without video)
+  const mc = document.getElementById('myControls');
+  if (mc) mc.style.display = S.streams.size > 0 ? '' : 'none';
+}
+
+function toggleStreamView() {
+  const c = document.getElementById('streamContainer');
+  if (!c) return;
+  const isGrid = c.classList.toggle('grid-mode');
+  const btn = document.getElementById('viewToggle');
+  if (btn) { btn.textContent = isGrid ? '⊡' : '⊞'; btn.classList.toggle('active-tool', isGrid); }
+  renderStreams();
+}
+
+async function toggleSelfMute() {
+  const hasMicStream = [...S.streams.keys()].some(k => {
+    if (!k.startsWith(S.cid)) return false;
+    const entry = S.streams.get(k);
+    return entry.stream.getAudioTracks().length > 0;
+  });
+
+  if (!hasMicStream && !S.micStream) {
+    try {
+      // Force echo cancellation + noise suppression + auto gain for the mic —
+      // these are ON by default in most browsers, but be explicit so we don't
+      // accidentally inherit the OFF-for-music settings from getDisplayMedia.
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        video: false
+      });
+      S.micStream = stream;
+      S.selfMuted = false;
+      // Use the sender-lifecycle helper so a subsequent mute→unmute reuses the
+      // same RTCRtpSender via replaceTrack instead of stacking new senders.
+      await attachTracksToPeers(stream, 'mic');
+      const btn = document.getElementById('muteBtn');
+      if (btn) { btn.textContent = '🎤'; btn.classList.remove('muted-state'); btn.title = 'השתק'; }
+      voiceAttach(S.cid || 'self', stream);
+      toast('מיקרופון פעיל', 'g');
+      maybeShowFeedbackWarning();
+      return;
+    } catch (e) {
+      toast('לא ניתן לפתוח מיקרופון', 'r');
+      return;
+    }
+  }
+
+  S.selfMuted = !S.selfMuted;
+  for (const [key, entry] of S.streams) {
+    if (key.startsWith(S.cid)) {
+      entry.stream.getAudioTracks().forEach(t => { t.enabled = !S.selfMuted; });
+    }
+  }
+  if (S.micStream) S.micStream.getAudioTracks().forEach(t => { t.enabled = !S.selfMuted; });
+  for (const [, p] of S.peers) {
+    if (p.conn) {
+      p.conn.getSenders().forEach(sender => {
+        if (sender.track?.kind === 'audio') sender.track.enabled = !S.selfMuted;
+      });
+    }
+  }
+  const btn = document.getElementById('muteBtn');
+  if (btn) {
+    btn.textContent = S.selfMuted ? '🔇' : '🎤';
+    btn.classList.toggle('muted-state', S.selfMuted);
+    btn.title = S.selfMuted ? 'בטל השתקה' : 'השתק';
+  }
+  toast(S.selfMuted ? 'מושתק' : 'מיקרופון פעיל', S.selfMuted ? '' : 'g');
+}
+
+// ══════════════════════════════════════════════════════════
+// Adaptive bitrate — measure loss/RTT per peer, ramp video down
+// under stress and back up when things clear
+// ══════════════════════════════════════════════════════════
+const BW_TIERS = [500_000, 1_000_000, 2_500_000, 4_500_000]; // bits/s
+function startAdaptiveBitrate(pc, peerId) {
+  let tier = BW_TIERS.length - 1;
+  let lastPacketsLost = 0, lastPacketsSent = 0;
+  const interval = setInterval(async () => {
+    if (!pc || pc.connectionState === 'closed' || pc.connectionState === 'failed') {
+      clearInterval(interval); return;
+    }
+    try {
+      const stats = await pc.getStats();
+      let sent = 0, lost = 0, rtt = 0, hadOutbound = false;
+      stats.forEach(r => {
+        if (r.type === 'outbound-rtp' && r.kind === 'video') {
+          sent = r.packetsSent || 0; hadOutbound = true;
+        }
+        if (r.type === 'remote-inbound-rtp' && r.kind === 'video') {
+          lost = r.packetsLost || 0;
+          rtt = r.roundTripTime || 0;
+        }
+      });
+      if (!hadOutbound) return;
+      const dSent = Math.max(1, sent - lastPacketsSent);
+      const dLost = Math.max(0, lost - lastPacketsLost);
+      lastPacketsSent = sent; lastPacketsLost = lost;
+      const lossRate = dLost / dSent;
+      // Decide direction
+      let target = tier;
+      if (lossRate > 0.05 || rtt > 0.3) target = Math.max(0, tier - 1);
+      else if (lossRate < 0.005 && rtt < 0.15 && tier < BW_TIERS.length - 1) target = tier + 1;
+      if (target !== tier) {
+        tier = target;
+        applyVideoBitrate(pc, BW_TIERS[tier]);
+        const p = S.peers.get(peerId);
+        if (p) p.bwTier = tier;
+        updatePeerAvatars();
+        dlog('BW → ' + peerId + ' tier=' + tier + ' (' + Math.round(BW_TIERS[tier]/1000) + 'kbps) loss=' + (lossRate*100).toFixed(1) + '% rtt=' + Math.round(rtt*1000) + 'ms');
+      }
+    } catch (e) {}
+  }, 3000);
+}
+
+function applyVideoBitrate(pc, maxBitrate) {
+  pc.getSenders().forEach(sender => {
+    if (sender.track?.kind !== 'video') return;
+    try {
+      const params = sender.getParameters();
+      params.encodings = params.encodings && params.encodings.length ? params.encodings : [{}];
+      for (const enc of params.encodings) enc.maxBitrate = maxBitrate;
+      sender.setParameters(params);
+    } catch (e) {}
+  });
+}
+
+// ══════════════════════════════════════════════════════════
+// Voice Activity — glow avatar for whichever peer is speaking
+// ══════════════════════════════════════════════════════════
+const VOICE = { analyzers: new Map(), rafId: null, ctx: null };
+
+function voiceEnsureCtx() {
+  if (VOICE.ctx) return VOICE.ctx;
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return null;
+  VOICE.ctx = new AC();
+  return VOICE.ctx;
+}
+
+function voiceAttach(peerId, stream) {
+  if (!stream || !stream.getAudioTracks || !stream.getAudioTracks().length) return;
+  const ctx = voiceEnsureCtx();
+  if (!ctx) return;
+  // Replace any existing analyzer for this peer (and disconnect its nodes)
+  voiceDetach(peerId);
+  try {
+    const src = ctx.createMediaStreamSource(stream);
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 512;
+    analyser.smoothingTimeConstant = 0.5;
+    src.connect(analyser);
+    // Store both nodes so we can disconnect them on detach — otherwise Chromium
+    // keeps them alive for the AudioContext's lifetime and leaks per re-share.
+    VOICE.analyzers.set(peerId, { src, analyser, buffer: new Uint8Array(analyser.frequencyBinCount) });
+    if (!VOICE.rafId) voiceTick();
+  } catch (e) {}
+}
+
+function voiceDetach(peerId) {
+  const entry = VOICE.analyzers.get(peerId);
+  if (entry) {
+    try { entry.src?.disconnect(); } catch (e) {}
+    try { entry.analyser?.disconnect(); } catch (e) {}
+  }
+  VOICE.analyzers.delete(peerId);
+  const el = document.querySelector('[data-peer-id="' + peerId + '"]');
+  if (el) el.classList.remove('speaking', 'speaking-loud');
+}
+
+function voiceTick() {
+  let anyActive = false;
+  for (const [peerId, { analyser, buffer }] of VOICE.analyzers) {
+    analyser.getByteFrequencyData(buffer);
+    // Focus on speech band (~85Hz to ~3kHz — bins 1..60 at 22kHz sample rate / 256 bins)
+    let sum = 0, count = 0;
+    for (let i = 1; i < Math.min(64, buffer.length); i++) { sum += buffer[i]; count++; }
+    const avg = sum / count;
+    // Update avatar visual
+    const av = document.querySelector('[data-peer-id="' + peerId + '"]');
+    if (av) {
+      const speaking = avg > 22;
+      const loud = avg > 55;
+      av.classList.toggle('speaking', speaking && !loud);
+      av.classList.toggle('speaking-loud', loud);
+    }
+    if (avg > 10) anyActive = true;
+  }
+  // Keep ticking as long as we have analyzers
+  if (VOICE.analyzers.size) VOICE.rafId = requestAnimationFrame(voiceTick);
+  else VOICE.rafId = null;
+}
+
+// ══════════════════════════════════════════════════════════
+// Lecture mode — session-level role, class control, raise-hand
+// ══════════════════════════════════════════════════════════
+function isLecture() { return S.mode === 'lecture'; }
+function isLecturer() { return isLecture() && S.peerNumber === 1; }
+function isStudent()  { return isLecture() && S.peerNumber !== 1; }
+
+function applySessionMode() {
+  document.body.classList.toggle('is-lecture', isLecture());
+  document.body.classList.toggle('is-lecturer', isLecturer());
+  document.body.classList.toggle('is-student', isStudent());
+  const raiseBtn = document.getElementById('raiseHandBtn');
+  const classBtn = document.getElementById('classCtrlBtn');
+  const endBtn = document.getElementById('endArchiveBtn');
+  if (raiseBtn) raiseBtn.style.display = isStudent() ? '' : 'none';
+  if (classBtn) classBtn.style.display = isLecturer() ? '' : 'none';
+  if (endBtn) endBtn.style.display = isLecturer() ? '' : 'none';
+  if (isStudent()) {
+    // Auto-mute + lock permissions; sends muted, no input
+    S.selfMuted = true;
+    MY.mouse = false; MY.keyboard = false; MY.midi = false;
+    document.getElementById('myMouse')?.classList.remove('active');
+    document.getElementById('myKeys')?.classList.remove('active');
+    const muteBtn = document.getElementById('muteBtn');
+    if (muteBtn) { muteBtn.textContent = '🔇'; muteBtn.classList.add('muted-state'); }
+    toast('מצב הרצאה — משתקים אותך עד שהמרצה יתן רשות', '');
+  }
+}
+
+function toggleRaiseHand() {
+  if (!isStudent()) return;
+  const wasRaised = document.body.classList.toggle('hand-up');
+  const btn = document.getElementById('raiseHandBtn');
+  if (btn) btn.classList.toggle('active', wasRaised);
+  broadcast({ type: wasRaised ? 'hand:raise' : 'hand:lower', from: S.cid, fromName: S.name });
+  toast(wasRaised ? '✋ הרמת יד' : 'הורדת יד', wasRaised ? 'g' : '');
+}
+
+function showClassControl() {
+  if (!isLecturer()) return;
+  const students = [];
+  for (const [pid, p] of S.peers) {
+    students.push({ id: pid, name: p.name || 'תלמיד', color: p.color || '#8b5cf6',
+      handRaised: S.handsRaised.has(pid),
+      perms: p.perms || { mouse:false, keyboard:false, midi:false, mic:false } });
+  }
+  const rows = students.map(s => \`
+    <div class="cc-row" style="border-inline-start:4px solid \${s.color}">
+      <div class="cc-name">\${s.handRaised ? '✋ ' : ''}\${esc(s.name)}</div>
+      <div class="cc-toggles">
+        <button class="cc-toggle \${s.perms.mic ? 'on' : ''}" onclick="classToggle('\${s.id}','mic')">🎤</button>
+        <button class="cc-toggle \${s.perms.mouse ? 'on' : ''}" onclick="classToggle('\${s.id}','mouse')">🖱</button>
+        <button class="cc-toggle \${s.perms.keyboard ? 'on' : ''}" onclick="classToggle('\${s.id}','keyboard')">⌨</button>
+        <button class="cc-toggle \${s.perms.midi ? 'on' : ''}" onclick="classToggle('\${s.id}','midi')">🎹</button>
+      </div>
+    </div>
+  \`).join('');
+  const html = \`
+    <div class="modal-backdrop" id="ccBackdrop" onclick="if(event.target===this)closeClassControl()">
+      <div class="modal-panel" style="max-width:520px" dir="rtl">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+          <h3 style="margin:0;flex:1">🎓 שליטת הרצאה</h3>
+          <button onclick="closeClassControl()" style="background:none;border:none;color:var(--mid);font-size:18px;cursor:pointer">✕</button>
+        </div>
+        <div style="display:flex;gap:6px;margin-bottom:12px">
+          <button class="btn-primary" style="flex:1;font-size:12px" onclick="classMuteAll(true)">🔇 השתק את כולם</button>
+          <button class="btn-primary" style="flex:1;font-size:12px" onclick="classMuteAll(false)">🎤 פתח את כולם</button>
+        </div>
+        <div class="cc-list">\${rows || '<div style="font-size:12px;color:var(--dim);padding:12px;text-align:center">אין תלמידים בסשן</div>'}</div>
+        <div style="font-size:11px;color:var(--dim);margin-top:10px">לחץ על אייקון כדי לתת/לקחת הרשאה לתלמיד</div>
+      </div>
+    </div>
+  \`;
+  document.getElementById('ccBackdrop')?.remove();
+  document.body.insertAdjacentHTML('beforeend', html);
+}
+function closeClassControl() { document.getElementById('ccBackdrop')?.remove(); }
+
+function classToggle(peerId, perm) {
+  const p = S.peers.get(peerId);
+  if (!p) return;
+  p.perms = p.perms || { mouse:false, keyboard:false, midi:false, mic:false };
+  p.perms[perm] = !p.perms[perm];
+  broadcast({ type: 'class:perm', targetId: peerId, perm, value: p.perms[perm], from: S.cid });
+  // Refresh open modal
+  showClassControl();
+}
+
+function classMuteAll(muted) {
+  broadcast({ type: 'class:mute-all', muted, from: S.cid });
+  for (const [pid, p] of S.peers) {
+    p.perms = p.perms || {};
+    p.perms.mic = !muted;
+  }
+  toast(muted ? '🔇 כולם הושתקו' : '🎤 כולם נפתחו', 'g');
+  showClassControl();
+}
+
+async function endAndArchive() {
+  if (!isLecturer()) return;
+  if (!confirm('לסיים את ההרצאה + לשמור את כל ההקלטות ל-Drive ולהתחיל תמלול?')) return;
+
+  toast('סיום הרצאה — עוצר הקלטות...', '');
+  if (isRecording()) stopSessionRecord();
+  // Give recorders a moment to finalize their blobs
+  await new Promise(r => setTimeout(r, 1500));
+
+  const clipsAtSnapshot = [...(S.clips || [])];
+  if (!clipsAtSnapshot.length) {
+    toast('אין הקלטות לארכב', '');
+    leaveSession();
+    return;
+  }
+
+  // Upload to Drive if enabled
+  let cfg = null;
+  try { cfg = await (await fetch('/api/config')).json(); } catch(e) {}
+  if (cfg?.driveEnabled) {
+    toast('מעלה ל-Drive...', '');
+    try { await uploadAllClipsToDrive(); } catch(e) { toast('שגיאה בהעלאה: ' + e.message, 'r'); }
+  }
+
+  // Transcribe if enabled — audio clips only (mic + audio-share)
+  if (cfg?.transcribeEnabled) {
+    const audioClips = clipsAtSnapshot.filter(c => /me-mic|-audio/.test(c.name));
+    if (audioClips.length) {
+      toast('מתמלל ' + audioClips.length + ' קטעי שמע...', '');
+      for (const c of audioClips) {
+        try {
+          const r = await fetch('/api/transcribe?cid=' + encodeURIComponent(S.cid || ''), { method:'POST', headers:{'Content-Type':'audio/webm'}, body: c.blob });
+          const d = await r.json();
+          if (d.ok) c.transcript = d.text;
+        } catch(e) {}
+      }
+    }
+  }
+
+  toast('הארכוב הסתיים — נסגר', 'g');
+  setTimeout(() => leaveSession(), 800);
 }
 
 // ══════════════════════════════════════════════════════════
@@ -2151,34 +3667,327 @@ function toggleMyCtrl(key) {
   const cls = key === 'midi' ? 'active-g' : 'active';
   const btn = document.getElementById(ids[key]);
   if (btn) btn.classList.toggle(cls, MY[key]);
-  toast((MY[key] ? '✓ Sending ' : '✗ Stopped sending ') + key, MY[key] ? 'g' : '');
+  const labels = { mouse:'עכבר', keyboard:'מקלדת', midi:'MIDI' };
+  toast((MY[key] ? '✓ שולח ' : '✗ הפסקת שליחת ') + (labels[key]||key), MY[key] ? 'g' : '');
 }
 
 // ══════════════════════════════════════════════════════════
 // Virtual Piano + MIDI
 // ══════════════════════════════════════════════════════════
 const PIANO = {
-  octave: 4,   // base octave
+  octave: 4,          // base octave (Ableton default is 3, but 4 sits in the sweet spot for laptop mics)
+  velocity: 100,      // note velocity (0-127)
   active: new Set(),
-  // computer keyboard → semitone offset from C (lower row = octave, upper row = octave+1)
+  kbdOn: false,       // computer-keyboard-as-MIDI toggle (like Ableton's M)
+  size: Number(localStorage.getItem('ss_piano_size') || 2),  // octaves: 2/4/7
+  // Ableton Computer MIDI Keyboard mapping — semitone offset from C
+  // Lower octave: A row + upper row for black keys
   keyMap: {
-    'z':0,'s':1,'x':2,'d':3,'c':4,'v':5,'g':6,'b':7,'h':8,'n':9,'j':10,'m':11,
-    'q':12,'2':13,'w':14,'3':15,'e':16,'r':17,'5':18,'t':19,'6':20,'y':21,'7':22,'u':23,'i':24
+    'a':0, 'w':1, 's':2, 'e':3, 'd':4, 'f':5, 't':6, 'g':7, 'y':8, 'h':9, 'u':10, 'j':11,
+    'k':12, 'o':13, 'l':14, 'p':15, ';':16, "'":17
   }
 };
+
+// ══════════════════════════════════════════════════════════
+// Self-preview — small floating card showing what YOU are broadcasting
+// (own camera / own screen), so you don't take over the main viewer
+// with your own feed.
+// ══════════════════════════════════════════════════════════
+function updateSelfPreview() {
+  const ownStreams = [...S.streams.entries()].filter(([k]) => k.startsWith(S.cid));
+  let container = document.getElementById('selfPreview');
+  if (!ownStreams.length) { if (container) container.remove(); return; }
+  if (!container) {
+    container = document.createElement('div');
+    container.id = 'selfPreview';
+    document.body.appendChild(container);
+  }
+  container.innerHTML = '';
+  for (const [key, s] of ownStreams) {
+    const isAudioOnly = key.endsWith(':audio');
+    if (isAudioOnly) continue; // no video to preview
+    const wrap = document.createElement('div');
+    wrap.className = 'self-preview-tile';
+    const vid = document.createElement('video');
+    vid.srcObject = s.stream;
+    vid.autoplay = true; vid.playsInline = true; vid.muted = true;
+    const lbl = document.createElement('div');
+    lbl.className = 'self-preview-lbl';
+    lbl.textContent = key.endsWith(':cam') ? '📷 המצלמה שלך' :
+                      key.startsWith('extra:') ? '🖥 מסך נוסף' : '🖥 המסך שלך';
+    wrap.appendChild(vid);
+    wrap.appendChild(lbl);
+    container.appendChild(wrap);
+  }
+}
+
+// ══════════════════════════════════════════════════════════
+// Headphone / feedback warning — asks the user to plug in headphones
+// the first time they enable BOTH microphone AND some incoming audio,
+// which is the exact combination that produces speaker→mic feedback.
+// ══════════════════════════════════════════════════════════
+function maybeShowFeedbackWarning() {
+  if (localStorage.getItem('ss_hp_ack_v1')) return;
+  const hasOwnMic = !!S.micStream && !S.selfMuted;
+  const hasIncomingAudio = [...S.streams.entries()].some(([k, s]) =>
+    !k.startsWith(S.cid) && s.stream.getAudioTracks().some(t => t.enabled)
+  );
+  if (!hasOwnMic || !hasIncomingAudio) return;
+  const html = \`
+    <div class="modal-backdrop" id="hpBackdrop" onclick="if(event.target===this)dismissHeadphoneWarning()">
+      <div class="modal-panel" style="max-width:420px" dir="rtl">
+        <h3 style="margin:0 0 10px">🎧 חבר אוזניות</h3>
+        <p style="font-size:13px;color:var(--mid);line-height:1.6;margin:0 0 16px">
+          המיקרופון וגם השמע של המשתתפים פועלים במקביל.<br>
+          <b>בלי אוזניות תוך שניות יתחיל פידבק ורעש מטורף</b> — המיקרופון קולט את מה שהרמקולים משמיעים ושולח את זה חזרה.
+        </p>
+        <p style="font-size:12px;color:var(--dim);line-height:1.5;margin:0 0 18px">
+          חבר אוזניות עכשיו, או השתק את עצמך (🎤) עד שיהיו לך אוזניות.
+        </p>
+        <div style="display:flex;gap:8px">
+          <button onclick="dismissHeadphoneWarning()" class="btn-primary" style="flex:1">חיברתי אוזניות</button>
+          <button onclick="dismissHeadphoneWarning();toggleSelfMute()" class="btn-primary" style="flex:1;background:#f04438">השתק אותי</button>
+        </div>
+      </div>
+    </div>
+  \`;
+  document.getElementById('hpBackdrop')?.remove();
+  document.body.insertAdjacentHTML('beforeend', html);
+}
+function dismissHeadphoneWarning() {
+  localStorage.setItem('ss_hp_ack_v1', '1');
+  document.getElementById('hpBackdrop')?.remove();
+}
+
+// ══════════════════════════════════════════════════════════
+// Web Audio piano synth — richer local sound than a basic sine stack
+// Supports per-user mode: synth (built-in) / off (silent, e.g. when
+// listening to a real Ableton preset via the audio share stream)
+// ══════════════════════════════════════════════════════════
+const AUDIO = {
+  ctx: null, master: null, reverb: null, voices: new Map(),
+  mode: (typeof localStorage !== 'undefined' && localStorage.getItem('ss_sound_mode')) || 'synth', // 'synth' | 'off'
+  volume: (typeof localStorage !== 'undefined' ? Number(localStorage.getItem('ss_sound_vol') || 0.5) : 0.5)
+};
+
+function audioInit() {
+  if (AUDIO.ctx) return;
+  const AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) return;
+  AUDIO.ctx = new AC();
+  AUDIO.master = AUDIO.ctx.createGain();
+  AUDIO.master.gain.value = AUDIO.volume;
+  // Body resonance chain (light room feel)
+  const wet = AUDIO.ctx.createGain(); wet.gain.value = 0.18;
+  const delay = AUDIO.ctx.createDelay(0.15); delay.delayTime.value = 0.055;
+  const feedback = AUDIO.ctx.createGain(); feedback.gain.value = 0.28;
+  const filter = AUDIO.ctx.createBiquadFilter(); filter.type = 'lowpass'; filter.frequency.value = 3600;
+  delay.connect(feedback); feedback.connect(filter); filter.connect(delay);
+  delay.connect(wet); wet.connect(AUDIO.master);
+  // Hard limiter before destination so 30 lecture students hammering the
+  // shared piano can't sum past 0 dBFS and clip / pop.
+  const limiter = AUDIO.ctx.createDynamicsCompressor();
+  limiter.threshold.value = -6;
+  limiter.knee.value = 0;
+  limiter.ratio.value = 20;
+  limiter.attack.value = 0.003;
+  limiter.release.value = 0.1;
+  AUDIO.master.connect(limiter);
+  limiter.connect(AUDIO.ctx.destination);
+  AUDIO.reverb = { input: delay };
+  AUDIO.limiter = limiter;
+}
+
+function setPianoSoundMode(mode) {
+  AUDIO.mode = (mode === 'off') ? 'off' : 'synth';
+  try { localStorage.setItem('ss_sound_mode', AUDIO.mode); } catch(e) {}
+  document.querySelectorAll('.snd-mode-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === AUDIO.mode));
+  // If switching off, kill any ringing voices immediately
+  if (AUDIO.mode === 'off') { for (const n of [...AUDIO.voices.keys()]) stopPianoNote(n); }
+}
+
+function setPianoVolume(v) {
+  AUDIO.volume = Math.max(0, Math.min(1, Number(v) || 0));
+  try { localStorage.setItem('ss_sound_vol', String(AUDIO.volume)); } catch(e) {}
+  if (AUDIO.master) AUDIO.master.gain.setTargetAtTime(AUDIO.volume, AUDIO.ctx.currentTime, 0.02);
+  const label = document.getElementById('sndVolLbl');
+  if (label) label.textContent = Math.round(AUDIO.volume * 100) + '%';
+}
+
+function midiToFreq(note) {
+  return 440 * Math.pow(2, (note - 69) / 12);
+}
+
+function playPianoNote(note, velocity) {
+  if (AUDIO.mode === 'off') return; // user opted for pure MIDI passthrough
+  audioInit();
+  if (!AUDIO.ctx) return;
+  if (AUDIO.ctx.state === 'suspended') AUDIO.ctx.resume();
+
+  stopPianoNote(note);
+
+  // Voice cap — never let held-key spam or a bug pile up more than 12 concurrent notes
+  const MAX_VOICES = 12;
+  if (AUDIO.voices.size >= MAX_VOICES) {
+    const oldest = AUDIO.voices.keys().next().value;
+    stopPianoNote(oldest);
+  }
+
+  const freq = midiToFreq(note);
+  const vel = Math.pow((velocity || 100) / 127, 0.8); // touch curve — small nuance
+  const now = AUDIO.ctx.currentTime;
+
+  // Master voice bus
+  const bus = AUDIO.ctx.createGain();
+  bus.gain.value = 0;
+  bus.connect(AUDIO.master);
+  if (AUDIO.reverb) bus.connect(AUDIO.reverb.input);
+
+  // Piano-like envelope: instant hammer strike → fast initial decay → slow sustain-decay
+  // Lower notes decay slower (mimics longer bass strings).
+  const decayScale = 1 + Math.max(0, (60 - note)) * 0.02;
+  bus.gain.setValueAtTime(0, now);
+  bus.gain.linearRampToValueAtTime(vel * 1.0, now + 0.003);
+  bus.gain.exponentialRampToValueAtTime(vel * 0.4, now + 0.12);
+  bus.gain.exponentialRampToValueAtTime(vel * 0.12, now + 1.4 * decayScale);
+  bus.gain.exponentialRampToValueAtTime(0.0005, now + 4.5 * decayScale);
+
+  const oscs = [];
+  // Fundamental — sine with slight second-osc detune for chorus body
+  const partials = [
+    { type: 'sine',     mult: 1.000, amp: 1.00 },
+    { type: 'sine',     mult: 1.003, amp: 0.55 }, // detuned for beating / body
+    { type: 'triangle', mult: 2.000, amp: 0.30 },
+    { type: 'sine',     mult: 3.000, amp: 0.20 },
+    { type: 'sine',     mult: 4.010, amp: 0.10 }, // slight inharmonicity
+    { type: 'sine',     mult: 5.020, amp: 0.06 }
+  ];
+  const partialGain = AUDIO.ctx.createGain();
+  partialGain.gain.value = 0.7;
+  // Per-note filter that tracks pitch and slightly opens on velocity
+  const filt = AUDIO.ctx.createBiquadFilter();
+  filt.type = 'lowpass';
+  filt.frequency.value = Math.min(11000, freq * 8 + vel * 3000);
+  filt.Q.value = 0.6;
+  partialGain.connect(filt); filt.connect(bus);
+
+  for (const p of partials) {
+    const o = AUDIO.ctx.createOscillator();
+    o.type = p.type;
+    o.frequency.value = freq * p.mult;
+    const g = AUDIO.ctx.createGain();
+    g.gain.value = p.amp;
+    o.connect(g); g.connect(partialGain);
+    o.start(now);
+    oscs.push({ o, g });
+  }
+
+  // Hammer noise burst (filtered noise, ~15ms)
+  const noiseBuf = AUDIO.ctx.createBuffer(1, AUDIO.ctx.sampleRate * 0.02, AUDIO.ctx.sampleRate);
+  const nd = noiseBuf.getChannelData(0);
+  for (let i = 0; i < nd.length; i++) nd[i] = (Math.random() * 2 - 1) * (1 - i / nd.length);
+  const noise = AUDIO.ctx.createBufferSource();
+  noise.buffer = noiseBuf;
+  const noiseGain = AUDIO.ctx.createGain();
+  noiseGain.gain.value = 0.12 * vel;
+  const noiseFilt = AUDIO.ctx.createBiquadFilter();
+  noiseFilt.type = 'bandpass';
+  noiseFilt.frequency.value = Math.min(6000, freq * 3);
+  noiseFilt.Q.value = 1.5;
+  noise.connect(noiseFilt); noiseFilt.connect(noiseGain); noiseGain.connect(bus);
+  noise.start(now);
+
+  AUDIO.voices.set(note, { gain: bus, oscs });
+}
+
+function stopPianoNote(note) {
+  const v = AUDIO.voices.get(note);
+  if (!v) return;
+  const now = AUDIO.ctx.currentTime;
+  try {
+    v.gain.gain.cancelScheduledValues(now);
+    v.gain.gain.setValueAtTime(v.gain.gain.value, now);
+    // Piano release: quick but not abrupt (mimics damper pedal off)
+    v.gain.gain.exponentialRampToValueAtTime(0.0005, now + 0.35);
+    v.oscs.forEach(({o}) => o.stop(now + 0.4));
+  } catch (e) {}
+  AUDIO.voices.delete(note);
+}
+
+// ══════════════════════════════════════════════════════════
+// Central note pipeline — every input source flows through here.
+// source='local' → play locally + broadcast to peers
+// source='remote' → play locally + highlight in peer color, don't rebroadcast
+// ══════════════════════════════════════════════════════════
+function handleNote(action, note, opts) {
+  opts = opts || {};
+  const velocity = opts.velocity || 100;
+  const source = opts.source || 'local';
+  const peerColor = opts.peerColor || '#8b5cf6';
+  const peerName = opts.peerName || '';
+  const channel = opts.channel || 0;
+
+  if (action === 'noteon') {
+    playPianoNote(note, velocity);
+    highlightKey(note, true, peerColor, peerName);
+    if (source === 'local' && MY.midi) {
+      broadcast({ type:'remote:midi', action:'noteon', note, velocity, channel,
+        from:S.cid, fromName:S.name });
+    }
+  } else if (action === 'noteoff') {
+    stopPianoNote(note);
+    highlightKey(note, false);
+    if (source === 'local' && MY.midi) {
+      broadcast({ type:'remote:midi', action:'noteoff', note, velocity:0, channel,
+        from:S.cid, fromName:S.name });
+    }
+  }
+}
+
+function highlightKey(note, on, color, peerName) {
+  const el = document.querySelector('[data-note="' + note + '"]');
+  if (!el) return;
+  if (on) {
+    el.classList.add('on');
+    if (color) el.style.background = color;
+    if (peerName) el.setAttribute('data-peer', peerName.slice(0, 8));
+  } else {
+    el.classList.remove('on');
+    el.style.background = '';
+    el.removeAttribute('data-peer');
+  }
+}
 
 function togglePiano() {
   const w = document.getElementById('pianoWrap');
   const btn = document.getElementById('pianoBtn');
   if (!w) return;
   const open = w.classList.toggle('open');
-  if (btn) btn.style.background = open ? 'var(--accentD)' : '';
-  if (open && !w.dataset.built) { buildPianoKeys(); w.dataset.built = '1'; }
+  if (btn) btn.classList.toggle('active', open);
+  if (open) {
+    audioInit(); // unlock audio on user gesture
+    if (AUDIO.ctx?.state === 'suspended') AUDIO.ctx.resume();
+    if (!w.dataset.built) { buildPianoKeys(); w.dataset.built = '1'; }
+    // Reflect persisted sound-mode + volume state in the UI
+    document.querySelectorAll('.snd-mode-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === AUDIO.mode));
+    const vol = document.getElementById('sndVol');
+    if (vol) vol.value = String(Math.round(AUDIO.volume * 100));
+    const vlbl = document.getElementById('sndVolLbl');
+    if (vlbl) vlbl.textContent = Math.round(AUDIO.volume * 100) + '%';
+  }
 }
 
 function pianoOctave(dir) {
   PIANO.octave = Math.max(0, Math.min(8, PIANO.octave + dir));
-  document.getElementById('pianoOctLbl').textContent = 'C' + PIANO.octave;
+  const lbl = document.getElementById('pianoOctLbl');
+  if (lbl) lbl.textContent = 'C' + PIANO.octave;
+  buildPianoKeys();
+}
+
+function setPianoSize(octaves) {
+  PIANO.size = Math.max(1, Math.min(7, octaves));
+  try { localStorage.setItem('ss_piano_size', String(PIANO.size)); } catch(e) {}
+  releaseAllNotes(); // avoid stuck highlights when re-rendering keys
   buildPianoKeys();
 }
 
@@ -2186,10 +3995,17 @@ function buildPianoKeys() {
   const el = document.getElementById('pianoKeys');
   if (!el) return;
   el.innerHTML = '';
-  // 2 octaves starting from PIANO.octave
-  const layout = [0,null,1,null,2,3,null,4,null,5,null,6]; // null = black key gap
-  const noteNames = ['C','','D','','E','F','','G','','A','','B'];
-  for (let oct = 0; oct < 2; oct++) {
+  // Reflect current size choice in the picker
+  document.querySelectorAll('.piano-size-btn').forEach(b => {
+    b.classList.toggle('active', Number(b.dataset.size) === PIANO.size);
+  });
+  // Clamp base octave so the last key doesn't go past MIDI 108
+  const octaves = PIANO.size || 2;
+  const maxStart = 9 - octaves;
+  if (PIANO.octave > maxStart) PIANO.octave = maxStart;
+  const lbl = document.getElementById('pianoOctLbl');
+  if (lbl) lbl.textContent = 'C' + PIANO.octave;
+  for (let oct = 0; oct < octaves; oct++) {
     const whites = [0,2,4,5,7,9,11];
     const blacks = [1,3,-1,6,8,10,-1]; // -1 = no black key after E and B
     const baseNote = (PIANO.octave + oct) * 12;
@@ -2206,6 +4022,8 @@ function buildPianoKeys() {
       key.innerHTML = label;
       key.onmousedown = () => pianoNoteOn(note, key);
       key.onmouseup = key.onmouseleave = () => pianoNoteOff(note, key);
+      key.ontouchstart = (e) => { e.preventDefault(); pianoNoteOn(note, key); };
+      key.ontouchend = key.ontouchcancel = (e) => { e.preventDefault(); pianoNoteOff(note, key); };
       octEl.appendChild(key);
     });
 
@@ -2222,6 +4040,8 @@ function buildPianoKeys() {
       bk.style.left = (blackOffsets[i] * 32 + 11) + 'px'; // 32px per white key
       bk.onmousedown = (e) => { e.stopPropagation(); pianoNoteOn(note, bk); };
       bk.onmouseup = bk.onmouseleave = () => pianoNoteOff(note, bk);
+      bk.ontouchstart = (e) => { e.preventDefault(); e.stopPropagation(); pianoNoteOn(note, bk); };
+      bk.ontouchend = bk.ontouchcancel = (e) => { e.preventDefault(); pianoNoteOff(note, bk); };
       octEl.appendChild(bk);
     });
     el.appendChild(octEl);
@@ -2236,50 +4056,141 @@ function buildPianoKeys() {
 function pianoNoteOn(note, el) {
   if (PIANO.active.has(note)) return;
   PIANO.active.add(note);
-  el?.classList.add('on');
-  if (!MY.midi) return; // user toggled off MIDI sending
-  const vel = Number(document.getElementById('pianoVel')?.value || 100);
-  const ch  = Number(document.getElementById('pianoChSel')?.value || 1) - 1;
-  broadcast({ type:'remote:midi', action:'noteon', note, velocity:vel, channel:ch,
-    from:S.cid, fromName:S.name });
+  PIANO.mouseHeld.add(note);
+  handleNote('noteon', note, { source:'local', velocity:PIANO.velocity,
+    peerColor:S.color || PEER_COLORS[0], peerName:S.name });
 }
 
 function pianoNoteOff(note, el) {
   if (!PIANO.active.has(note)) return;
   PIANO.active.delete(note);
-  el?.classList.remove('on');
-  if (!MY.midi) return;
-  const ch = Number(document.getElementById('pianoChSel')?.value || 1) - 1;
-  broadcast({ type:'remote:midi', action:'noteoff', note, velocity:0, channel:ch,
-    from:S.cid, fromName:S.name });
+  PIANO.mouseHeld.delete(note);
+  handleNote('noteoff', note, { source:'local' });
 }
 
-// Computer keyboard → piano
-document.addEventListener('keydown', e => {
-  const tag = document.activeElement?.tagName;
-  const pianoOpen = document.getElementById('pianoWrap')?.classList.contains('open');
-  if (pianoOpen && !e.metaKey && !e.ctrlKey) {
-    const semi = PIANO.keyMap[e.key?.toLowerCase()];
-    if (semi !== undefined && !e.repeat) {
-      const note = PIANO.octave * 12 + semi;
-      const keyEl = document.querySelector(\`[data-note="\${note}"]\`);
-      pianoNoteOn(note, keyEl);
-      return;
+// ══════════════════════════════════════════════════════════
+// Computer keyboard as MIDI (like Ableton's "M" toggle)
+// ASDFGHJK = white keys, WERTYU = black keys
+// Z/X = octave down/up, C/V = velocity down/up
+// ══════════════════════════════════════════════════════════
+function toggleKbdMidi() {
+  PIANO.kbdOn = !PIANO.kbdOn;
+  const btn = document.getElementById('kbdMidiBtn');
+  if (btn) {
+    btn.classList.toggle('active', PIANO.kbdOn);
+    btn.title = PIANO.kbdOn
+      ? 'מקלדת = MIDI (ASDF...) — לחץ M לכבות'
+      : 'לחץ M להפעיל מקלדת כ-MIDI';
+  }
+  toast(PIANO.kbdOn ? '🎹 מקלדת = MIDI פעיל (ASDF...)' : 'מקלדת = MIDI כבוי', PIANO.kbdOn ? 'g' : '');
+  // Always release every held note — local + peers — regardless of direction
+  releaseAllNotes();
+}
+
+function releaseAllNotes() {
+  // Stop local audio + highlight + send noteoff to peers for every active note
+  const held = [...PIANO.active];
+  PIANO.active.clear();
+  for (const note of held) {
+    stopPianoNote(note);
+    highlightKey(note, false);
+    if (MY.midi) {
+      broadcast({ type:'remote:midi', action:'noteoff', note, velocity:0, channel:0,
+        from:S.cid, fromName:S.name });
     }
   }
+  // Belt & suspenders: also stop any orphaned voices
+  if (AUDIO.voices) {
+    for (const note of [...AUDIO.voices.keys()]) stopPianoNote(note);
+  }
+}
+
+// Emergency stop: ESC releases everything; blur/hidden releases everything.
+window.addEventListener('blur', releaseAllNotes);
+document.addEventListener('visibilitychange', () => { if (document.hidden) releaseAllNotes(); });
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') releaseAllNotes();
+});
+
+function kbdMidiNoteOn(note) {
+  if (PIANO.active.has(note)) return;
+  PIANO.active.add(note);
+  handleNote('noteon', note, { source:'local', velocity:PIANO.velocity,
+    peerColor:S.color, peerName:S.name });
+  flashMidiPill();
+}
+
+function kbdMidiNoteOff(note) {
+  if (!PIANO.active.has(note)) return;
+  PIANO.active.delete(note);
+  handleNote('noteoff', note, { source:'local' });
+}
+
+document.addEventListener('keydown', e => {
+  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  const tag = document.activeElement?.tagName;
   if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+  const k = e.key?.toLowerCase();
+
+  // M = toggle keyboard MIDI (only inside a session)
+  if (k === 'm' && S.code && !e.repeat) {
+    e.preventDefault();
+    toggleKbdMidi();
+    return;
+  }
+
+  if (!PIANO.kbdOn) return;
+
+  // Octave: Z / X
+  if (k === 'z' && !e.repeat) {
+    PIANO.octave = Math.max(0, PIANO.octave - 1);
+    toast('אוקטבה: C' + PIANO.octave, '');
+    return;
+  }
+  if (k === 'x' && !e.repeat) {
+    PIANO.octave = Math.min(8, PIANO.octave + 1);
+    toast('אוקטבה: C' + PIANO.octave, '');
+    return;
+  }
+  // Velocity: C / V
+  if (k === 'c' && !e.repeat) {
+    PIANO.velocity = Math.max(1, PIANO.velocity - 10);
+    toast('Velocity: ' + PIANO.velocity, '');
+    return;
+  }
+  if (k === 'v' && !e.repeat) {
+    PIANO.velocity = Math.min(127, PIANO.velocity + 10);
+    toast('Velocity: ' + PIANO.velocity, '');
+    return;
+  }
+
+  const semi = PIANO.keyMap[k];
+  if (semi !== undefined && !e.repeat) {
+    e.preventDefault();
+    kbdMidiNoteOn(PIANO.octave * 12 + semi);
+  }
 });
 
 document.addEventListener('keyup', e => {
-  const pianoOpen = document.getElementById('pianoWrap')?.classList.contains('open');
-  if (pianoOpen) {
-    const semi = PIANO.keyMap[e.key?.toLowerCase()];
-    if (semi !== undefined) {
-      const note = PIANO.octave * 12 + semi;
-      const keyEl = document.querySelector(\`[data-note="\${note}"]\`);
-      pianoNoteOff(note, keyEl);
-    }
+  // Always process keyup for known piano keys, even if user toggled M off mid-press.
+  const k = e.key?.toLowerCase();
+  const semi = PIANO.keyMap[k];
+  if (semi === undefined) return;
+  // Try every octave — user may have shifted octave while holding.
+  for (const note of [...PIANO.active]) {
+    if (((note - semi) % 12) === 0) kbdMidiNoteOff(note);
   }
+});
+
+// Track mouse-held piano notes so we can release them even if mouseup lands outside the key.
+PIANO.mouseHeld = new Set();
+document.addEventListener('mouseup', () => {
+  if (!PIANO.mouseHeld.size) return;
+  for (const note of [...PIANO.mouseHeld]) {
+    const el = document.querySelector('[data-note="' + note + '"]');
+    pianoNoteOff(note, el);
+  }
+  PIANO.mouseHeld.clear();
 });
 
 // ── Keyboard shortcuts ────────────────────────────────────
@@ -2291,8 +4202,94 @@ document.addEventListener('keydown', e => {
   if (e.code === 'ArrowDown') { e.preventDefault(); cmd('bpm', -1); }
 });
 
+// ══════════════════════════════════════════════════════════
+// Web MIDI API — capture real MIDI keyboards, forward to host
+// ══════════════════════════════════════════════════════════
+const WEBMIDI = { access: null, inputs: [], playingTimer: null };
+
+async function initWebMidi() {
+  if (!navigator.requestMIDIAccess) {
+    updateMidiPill('unsupported');
+    return;
+  }
+  try {
+    WEBMIDI.access = await navigator.requestMIDIAccess({ sysex: false });
+    attachMidiInputs();
+    WEBMIDI.access.onstatechange = attachMidiInputs;
+  } catch (e) {
+    updateMidiPill('denied');
+  }
+}
+
+function attachMidiInputs() {
+  WEBMIDI.inputs = [];
+  if (!WEBMIDI.access) return;
+  for (const input of WEBMIDI.access.inputs.values()) {
+    input.onmidimessage = onMidiMessage;
+    WEBMIDI.inputs.push(input.name || 'MIDI Device');
+  }
+  updateMidiPill(WEBMIDI.inputs.length ? 'connected' : 'none');
+}
+
+function onMidiMessage(e) {
+  const [status, d1, d2] = e.data;
+  const cmd = status & 0xf0;
+  const channel = status & 0x0f;
+  if (cmd === 0x90 && d2 > 0) {
+    handleNote('noteon', d1, { source:'local', velocity:d2, channel,
+      peerColor:S.color, peerName:S.name });
+    flashMidiPill();
+  } else if (cmd === 0x80 || (cmd === 0x90 && d2 === 0)) {
+    handleNote('noteoff', d1, { source:'local', channel });
+  } else if (cmd === 0xb0 || cmd === 0xe0) {
+    // CC / pitchbend still pass through directly to peers
+    if (!MY.midi) return;
+    const msg = cmd === 0xb0
+      ? { type:'remote:midi', action:'cc', cc:d1, value:d2, channel }
+      : { type:'remote:midi', action:'pitchbend', value:(d2 << 7) | d1, channel };
+    msg.from = S.cid; msg.fromName = S.name;
+    broadcast(msg);
+  }
+}
+
+function flashMidiPill() {
+  const pill = document.getElementById('midiPill');
+  if (!pill) return;
+  pill.classList.add('playing');
+  clearTimeout(WEBMIDI.playingTimer);
+  WEBMIDI.playingTimer = setTimeout(() => pill.classList.remove('playing'), 150);
+}
+
+function updateMidiPill(state) {
+  const pill = document.getElementById('midiPill');
+  if (!pill) return;
+  pill.classList.remove('connected', 'playing');
+  if (state === 'connected') {
+    pill.classList.add('connected');
+    const name = WEBMIDI.inputs[0] || 'MIDI';
+    pill.textContent = '🎹 ' + (name.length > 18 ? name.slice(0, 16) + '…' : name);
+    pill.title = WEBMIDI.inputs.join(', ');
+  } else if (state === 'none') {
+    pill.textContent = '🎹 חבר קלייבורד';
+    pill.title = 'לא נמצא מכשיר MIDI — חבר קלייבורד ולחץ לרענון';
+  } else if (state === 'denied') {
+    pill.textContent = '🎹 חסום';
+    pill.title = 'הרשאת MIDI נדחתה — לחץ להרשאה מחדש';
+  } else if (state === 'unsupported') {
+    pill.textContent = '🎹 לא נתמך';
+    pill.title = 'הדפדפן לא תומך ב-Web MIDI (השתמש ב-Chrome)';
+  }
+}
+
+function reinitWebMidi() {
+  initWebMidi();
+  toast('סורק מכשירי MIDI…', '');
+}
+
 // ── Premium gating ────────────────────────────────────────
-function isPremium() { return S.plan === 'pro'; }
+// During MMP the trial gate is off (server-side flag), so treat every session as premium
+// on the client too. This kills the 45-min upgrade-modal hijack.
+function isPremium() { return true; }
 
 function showUpgradeModal() { document.getElementById('upgradeModal').style.display = 'flex'; }
 function closeUpgrade() { document.getElementById('upgradeModal').style.display = 'none'; }
@@ -2337,34 +4334,175 @@ function updateTimerDisplay() {
   else el.className = 'session-timer';
 }
 
-// ── Session recording (premium) ───────────────────────────
-let sessionRecorder = null;
-let lastRecBlob = null;
-function toggleSessionRecord() {
-  if (!isPremium()) { showUpgradeModal(); return; }
-  const vid = document.getElementById('mainVideo');
-  if (sessionRecorder && sessionRecorder.state === 'recording') {
-    sessionRecorder.stop();
-    sessionRecorder = null;
-    document.getElementById('recSessionBtn').style.background = '';
+// ══════════════════════════════════════════════════════════
+// Session recording — records ALL active streams simultaneously
+// Multi-monitor supported via "+ הוסף מסך" (calls getDisplayMedia again).
+// Each recorder produces its own .webm and downloads on stop.
+// ══════════════════════════════════════════════════════════
+const REC = { recorders: [], startedAt: 0, extraStreams: [] };
+
+function isRecording() {
+  return REC.recorders.some(r => r.state === 'recording');
+}
+
+function chooseMime() {
+  const cands = [
+    'video/webm;codecs=vp9,opus',
+    'video/webm;codecs=vp8,opus',
+    'video/webm;codecs=vp9',
+    'video/webm;codecs=vp8',
+    'video/webm'
+  ];
+  for (const m of cands) if (MediaRecorder.isTypeSupported(m)) return m;
+  return 'video/webm';
+}
+
+// Rotating recorder — every ROTATE_MS the current MediaRecorder stops (finalizing
+// its blob → download → memory released), and a new one starts immediately on
+// the same stream. Keeps the browser from holding 2h × 3 monitors = ~6 GB.
+const RECORD_ROTATE_MS = 10 * 60 * 1000; // 10 minutes per part
+const RECORD_VIDEO_BITRATE = 2_000_000;  // 2 Mbps — plenty for screen/DAW, safe for RAM
+
+function recordStream(stream, label) {
+  const mime = chooseMime();
+  const wrapper = { rec: null, chunks: [], part: 1, rotateTimer: null, stopped: false, stream, label };
+
+  const startPart = () => {
+    if (wrapper.stopped) return;
+    if (stream.getTracks().every(t => t.readyState !== 'live')) return; // source is gone
+    const chunks = wrapper.chunks = [];
+    const rec = new MediaRecorder(stream, { mimeType: mime, videoBitsPerSecond: RECORD_VIDEO_BITRATE });
+    wrapper.rec = rec;
+    rec.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
+    rec.onstop = () => {
+      const blob = new Blob(chunks, { type: mime });
+      wrapper.chunks = []; // drop refs so GC can free the blobs immediately
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      const ts = new Date().toISOString().replace(/[:.]/g,'-').slice(0,16);
+      const partSuffix = wrapper.part > 1 || !wrapper.stopped ? '-part' + wrapper.part : '';
+      a.download = 'studiosync-' + (S.code || 'session') + '-' + label + partSuffix + '-' + ts + '.webm';
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 3000);
+      S.clips.push({ blob, name: label + partSuffix, ts: Date.now() });
+      if (S.clips.length > 20) S.clips.shift();
+      renderClips();
+      wrapper.part++;
+    };
+    rec.start(2000);
+    wrapper.rotateTimer = setTimeout(() => {
+      if (rec.state === 'recording') { try { rec.stop(); } catch (e) {} }
+      // Chain: onstop finalizes, then start the next part.
+      setTimeout(() => startPart(), 100);
+    }, RECORD_ROTATE_MS);
+  };
+
+  // Hijack the "state" and "stop" method so isRecording()/stopSessionRecord()
+  // still work — they call state and stop() on whatever's in REC.recorders.
+  const proxy = {
+    get state() { return wrapper.rec ? wrapper.rec.state : 'inactive'; },
+    stop() {
+      wrapper.stopped = true;
+      if (wrapper.rotateTimer) clearTimeout(wrapper.rotateTimer);
+      if (wrapper.rec && wrapper.rec.state === 'recording') {
+        try { wrapper.rec.stop(); } catch (e) {}
+      }
+    }
+  };
+  REC.recorders.push(proxy);
+  startPart();
+  return proxy;
+}
+
+function collectRecordableStreams() {
+  const out = [];
+  // 1) All currently shared streams (host share, camera, guest streams, extra monitors)
+  let i = 1;
+  for (const [pid, entry] of S.streams) {
+    const isSelf = pid.startsWith(S.cid);
+    const kind = pid.endsWith(':cam') ? 'camera' :
+                 pid.endsWith(':audio') ? 'audio' :
+                 pid.startsWith('extra:') ? 'screen' + (i++) :
+                 'screen' + (i++);
+    out.push({ stream: entry.stream, label: (isSelf ? 'me-' : 'peer-') + kind });
+  }
+  return out;
+}
+
+async function toggleSessionRecord() {
+  if (isRecording()) return stopSessionRecord();
+
+  const targets = collectRecordableStreams();
+  if (!targets.length) {
+    toast('אין שיתוף מסך להקלטה — לחץ 🖥 שתף מסך קודם', 'r');
     return;
   }
-  if (!vid || !vid.srcObject) { toast('אין שיתוף מסך להקלטה', 'r'); return; }
-  startCountdown(() => {
-    const chunks = [];
-    sessionRecorder = new MediaRecorder(vid.srcObject, { mimeType: 'video/webm' });
-    sessionRecorder.ondataavailable = e => { if (e.data.size > 0) chunks.push(e.data); };
-    sessionRecorder.onstop = () => {
-      lastRecBlob = new Blob(chunks, { type: 'video/webm' });
-      S.clips.push({ blob: lastRecBlob, name: 'clip-' + new Date().toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit'}), ts: Date.now() });
-      if (S.clips.length > 10) S.clips.shift();
-      renderClips();
-      showShareRecModal();
+
+  try {
+    REC.recorders = [];
+    REC.startedAt = Date.now();
+    for (const t of targets) recordStream(t.stream, t.label);
+
+    // Also record system audio via a separate mic recorder if we have one
+    if (S.micStream && S.micStream.getAudioTracks().length && S.micStream.getAudioTracks()[0].enabled) {
+      recordStream(S.micStream, 'me-mic');
+    }
+
+    const rsb = document.getElementById('recSessionBtn');
+    if (rsb) { rsb.innerHTML = '⏹ עצור (' + REC.recorders.length + ')'; rsb.classList.add('recording'); }
+    toast('מקליט ' + REC.recorders.length + ' מסכים/זרמים', 'g');
+  } catch (e) {
+    toast('שגיאת הקלטה: ' + e.message, 'r');
+    REC.recorders.forEach(r => { try { r.stop(); } catch(_){} });
+    REC.recorders = [];
+  }
+}
+
+function stopSessionRecord() {
+  for (const r of REC.recorders) { try { if (r.state !== 'inactive') r.stop(); } catch(e){} }
+  REC.recorders = [];
+  // stop any extra display streams we captured
+  for (const s of REC.extraStreams) { try { s.getTracks().forEach(t => t.stop()); } catch(e){} }
+  REC.extraStreams = [];
+  const rsb = document.getElementById('recSessionBtn');
+  if (rsb) { rsb.innerHTML = '⏺ הקלט'; rsb.classList.remove('recording'); }
+  toast('הקלטה הסתיימה — הקבצים יורדים...', 'g');
+}
+
+// Add another monitor mid-session — starts a new getDisplayMedia and adds it to the recording set
+async function addAnotherScreen() {
+  try {
+    const stream = await navigator.mediaDevices.getDisplayMedia({
+      video: true, audio: true, systemAudio: 'include'
+    });
+    const key = 'extra:' + Date.now();
+    REC.extraStreams.push(stream);
+    S.streams.set(key, { stream, type: 'screen', name: (S.name || 'Me') + ' 🖥' });
+    // Route through the sender-lifecycle helper — separate group per extra
+    // monitor so each has its own reusable RTCRtpSender across re-share cycles.
+    const extraGroup = 'extra:' + key;
+    await attachTracksToPeers(stream, extraGroup);
+    // If we're already recording, hook it up
+    if (isRecording()) {
+      const n = REC.recorders.length + 1;
+      recordStream(stream, 'me-screen' + n);
+      const rsb = document.getElementById('recSessionBtn');
+      if (rsb) rsb.innerHTML = '⏹ עצור (' + REC.recorders.length + ')';
+      toast('מסך נוסף — מקליט ' + REC.recorders.length + ' זרמים', 'g');
+    } else {
+      toast('מסך נוסף שותף', 'g');
+    }
+    renderStreams();
+    stream.getVideoTracks()[0].onended = async () => {
+      await detachTracksFromPeers(extraGroup);
+      S.streams.delete(key);
+      REC.extraStreams = REC.extraStreams.filter(s => s !== stream);
+      renderStreams();
     };
-    sessionRecorder.start(1000);
-    document.getElementById('recSessionBtn').style.background = 'var(--rD)';
-    toast('מקליט את הסשן...', 'g');
-  });
+  } catch (e) {
+    toast('לא נבחר מסך', '');
+  }
 }
 
 // ── Session history ───────────────────────────────────────
@@ -2434,7 +4572,7 @@ function toggleTheme() {
 }
 function initTheme() {
   const saved = localStorage.getItem('ss_theme');
-  const theme = saved || (window.matchMedia('(prefers-color-scheme:dark)').matches ? 'dark' : 'light');
+  const theme = saved || 'dark';
   document.documentElement.dataset.theme = theme;
   const icon = theme === 'dark' ? '☀️' : '🌙';
   const t1 = document.getElementById('themeToggleLand');
@@ -2568,20 +4706,35 @@ function drawVUBars(analyser, elId) {
 function toggleClipBoard() {
   const p = document.getElementById('clipPanel');
   if (!p) return;
-  p.style.display = p.style.display === 'block' ? 'none' : 'block';
+  const isOpen = p.style.display !== 'block';
+  p.style.display = isOpen ? 'block' : 'none';
   const btn = document.getElementById('clipBtn');
-  if (btn) btn.style.background = p.style.display === 'block' ? 'var(--accentD)' : '';
+  if (btn) { btn.classList.toggle('active-tool', isOpen); btn.style.background = ''; }
   renderClips();
 }
 function renderClips() {
   const el = document.getElementById('clipPanel');
   if (!el) return;
   if (S.clips.length === 0) { el.innerHTML = '<div style="font-size:12px;color:var(--dim);text-align:center;padding:12px" dir="rtl">אין קליפים עדיין. הקלט סשן כדי ליצור קליפ.</div>'; return; }
-  el.innerHTML = S.clips.slice().reverse().map((c, i) => {
+  const totalMB = (S.clips.reduce((s, c) => s + c.blob.size, 0) / 1024 / 1024).toFixed(1);
+  const bulkRow = S.clips.length > 1
+    ? \`<div style="display:flex;gap:6px;padding:6px 8px;border-bottom:1px solid var(--b1);background:var(--s1)">
+        <button class="btn-primary" style="flex:1;font-size:11px;padding:6px" onclick="downloadAllClipsZip()">⬇ הורד הכל (\${totalMB}MB)</button>
+        <button class="btn-primary" style="flex:1;font-size:11px;padding:6px" onclick="uploadAllClipsToDrive()">☁ העלה הכל ל-Drive</button>
+       </div>\`
+    : '';
+  const cards = S.clips.slice().reverse().map((c, i) => {
+    const idx = S.clips.length - 1 - i;
     const url = URL.createObjectURL(c.blob);
     const size = (c.blob.size / 1024 / 1024).toFixed(1) + 'MB';
-    return '<div class="clip-card"><span class="clip-name">🎵 ' + esc(c.name) + ' (' + size + ')</span><a class="clip-dl" href="' + url + '" download="' + c.name + '.webm">⬇</a></div>';
+    return \`<div class="clip-card">
+      <span class="clip-name" onclick="previewClip(\${idx})" style="cursor:pointer" title="לחץ להשמעה">🎵 \${esc(c.name)} (\${size})</span>
+      <a class="clip-dl" href="\${url}" download="\${c.name}.webm" title="הורד">⬇</a>
+      <button class="clip-dl" onclick="uploadClipToDrive(\${idx})" title="העלה ל-Drive" style="background:none;border:none;cursor:pointer">☁</button>
+      <button class="clip-dl" onclick="transcribeClip(\${idx})" title="תמלל" style="background:none;border:none;cursor:pointer">📝</button>
+    </div>\`;
   }).join('');
+  el.innerHTML = bulkRow + cards;
 }
 
 // ── DND mode ──────────────────────────────────────────────
@@ -2597,6 +4750,11 @@ function toggleFullscreen() {
   const el = document.getElementById('mainArea');
   if (document.fullscreenElement) document.exitFullscreen();
   else el?.requestFullscreen?.();
+  // Update button state after fullscreen change
+  setTimeout(() => {
+    const btn = document.getElementById('fullscreenBtn');
+    if (btn) btn.classList.toggle('active-tool', !!document.fullscreenElement);
+  }, 200);
 }
 
 // ── Nudge ─────────────────────────────────────────────────
@@ -2614,7 +4772,6 @@ function muteParticipant(peerId) {
   if (!peer) return;
   peer.muted = !peer.muted;
   broadcast({ type: 'mute:command', targetId: peerId, muted: peer.muted, from: S.cid });
-  send({ type: 'mute:command', targetId: peerId, muted: peer.muted });
   renderPeerList();
 }
 
@@ -2787,18 +4944,129 @@ function closeHelp() {
   localStorage.setItem('ss_help_seen', '1');
 }
 
-// ── Online Indicator ──────────────────────────────────────
+// ── Online Indicator + session keepalive ─────────────────
 let heartbeatTimer = null;
 function startHeartbeat() {
   const send = () => {
     const name = S.name || localStorage.getItem('ss_name');
     if (!name) return;
-    fetch('/api/heartbeat', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ name, color: S.color, instrument: S.instrument }) }).catch(()=>{});
+    fetch('/api/heartbeat', { method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ name, cid: S.cid, color: S.color, instrument: S.instrument }) }).catch(()=>{});
   };
   send();
-  heartbeatTimer = setInterval(send, 30000);
+  // Faster cadence than server eviction (90s) — survives background tab throttling.
+  heartbeatTimer = setInterval(send, 15000);
 }
 function stopHeartbeat() { if (heartbeatTimer) { clearInterval(heartbeatTimer); heartbeatTimer = null; } }
+
+// When the tab returns to foreground, immediately ping so the server knows we're still here.
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && S.cid) {
+    fetch('/api/heartbeat', { method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({ name:S.name, cid:S.cid, color:S.color, instrument:S.instrument }) }).catch(()=>{});
+  }
+});
+
+// ══════════════════════════════════════════════════════════
+// Agent status polling — pill shows red until the local Agent joins
+// ══════════════════════════════════════════════════════════
+let agentPollTimer = null;
+let lastAgentSeen = 0;
+function startAgentStatusPoll() {
+  stopAgentStatusPoll();
+  const tick = async () => {
+    if (!S.code) return;
+    try {
+      const r = await fetch('/api/health?code=' + encodeURIComponent(S.code));
+      const d = await r.json();
+      const pill = document.getElementById('agentPill');
+      if (!pill) return;
+      if (d.agent) {
+        lastAgentSeen = Date.now();
+        pill.textContent = '🤖 Agent פעיל';
+        pill.classList.remove('disconnected');
+        pill.classList.add('connected');
+        pill.title = 'שליטה מרחוק ו-MIDI זמינים';
+      } else {
+        pill.textContent = '🤖 Agent לא מחובר';
+        pill.classList.remove('connected');
+        pill.classList.add('disconnected');
+        pill.title = 'הרץ start.command על המחשב שלך כדי להפעיל MIDI + שליטה מרחוק';
+      }
+    } catch(e) {}
+  };
+  tick();
+  agentPollTimer = setInterval(tick, 5000);
+}
+function stopAgentStatusPoll() {
+  if (agentPollTimer) { clearInterval(agentPollTimer); agentPollTimer = null; }
+}
+
+// ══════════════════════════════════════════════════════════
+// Health check modal — first-time sanity check for host
+// ══════════════════════════════════════════════════════════
+async function showHealthCheck() {
+  const checks = [];
+
+  // Browser checks (auto)
+  checks.push({ label: 'Web MIDI (Chrome/Edge)', ok: !!navigator.requestMIDIAccess, note: 'להפעלת MIDI מקלייבורד פיזי' });
+  checks.push({ label: 'Screen sharing (getDisplayMedia)', ok: !!navigator.mediaDevices?.getDisplayMedia, note: 'לשיתוף מסך ה-DAW' });
+  checks.push({ label: 'Microphone (getUserMedia)', ok: !!navigator.mediaDevices?.getUserMedia });
+  checks.push({ label: 'MediaRecorder + WebM', ok: window.MediaRecorder && MediaRecorder.isTypeSupported('video/webm') });
+  checks.push({ label: 'Web Audio', ok: !!(window.AudioContext || window.webkitAudioContext), note: 'לצליל פסנתר משותף' });
+
+  // Server-side (Agent)
+  let agent = false;
+  try {
+    const r = await fetch('/api/health?code=' + encodeURIComponent(S.code));
+    const d = await r.json();
+    agent = d.agent;
+  } catch(e) {}
+  checks.push({ label: 'Agent מחובר (start.command)', ok: agent, note: 'שליטה מרחוק + הקלטת MIDI ל-Ableton' });
+
+  // Manual items — user must confirm themselves
+  const manual = [
+    { label: 'IAC Driver פעיל (Audio MIDI Setup → IAC Driver → Device is online ✓)' },
+    { label: 'Multi-Output Device (BlackHole 2ch + הרמקולים) הוגדר ונבחר ב-DAW' },
+    { label: 'הרשאת Accessibility ל-Terminal (System Settings → Privacy → Accessibility)' },
+    { label: 'הרשאת Screen Recording ל-Chrome (System Settings → Privacy → Screen Recording)' },
+    { label: 'ב-Ableton: MIDI Track → arm → MIDI From: IAC Driver' },
+  ];
+
+  const html = \`
+    <div class="modal-backdrop" id="healthBackdrop" onclick="if(event.target===this)closeHealthCheck()">
+      <div class="modal-panel" style="max-width:520px">
+        <h3 style="margin:0 0 6px">🩺 בדיקת כשירות</h3>
+        <div style="font-size:12px;color:var(--dim);margin-bottom:14px">בדיקה אוטומטית של הדפדפן והשרת + צ'קליסט הגדרות ידניות למק</div>
+        <div style="font-size:11px;color:var(--mid);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">אוטומטי</div>
+        <ul style="list-style:none;padding:0;margin:0 0 16px">
+          \${checks.map(c => \`<li style="padding:6px 0;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--b1)">
+            <span style="font-size:16px;\${c.ok ? 'color:#03b28c' : 'color:#f04438'}">\${c.ok ? '✓' : '✗'}</span>
+            <div style="flex:1"><div style="font-size:13px">\${esc(c.label)}</div>\${c.note ? \`<div style="font-size:11px;color:var(--dim)">\${esc(c.note)}</div>\` : ''}</div>
+          </li>\`).join('')}
+        </ul>
+        <div style="font-size:11px;color:var(--mid);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px">ידני (בדוק בעצמך)</div>
+        <ul style="list-style:none;padding:0;margin:0 0 16px">
+          \${manual.map((m, i) => \`<li style="padding:6px 0;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--b1)">
+            <input type="checkbox" id="hc-manual-\${i}" onchange="saveHealthCheckState()" \${localStorage.getItem('ss_hc_' + i) === '1' ? 'checked' : ''} />
+            <label for="hc-manual-\${i}" style="flex:1;font-size:13px;cursor:pointer">\${esc(m.label)}</label>
+          </li>\`).join('')}
+        </ul>
+        <button onclick="closeHealthCheck()" class="btn-primary" style="width:100%">סגור</button>
+      </div>
+    </div>
+  \`;
+  const existing = document.getElementById('healthBackdrop');
+  if (existing) existing.remove();
+  document.body.insertAdjacentHTML('beforeend', html);
+}
+function closeHealthCheck() {
+  document.getElementById('healthBackdrop')?.remove();
+}
+function saveHealthCheckState() {
+  const boxes = document.querySelectorAll('[id^="hc-manual-"]');
+  boxes.forEach((b, i) => localStorage.setItem('ss_hc_' + i, b.checked ? '1' : '0'));
+}
 async function fetchOnline() {
   try {
     const r = await fetch('/api/online');
@@ -2901,6 +5169,300 @@ async function voteFeature(btn, fid) {
   } catch(e) {}
 }
 
+// ══════════════════════════════════════════════════════════
+// Google Drive integration — client-side OAuth + direct upload
+// (No server-side token storage: token stays in browser memory.)
+// ══════════════════════════════════════════════════════════
+const DRIVE = { clientId: null, accessToken: null, tokenClient: null, folderId: null };
+
+async function initDrive() {
+  try {
+    const r = await fetch('/api/config');
+    const d = await r.json();
+    if (!d.driveEnabled || !d.googleClientId) return;
+    DRIVE.clientId = d.googleClientId;
+    await loadScript('https://accounts.google.com/gsi/client');
+    DRIVE.tokenClient = google.accounts.oauth2.initTokenClient({
+      client_id: DRIVE.clientId,
+      scope: 'https://www.googleapis.com/auth/drive.file',
+      callback: (resp) => {
+        if (resp.access_token) {
+          DRIVE.accessToken = resp.access_token;
+          if (DRIVE._pendingResolve) { DRIVE._pendingResolve(); DRIVE._pendingResolve = null; }
+        }
+      }
+    });
+  } catch (e) { /* Drive optional */ }
+}
+
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    if ([...document.scripts].some(s => s.src === src)) return resolve();
+    const s = document.createElement('script');
+    s.src = src; s.async = true; s.defer = true;
+    s.onload = resolve; s.onerror = reject;
+    document.head.appendChild(s);
+  });
+}
+
+async function ensureDriveAuth() {
+  if (!DRIVE.tokenClient) {
+    toast('Google Drive לא הוגדר בשרת', 'r');
+    return false;
+  }
+  if (DRIVE.accessToken) return true;
+  await new Promise((resolve) => {
+    DRIVE._pendingResolve = resolve;
+    DRIVE.tokenClient.requestAccessToken({ prompt: '' });
+  });
+  return !!DRIVE.accessToken;
+}
+
+async function ensureDriveFolder() {
+  if (DRIVE.folderId) return DRIVE.folderId;
+  const name = 'StudioSync';
+  // Look for existing folder first
+  const q = encodeURIComponent(\`name='\${name}' and mimeType='application/vnd.google-apps.folder' and trashed=false\`);
+  const search = await fetch('https://www.googleapis.com/drive/v3/files?q=' + q + '&fields=files(id,name)', {
+    headers: { Authorization: 'Bearer ' + DRIVE.accessToken }
+  });
+  const sd = await search.json();
+  if (sd.files && sd.files.length) { DRIVE.folderId = sd.files[0].id; return DRIVE.folderId; }
+  // Create it
+  const create = await fetch('https://www.googleapis.com/drive/v3/files', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + DRIVE.accessToken },
+    body: JSON.stringify({ name, mimeType: 'application/vnd.google-apps.folder' })
+  });
+  const cd = await create.json();
+  DRIVE.folderId = cd.id;
+  return DRIVE.folderId;
+}
+
+async function uploadBlobToDrive(blob, filename, onProgress) {
+  if (!(await ensureDriveAuth())) return null;
+  const folder = await ensureDriveFolder();
+  const attempt = async () => {
+    const metadata = { name: filename, parents: [folder], mimeType: blob.type || 'video/webm' };
+    const boundary = '-------studiosync' + Math.random().toString(36).slice(2);
+    const CRLF = '\\r\\n';
+    const delimiter = CRLF + '--' + boundary + CRLF;
+    const closeDelim = CRLF + '--' + boundary + '--';
+    const metaPart = delimiter + 'Content-Type: application/json' + CRLF + CRLF + JSON.stringify(metadata);
+    const dataHeader = delimiter + 'Content-Type: ' + metadata.mimeType + CRLF + 'Content-Transfer-Encoding: binary' + CRLF + CRLF;
+    const body = new Blob([metaPart, dataHeader, blob, closeDelim], { type: 'multipart/related; boundary=' + boundary });
+    const xhr = new XMLHttpRequest();
+    const url = 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,webViewLink';
+    return new Promise((resolve, reject) => {
+      xhr.open('POST', url);
+      xhr.setRequestHeader('Authorization', 'Bearer ' + DRIVE.accessToken);
+      xhr.setRequestHeader('Content-Type', 'multipart/related; boundary=' + boundary);
+      if (onProgress && xhr.upload) {
+        xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(e.loaded / e.total); };
+      }
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) resolve(JSON.parse(xhr.responseText));
+        else reject(Object.assign(new Error('Drive upload failed: ' + xhr.status), { status: xhr.status, responseText: xhr.responseText }));
+      };
+      xhr.onerror = () => reject(new Error('Network error'));
+      xhr.send(body);
+    });
+  };
+  try { return await attempt(); }
+  catch (e) {
+    // Google OAuth tokens die after ~1h. On 401, silently re-consent and retry once.
+    if (e.status === 401) {
+      DRIVE.accessToken = null;
+      if (!(await ensureDriveAuth())) throw e;
+      return await attempt();
+    }
+    throw e;
+  }
+}
+
+async function uploadClipToDrive(idx) {
+  const clip = S.clips[idx];
+  if (!clip) return;
+  toast('מעלה ל-Drive: ' + clip.name, '');
+  try {
+    const res = await uploadBlobToDrive(clip.blob, clip.name + '.webm',
+      (p) => { /* could show progress bar */ });
+    if (res?.webViewLink) {
+      toast('✓ עלה: ' + clip.name, 'g');
+      window.open(res.webViewLink, '_blank');
+    }
+  } catch (e) {
+    toast('שגיאה: ' + e.message, 'r');
+  }
+}
+
+async function uploadAllClipsToDrive() {
+  if (!S.clips.length) return;
+  if (!(await ensureDriveAuth())) return;
+  toast('מעלה ' + S.clips.length + ' קליפים ל-Drive...', '');
+  let ok = 0, fail = 0;
+  for (let i = 0; i < S.clips.length; i++) {
+    const clip = S.clips[i];
+    try {
+      await uploadBlobToDrive(clip.blob, clip.name + '.webm');
+      ok++;
+      toast(\`\${ok}/\${S.clips.length} עלו\`, '');
+    } catch (e) { fail++; }
+  }
+  toast(\`הועלו \${ok} קליפים\${fail ? ' (\${fail} נכשלו)' : ''} → תיקיית StudioSync ב-Drive\`, ok ? 'g' : 'r');
+}
+
+// ══════════════════════════════════════════════════════════
+// Recording preview — inline video/audio player for a captured clip
+// ══════════════════════════════════════════════════════════
+function previewClip(idx) {
+  const clip = S.clips[idx];
+  if (!clip) return;
+  const url = URL.createObjectURL(clip.blob);
+  const isAudio = /me-mic|-audio/.test(clip.name);
+  const html = \`
+    <div class="modal-backdrop" id="pvBackdrop" onclick="if(event.target===this)closePreview()">
+      <div class="modal-panel" style="max-width:720px;padding:14px" dir="rtl">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+          <h3 style="margin:0;flex:1">\${esc(clip.name)}</h3>
+          <button onclick="closePreview()" style="background:none;border:none;color:var(--mid);font-size:18px;cursor:pointer">✕</button>
+        </div>
+        \${isAudio
+          ? \`<audio controls autoplay src="\${url}" style="width:100%"></audio>\`
+          : \`<video controls autoplay src="\${url}" style="width:100%;max-height:60vh;background:#000;border-radius:6px"></video>\`}
+        <div style="display:flex;gap:6px;margin-top:10px">
+          <a class="btn-primary" style="flex:1;text-align:center;text-decoration:none;padding:8px" href="\${url}" download="\${clip.name}.webm">⬇ הורד</a>
+          <button class="btn-primary" style="flex:1" onclick="closePreview();uploadClipToDrive(\${idx})">☁ Drive</button>
+          <button class="btn-primary" style="flex:1" onclick="closePreview();transcribeClip(\${idx})">📝 תמלול</button>
+        </div>
+      </div>
+    </div>
+  \`;
+  document.getElementById('pvBackdrop')?.remove();
+  document.body.insertAdjacentHTML('beforeend', html);
+}
+function closePreview() {
+  const b = document.getElementById('pvBackdrop');
+  if (b) { b.querySelector('video,audio')?.pause(); b.remove(); }
+}
+
+// ══════════════════════════════════════════════════════════
+// Transcription — send audio blob to server proxy → STT provider
+// ══════════════════════════════════════════════════════════
+async function transcribeClip(idx) {
+  const clip = S.clips[idx];
+  if (!clip) return;
+  toast('מתמלל: ' + clip.name + '... (יכול לקחת דקה)', '');
+  try {
+    // Extract just the audio track (keeps upload small when the clip is a screen recording)
+    const audioBlob = await extractAudioForTranscription(clip.blob);
+    const r = await fetch('/api/transcribe?cid=' + encodeURIComponent(S.cid || ''), {
+      method: 'POST',
+      headers: { 'Content-Type': 'audio/webm' },
+      body: audioBlob
+    });
+    const d = await r.json();
+    if (!d.ok) {
+      if (d.error === 'no_transcription_key') {
+        toast('תמלול לא הופעל בשרת — הוסף OPENAI_API_KEY או ELEVENLABS_API_KEY', 'r');
+      } else {
+        toast('שגיאת תמלול: ' + (d.message || d.error), 'r');
+      }
+      return;
+    }
+    showTranscript(clip.name, d.text, d.provider);
+  } catch (e) {
+    toast('שגיאת תמלול: ' + e.message, 'r');
+  }
+}
+
+// For MMP just send the full blob — the STT providers extract audio internally.
+// (Doing MediaRecorder → audio-only re-encoding in the browser is heavier than the
+// upload cost saving would be worth for typical session lengths.)
+async function extractAudioForTranscription(blob) { return blob; }
+
+function showTranscript(name, text, provider) {
+  const html = \`
+    <div class="modal-backdrop" id="ttBackdrop" onclick="if(event.target===this)closeTranscript()">
+      <div class="modal-panel" style="max-width:640px" dir="rtl">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+          <h3 style="margin:0;flex:1">📝 תמלול: \${esc(name)}</h3>
+          <span style="font-size:11px;color:var(--dim)">\${provider || ''}</span>
+          <button onclick="closeTranscript()" style="background:none;border:none;color:var(--mid);font-size:18px;cursor:pointer">✕</button>
+        </div>
+        <textarea id="ttText" style="width:100%;height:280px;padding:10px;border:1px solid var(--b1);border-radius:6px;font-family:var(--sans);font-size:13px;line-height:1.6;background:var(--bg);color:var(--txt);resize:vertical" dir="rtl">\${esc(text || '(אין טקסט)')}</textarea>
+        <div style="display:flex;gap:6px;margin-top:10px">
+          <button class="btn-primary" style="flex:1" onclick="copyTranscript()">📋 העתק</button>
+          <button class="btn-primary" style="flex:1" onclick="downloadTranscript('\${esc(name)}')">⬇ הורד .txt</button>
+        </div>
+      </div>
+    </div>
+  \`;
+  document.getElementById('ttBackdrop')?.remove();
+  document.body.insertAdjacentHTML('beforeend', html);
+}
+function closeTranscript() { document.getElementById('ttBackdrop')?.remove(); }
+function copyTranscript() {
+  const txt = document.getElementById('ttText')?.value || '';
+  navigator.clipboard?.writeText(txt).then(() => toast('הועתק', 'g'));
+}
+function downloadTranscript(name) {
+  const txt = document.getElementById('ttText')?.value || '';
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([txt], { type: 'text/plain;charset=utf-8' }));
+  a.download = name + '.txt';
+  document.body.appendChild(a); a.click(); a.remove();
+}
+
+// Download all clips as a single manifest (JSON) — browsers can't create real zips without a lib;
+// but we can trigger sequential downloads which most browsers batch as a single "download all" prompt.
+function downloadAllClipsZip() {
+  if (!S.clips.length) return;
+  S.clips.forEach((c, i) => {
+    setTimeout(() => {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(c.blob);
+      a.download = c.name + '.webm';
+      document.body.appendChild(a); a.click(); a.remove();
+    }, i * 250);
+  });
+  toast('מוריד ' + S.clips.length + ' קליפים...', 'g');
+}
+
+// ── Browser compatibility check ───────────────────────────
+function checkBrowserCompat() {
+  const ua = navigator.userAgent;
+  const isChrome = ua.includes('Chrome') && !ua.includes('Edg/') && !ua.includes('OPR/') && !ua.includes('Brave');
+  const isEdge = ua.includes('Edg/');
+  const isSafari = ua.includes('Safari') && !ua.includes('Chrome') && !ua.includes('Edg/');
+  const isFirefox = ua.includes('Firefox');
+  const hasWebMIDI = !!navigator.requestMIDIAccess;
+  const hasDisplayMedia = !!navigator.mediaDevices?.getDisplayMedia;
+  const hasWebAudio = !!(window.AudioContext || window.webkitAudioContext);
+
+  const problems = [];
+  if (!hasDisplayMedia) problems.push('שיתוף מסך לא נתמך');
+  if (!hasWebAudio) problems.push('Web Audio לא נתמך');
+  if (isSafari && !hasWebMIDI) problems.push('Safari לא תומך ב-Web MIDI — MIDI מקלייבורד פיזי לא יעבוד');
+  if (isFirefox && !hasWebMIDI) problems.push('Firefox — הפעל dom.webmidi.enabled ב-about:config, או השתמש ב-Chrome');
+
+  if (problems.length) {
+    const dismissed = localStorage.getItem('ss_compat_dismissed_v1');
+    if (dismissed) return;
+    setTimeout(() => {
+      const rec = isChrome || isEdge ? '' : ' (מומלץ להשתמש ב-Chrome או Edge)';
+      const msg = 'תאימות דפדפן: ' + problems.join(', ') + rec;
+      const html = \`
+        <div id="compatBanner" style="position:fixed;top:0;left:0;right:0;padding:10px 16px;background:#f79009;color:#000;font-size:13px;z-index:9999;display:flex;align-items:center;gap:12px" dir="rtl">
+          <div style="flex:1">⚠️ \${esc(msg)}</div>
+          <button onclick="localStorage.setItem('ss_compat_dismissed_v1','1');document.getElementById('compatBanner').remove()" style="background:rgba(0,0,0,.2);border:none;color:#000;padding:4px 12px;border-radius:4px;cursor:pointer">הבנתי</button>
+        </div>
+      \`;
+      document.body.insertAdjacentHTML('afterbegin', html);
+    }, 500);
+  }
+}
+
 // ── Boot ──────────────────────────────────────────────────
 window.onload = () => {
   initTheme();
@@ -2909,6 +5471,8 @@ window.onload = () => {
   startOnlinePolling();
   renderSchedules();
   loadFeatures();
+  initDrive();
+  checkBrowserCompat();
   setInterval(checkScheduleReminders, 30000);
   if ('Notification' in window && Notification.permission === 'default') {
     Notification.requestPermission();
