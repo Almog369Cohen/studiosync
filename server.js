@@ -902,9 +902,11 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 .stream-container.grid-mode .stream-thumb { flex:1 1 calc(50% - 8px); min-width:200px; max-height:none; aspect-ratio:16/9; border-radius:var(--radiusL); }
 .stream-container.grid-mode .stream-thumb video { object-fit:contain; }
 .stream-container.grid-mode .stream-thumb .stream-label { font-size:12px; padding:4px 8px; }
-.participant-panel { width:260px; border-left:1px solid var(--b1); display:flex; flex-direction:column; flex-shrink:0; }
-.panel-tabs { display:flex; border-bottom:1px solid var(--b1); flex-shrink:0; }
-.ptab { flex:1; padding:10px; background:none; border:none; border-bottom:2px solid transparent; font-size:13px; font-weight:500; cursor:pointer; color:var(--mid); font-family:var(--sans); }
+.participant-panel { width:300px; border-left:1px solid var(--b1); display:flex; flex-direction:column; flex-shrink:0; }
+.panel-tabs { display:flex; border-bottom:1px solid var(--b1); flex-shrink:0; background:var(--bg); }
+.ptab { flex:1; padding:12px; background:none; border:none; border-bottom:2px solid transparent; font-size:13px; font-weight:600; cursor:pointer; color:var(--mid); font-family:var(--sans); transition:all .15s; }
+.ptab:hover { color:var(--fg); background:var(--s1); }
+.ptab.active { color:var(--accent); border-bottom-color:var(--accent); }
 .ptab.active { color:var(--accent); border-bottom-color:var(--accent); }
 .tab-content { flex:1; overflow-y:auto; display:flex; flex-direction:column; }
 
@@ -920,14 +922,31 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 .pc-lat { font-size:11px; color:var(--dim); font-family:var(--mono); }
 
 /* ── Chat ────────────────────────────────────────────── */
-#chatArea { flex:1; overflow-y:auto; padding:8px; display:flex; flex-direction:column; gap:6px; }
-.chat-msg { display:flex; flex-direction:column; gap:2px; }
-.chat-name { font-size:11px; font-weight:600; }
-.chat-text { font-size:13px; color:var(--txt); line-height:1.4; }
-.chat-input-row { display:flex; gap:6px; padding:8px; border-top:1px solid var(--b1); flex-shrink:0; }
-.chat-input-row input { flex:1; padding:7px 10px; border:1.5px solid var(--b1); border-radius:6px; font-size:13px; font-family:var(--sans); color:var(--txt); background:var(--bg); outline:none; }
-.chat-input-row input:focus { border-color:var(--accent); }
-.chat-input-row button { background:var(--accent); color:#fff; border:none; border-radius:6px; width:32px; cursor:pointer; font-size:16px; }
+#chatArea { flex:1; overflow-y:auto; padding:12px; display:flex; flex-direction:column; gap:6px; background:var(--s1); scroll-behavior:smooth; }
+#chatArea::-webkit-scrollbar { width:6px; }
+#chatArea::-webkit-scrollbar-thumb { background:var(--b1); border-radius:3px; }
+#chatArea:empty::before { content:'💬  אין הודעות עדיין. תתחיל שיחה!'; display:block; text-align:center; font-size:12px; color:var(--dim); padding:20px 12px; }
+.chat-msg { display:flex; flex-direction:column; max-width:82%; animation:chatIn .2s ease-out; }
+.chat-msg.self { align-self:flex-start; }
+.chat-msg.other { align-self:flex-end; }
+.chat-name { font-size:10px; font-weight:700; color:var(--dim); margin-bottom:3px; padding:0 4px; letter-spacing:.2px; }
+.chat-msg.self .chat-name { text-align:left; }
+.chat-msg.other .chat-name { text-align:right; }
+.chat-bubble { background:var(--bg); border:1px solid var(--b1); padding:8px 12px 6px; border-radius:14px; font-size:14px; color:var(--txt); line-height:1.45; word-wrap:break-word; white-space:pre-wrap; box-shadow:0 1px 2px rgba(0,0,0,.04); position:relative; }
+.chat-msg.self .chat-bubble { background:var(--accent); color:#fff; border-color:var(--accent); border-bottom-left-radius:4px; }
+.chat-msg.other .chat-bubble { border-bottom-right-radius:4px; }
+.chat-time { font-size:10px; opacity:.65; margin-top:3px; font-family:var(--mono); }
+.chat-msg.self .chat-time { color:rgba(255,255,255,.85); }
+@keyframes chatIn { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:translateY(0); } }
+.chat-input-row { display:flex; gap:8px; padding:10px 12px; border-top:1px solid var(--b1); flex-shrink:0; background:var(--bg); }
+.chat-input-row input { flex:1; padding:10px 14px; border:1.5px solid var(--b1); border-radius:100px; font-size:14px; font-family:var(--sans); color:var(--txt); background:var(--s1); outline:none; transition:border-color .15s; }
+.chat-input-row input:focus { border-color:var(--accent); background:var(--bg); }
+.chat-input-row button { background:var(--accent); color:#fff; border:none; border-radius:50%; width:38px; height:38px; cursor:pointer; font-size:17px; font-weight:700; transition:all .15s; flex-shrink:0; }
+.chat-input-row button:hover { background:#5a3fd6; transform:scale(1.05); }
+.chat-input-row button:active { transform:scale(0.95); }
+.ptab { position:relative; }
+.chat-unread-badge { position:absolute; top:4px; right:4px; min-width:16px; height:16px; padding:0 4px; background:#f04438; color:#fff; border-radius:8px; font-size:10px; font-weight:700; display:flex; align-items:center; justify-content:center; animation:badgePop .3s ease-out; }
+@keyframes badgePop { from { transform:scale(0); } to { transform:scale(1); } }
 
 /* (tracks removed — not connected to real DAW) */
 
@@ -2200,7 +2219,7 @@ function handleMsg(msg) {
       applyDAW(msg, msg.from);
       break;
     case 'chat:msg':
-      appendChat(msg.name || 'Peer', msg.text, msg.color);
+      appendChat(msg.name || 'Peer', msg.text, msg.color, msg.ts, false);
       break;
     case 'ping:res': {
       const lat = Date.now() - msg.ts;
@@ -2513,26 +2532,83 @@ function switchTab(tab) {
   document.getElementById('tabChat')?.classList.toggle('active', tab === 'chat');
   const tnb = document.getElementById('tabNotes');
   if (tnb) tnb.classList.toggle('active', tab === 'notes');
+  if (tab === 'chat') {
+    chatUnread = 0;
+    updateChatBadge();
+    // Autofocus the input + scroll to newest
+    setTimeout(() => {
+      const inp = document.getElementById('chatIn');
+      if (inp) inp.focus();
+      const area = document.getElementById('chatArea');
+      if (area) area.scrollTop = area.scrollHeight;
+    }, 50);
+  }
 }
 
+let chatUnread = 0;
 function sendChat() {
   const inp = document.getElementById('chatIn');
   const text = (inp?.value || '').trim();
   if (!text) return;
   inp.value = '';
-  const msg = { type: 'chat:msg', text, name: S.name, color: S.color };
-  appendChat(S.name, text, S.color);
+  const msg = { type: 'chat:msg', text, name: S.name, color: S.color, ts: Date.now() };
+  appendChat(S.name, text, S.color, msg.ts, true);
   broadcast(msg);
 }
 
-function appendChat(name, text, color) {
+function appendChat(name, text, color, ts, isSelf) {
   const area = document.getElementById('chatArea');
   if (!area) return;
+  const nearBottom = (area.scrollHeight - area.scrollTop - area.clientHeight) < 60;
+
   const d = document.createElement('div');
-  d.className = 'chat-msg';
-  d.innerHTML = \`<span class="chat-name" style="color:\${color || 'var(--accent)'}">\${name}</span><span class="chat-text">\${text}</span>\`;
+  d.className = 'chat-msg ' + (isSelf ? 'self' : 'other');
+  const time = new Date(ts || Date.now()).toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' });
+
+  // Escape both name and text to prevent HTML injection via peer messages
+  const nameEl = document.createElement('span');
+  nameEl.className = 'chat-name';
+  nameEl.style.color = isSelf ? 'var(--accent)' : (color || 'var(--mid)');
+  nameEl.textContent = name;
+
+  const bubble = document.createElement('div');
+  bubble.className = 'chat-bubble';
+  const textNode = document.createElement('span');
+  textNode.className = 'chat-text';
+  textNode.textContent = text;
+  bubble.appendChild(textNode);
+
+  const timeEl = document.createElement('div');
+  timeEl.className = 'chat-time';
+  timeEl.textContent = time;
+  bubble.appendChild(timeEl);
+
+  if (!isSelf) d.appendChild(nameEl);
+  d.appendChild(bubble);
   area.appendChild(d);
-  area.scrollTop = area.scrollHeight;
+
+  if (nearBottom || isSelf) area.scrollTop = area.scrollHeight;
+
+  // Unread badge if the chat tab isn't active
+  if (!isSelf && S.activeTab !== 'chat') {
+    chatUnread++;
+    updateChatBadge();
+    // Subtle new-message ping
+    if (!S.dnd) { try { playTone(880, .06); } catch(e) {} }
+  }
+}
+
+function updateChatBadge() {
+  const tab = document.getElementById('tabChat');
+  if (!tab) return;
+  let badge = tab.querySelector('.chat-unread-badge');
+  if (chatUnread <= 0) { badge?.remove(); return; }
+  if (!badge) {
+    badge = document.createElement('span');
+    badge.className = 'chat-unread-badge';
+    tab.appendChild(badge);
+  }
+  badge.textContent = chatUnread > 99 ? '99+' : String(chatUnread);
 }
 
 // ── Misc helpers ──────────────────────────────────────────
