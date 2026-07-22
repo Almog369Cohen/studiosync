@@ -1054,6 +1054,8 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
   opacity:0; transition:opacity .3s; z-index:5; }
 .stream-thumb:hover .remote-hint, .main-video-wrap:hover .remote-hint { opacity:1; }
 .remote-hint-inner { background:rgba(0,0,0,.6); padding:8px 16px; border-radius:100px; }
+.play-overlay { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; background:rgba(0,0,0,.65); color:#fff; font-size:18px; font-weight:600; cursor:pointer; z-index:20; }
+.play-overlay:hover { background:rgba(0,0,0,.75); }
 .share-btn { width:auto; padding:0 14px; font-size:13px; font-family:var(--sans); white-space:nowrap; }
 .cam-btn { width:auto; padding:0 14px; font-size:13px; font-family:var(--sans); white-space:nowrap; }
 .active-share { border:2px solid var(--accent) !important; background:rgba(0,255,136,.15) !important; }
@@ -2660,9 +2662,93 @@ function toggleSettings() {
   if (ov) ov.style.display = ov.style.display === 'flex' ? 'none' : 'flex';
 }
 
+// ══════════════════════════════════════════════════════════
+// Track lifecycle helpers — prevent "black screen after re-share"
+// bug. When we stop sharing, we replaceTrack(null) instead of just
+// track.stop() so the sender goes clean on the peer side. When we
+// start a new share, we re-use existing senders via replaceTrack
+// whenever possible so we don't stack duplicate video senders.
+// ══════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════
+// Video element playback safety
+// - Retries .play() up to 3 times (in case tracks weren't ready)
+// - Shows a "לחץ להפעלה" overlay if the browser blocked autoplay
+// - Detects frozen/black frames (no dimensions) and forces re-attach
+// ══════════════════════════════════════════════════════════
+function ensureVideoPlays(vid, container) {
+  const tryPlay = async (attempt) => {
+    try { await vid.play(); }
+    catch (e) {
+      if (attempt < 3) return setTimeout(() => tryPlay(attempt + 1), 400);
+      showPlayOverlay(vid, container);
+    }
+  };
+  vid.addEventListener('loadedmetadata', () => tryPlay(0), { once: true });
+  vid.addEventListener('canplay', () => { if (vid.paused) tryPlay(0); }, { once: true });
+  // If dimensions are still 0 after 3s, the stream is likely frozen — reset srcObject to nudge it
+  setTimeout(() => {
+    if (!vid.videoWidth && !vid.videoHeight && vid.srcObject) {
+      const s = vid.srcObject;
+      vid.srcObject = null;
+      setTimeout(() => { vid.srcObject = s; tryPlay(0); }, 50);
+    }
+  }, 3000);
+  tryPlay(0);
+}
+
+function showPlayOverlay(vid, container) {
+  if (!container || container.querySelector('.play-overlay')) return;
+  const btn = document.createElement('div');
+  btn.className = 'play-overlay';
+  btn.textContent = '▶ לחץ להפעלה';
+  btn.onclick = async () => {
+    try { await vid.play(); btn.remove(); } catch(e) {}
+  };
+  container.appendChild(btn);
+}
+
+async function attachTracksToPeers(stream, group /* 'screen' | 'camera' | 'audio' */) {
+  for (const [, p] of S.peers) {
+    if (!p.conn) continue;
+    p._senderGroups = p._senderGroups || {};
+    p._senderGroups[group] = p._senderGroups[group] || {};
+    for (const track of stream.getTracks()) {
+      const existingSender = p._senderGroups[group][track.kind];
+      try {
+        if (existingSender && p.conn.getSenders().includes(existingSender)) {
+          await existingSender.replaceTrack(track);
+        } else {
+          const sender = p.conn.addTrack(track, stream);
+          p._senderGroups[group][track.kind] = sender;
+        }
+      } catch (e) {
+        dlog('attach err (' + group + '/' + track.kind + '): ' + e.message);
+      }
+    }
+  }
+}
+
+async function detachTracksFromPeers(group) {
+  for (const [, p] of S.peers) {
+    if (!p.conn || !p._senderGroups?.[group]) continue;
+    for (const kind of Object.keys(p._senderGroups[group])) {
+      const sender = p._senderGroups[group][kind];
+      try {
+        if (sender && p.conn.getSenders().includes(sender)) {
+          await sender.replaceTrack(null);
+        }
+      } catch (e) {}
+    }
+    // Keep the sender objects around — reused on next share via replaceTrack.
+    // (Removing + re-adding causes m-line churn on renegotiation, which is
+    // exactly what triggered the black-screen bug.)
+  }
+}
+
 async function doShare() {
   const existing = S.streams.get(S.cid);
   if (existing) {
+    await detachTracksFromPeers('screen');
     existing.stream.getTracks().forEach(t => t.stop());
     S.streams.delete(S.cid); renderStreams(); stopVU('in');
     updateShareBtn(false);
@@ -2679,10 +2765,12 @@ async function doShare() {
     renderStreams();
     initVU(stream, 'in');
     updateShareBtn(true);
-    for (const [, p] of S.peers) {
-      if (p.conn) stream.getTracks().forEach(t => p.conn.addTrack(t, stream));
-    }
-    stream.getVideoTracks()[0].onended = () => { toast('שיתוף מסך הסתיים', ''); S.streams.delete(S.cid); renderStreams(); stopVU('in'); updateShareBtn(false); };
+    await attachTracksToPeers(stream, 'screen');
+    stream.getVideoTracks()[0].onended = async () => {
+      toast('שיתוף מסך הסתיים', '');
+      await detachTracksFromPeers('screen');
+      S.streams.delete(S.cid); renderStreams(); stopVU('in'); updateShareBtn(false);
+    };
     // In lecture mode, auto-arm recording so the lecturer never has to remember
     if (isLecturer() && !isRecording()) {
       toast('הרצאה — הקלטה מתחילה אוטומטית', 'g');
@@ -2709,6 +2797,7 @@ async function doShareCam() {
   const camKey = S.cid + ':cam';
   const existing = S.streams.get(camKey);
   if (existing) {
+    await detachTracksFromPeers('camera');
     existing.stream.getTracks().forEach(t => t.stop());
     S.streams.delete(camKey);
     renderStreams();
@@ -2722,10 +2811,12 @@ async function doShareCam() {
     S.streams.set(camKey, { stream, type: 'camera', name: S.name + ' 📷' });
     renderStreams();
     updateCamBtn(true);
-    for (const [, p] of S.peers) {
-      if (p.conn) stream.getTracks().forEach(t => p.conn.addTrack(t, stream));
-    }
-    stream.getVideoTracks()[0].onended = () => { toast('המצלמה נעצרה', ''); S.streams.delete(camKey); renderStreams(); updateCamBtn(false); };
+    await attachTracksToPeers(stream, 'camera');
+    stream.getVideoTracks()[0].onended = async () => {
+      toast('המצלמה נעצרה', '');
+      await detachTracksFromPeers('camera');
+      S.streams.delete(camKey); renderStreams(); updateCamBtn(false);
+    };
   } catch(e) {
     if (e.name === 'NotAllowedError') {
       toast('הרשאת מצלמה נדחתה — פתח הרשאות באתר ואפשר', 'r');
@@ -2749,6 +2840,7 @@ async function doShareAudio() {
   const audioKey = S.cid + ':audio';
   const existing = S.streams.get(audioKey);
   if (existing) {
+    await detachTracksFromPeers('audio');
     existing.stream.getTracks().forEach(t => t.stop());
     S.streams.delete(audioKey); stopVU('in');
     updateAudioBtn(false);
@@ -2756,7 +2848,6 @@ async function doShareAudio() {
     return;
   }
   try {
-    // Music-quality mode: disable AEC/AGC/NS (they mangle music), request high bitrate.
     const stream = await navigator.mediaDevices.getDisplayMedia({
       video: true,
       audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false,
@@ -2766,30 +2857,31 @@ async function doShareAudio() {
     const vt = stream.getVideoTracks()[0];
     if (vt) { stream.removeTrack(vt); vt.stop(); }
     if (stream.getAudioTracks().length === 0) { toast('לא נמצא אודיו', 'r'); return; }
-    // Try applying music-quality constraints on the audio track too (some browsers honor it here).
     try { await stream.getAudioTracks()[0].applyConstraints({ echoCancellation:false, noiseSuppression:false, autoGainControl:false }); } catch(e) {}
     toast('משתף שמע (איכות מוזיקלית)', 'g');
     S.streams.set(audioKey, { stream, type: 'audio', name: S.name + ' 🔊' });
     initVU(stream, 'in');
     updateAudioBtn(true);
-    for (const [, p] of S.peers) {
-      if (p.conn) {
-        stream.getAudioTracks().forEach(t => {
-          const sender = p.conn.addTrack(t, stream);
-          // Bump Opus bitrate to 128kbps for music (default ~40kbps for speech).
-          setTimeout(() => {
-            try {
-              const params = sender.getParameters();
-              params.encodings = params.encodings || [{}];
-              params.encodings[0].maxBitrate = 128_000;
-              params.encodings[0].priority = 'high';
-              sender.setParameters(params);
-            } catch(e) {}
-          }, 200);
-        });
+    await attachTracksToPeers(stream, 'audio');
+    // Bump Opus bitrate to 128kbps for the just-attached audio senders (music quality)
+    setTimeout(() => {
+      for (const [, p] of S.peers) {
+        if (!p.conn || !p._senderGroups?.audio?.audio) continue;
+        try {
+          const sender = p._senderGroups.audio.audio;
+          const params = sender.getParameters();
+          params.encodings = params.encodings || [{}];
+          params.encodings[0].maxBitrate = 128_000;
+          params.encodings[0].priority = 'high';
+          sender.setParameters(params);
+        } catch(e) {}
       }
-    }
-    stream.getAudioTracks()[0].onended = () => { toast('שיתוף השמע הסתיים', ''); S.streams.delete(audioKey); stopVU('in'); updateAudioBtn(false); };
+    }, 250);
+    stream.getAudioTracks()[0].onended = async () => {
+      toast('שיתוף השמע הסתיים', '');
+      await detachTracksFromPeers('audio');
+      S.streams.delete(audioKey); stopVU('in'); updateAudioBtn(false);
+    };
   } catch(e) { toast('שיתוף שמע בוטל', ''); }
 }
 function updateAudioBtn(active) {
@@ -2802,13 +2894,22 @@ function updateAudioBtn(active) {
 function showRemoteStream(stream, peerId) {
   const p = S.peers.get(peerId);
   const name = p?.name || 'Peer';
+  // Same peer re-sharing (or codec renegotiation) — replace their stream reference so
+  // the video element re-binds and doesn't stay stuck on the frozen old stream.
+  const existingEntry = S.streams.get(peerId);
+  if (existingEntry && existingEntry.stream !== stream) voiceDetach(peerId);
   S.streams.set(peerId, { stream, type: 'screen', name });
   renderStreams();
   toast(name + ' משתף/ת מסך', 'g');
   initVU(stream, 'out');
   voiceAttach(peerId, stream);
-  stream.getTracks().forEach(t => { t.onended = () => { S.streams.delete(peerId); renderStreams(); stopVU('out'); voiceDetach(peerId); }; });
-  // If we already have a hot mic, this is exactly the moment feedback could start — warn once
+  // React to track mute/unmute so a peer stopping+restarting a share doesn't
+  // leave us on the frozen last frame — force a re-render + explicit .play().
+  stream.getTracks().forEach(t => {
+    t.onended = () => { S.streams.delete(peerId); renderStreams(); stopVU('out'); voiceDetach(peerId); };
+    t.onmute = () => { dlog('remote track muted: ' + peerId + '/' + t.kind); };
+    t.onunmute = () => { dlog('remote track unmuted: ' + peerId + '/' + t.kind); renderStreams(); };
+  });
   if (stream.getAudioTracks().length && S.micStream && !S.selfMuted) maybeShowFeedbackWarning();
 }
 
@@ -2828,6 +2929,7 @@ function createStreamEl(peerId, stream, name) {
   vid.autoplay = true;
   vid.playsInline = true;
   vid.muted = peerId.startsWith(S.cid);
+  ensureVideoPlays(vid, wrap);
   const label = document.createElement('div');
   label.className = 'stream-label';
   label.textContent = name || 'Peer';
@@ -2899,6 +3001,7 @@ function renderStreams() {
     vid.tabIndex = 0; // make focusable for keyboard events
     vid.style.cssText = 'width:100%;height:100%;object-fit:contain;background:#000';
     wrap.appendChild(vid);
+    ensureVideoPlays(vid, wrap);
     // Show hint only when this isn't our own stream and the guest can send input
     const isSelf = S.focusedStream.startsWith(S.cid);
     if (!isSelf && (MY.mouse || MY.keyboard)) {
