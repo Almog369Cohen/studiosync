@@ -130,7 +130,12 @@ function checkLicense(key) {
   return VALID_LICENSES.has(k) || runtimeLicenses.has(k);
 }
 
+// Trial gate — disabled during MMP so real testing isn't blocked.
+// Re-enable by setting DISABLE_TRIAL_LIMIT=false in Render env when ready to monetize.
+const TRIAL_LIMIT_DISABLED = process.env.DISABLE_TRIAL_LIMIT !== 'false';
+
 function checkTrial(fp) {
+  if (TRIAL_LIMIT_DISABLED) return true;
   const today = new Date().toISOString().slice(0, 10);
   const rec = trialSessions.get(fp);
   if (!rec || rec.date !== today) return true;
@@ -138,6 +143,7 @@ function checkTrial(fp) {
 }
 
 function useTrial(fp) {
+  if (TRIAL_LIMIT_DISABLED) return;
   const today = new Date().toISOString().slice(0, 10);
   const rec = trialSessions.get(fp);
   if (!rec || rec.date !== today) { trialSessions.set(fp, { count: 1, date: today }); return; }
