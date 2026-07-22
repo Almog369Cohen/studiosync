@@ -671,16 +671,28 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 .screen.on { display:flex; }
 
 /* ── Landing ─────────────────────────────────────────── */
-.land-nav { padding:16px 32px; display:flex; align-items:center; border-bottom:1px solid var(--b1); }
-.brand { font-size:18px; font-weight:700; color:var(--hi); }
+.land-nav { padding:18px 32px; display:flex; align-items:center; border-bottom:1px solid var(--b1); backdrop-filter:blur(10px); position:sticky; top:0; z-index:10; background:rgba(255,255,255,.85); }
+[data-theme="dark"] .land-nav { background:rgba(11,17,32,.85); }
+.brand { font-size:19px; font-weight:700; color:var(--hi); letter-spacing:-.3px; }
 .brand span { color:var(--accent); }
-.hero { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; padding:40px 24px; }
-.hero-badge { background:var(--accentD); color:var(--accent); padding:6px 14px; border-radius:100px; font-size:13px; font-weight:600; margin-bottom:24px; display:inline-block; }
-.hero h1 { font-size:clamp(28px,5vw,52px); font-weight:700; line-height:1.15; margin-bottom:16px; color:var(--hi); }
-.hero-sub { font-size:16px; color:var(--mid); max-width:520px; line-height:1.6; margin-bottom:36px; }
-.hero-ctas { display:flex; gap:12px; flex-wrap:wrap; justify-content:center; }
+.brand span { color:var(--accent); }
+.hero { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; padding:56px 24px 32px; position:relative; overflow:hidden; }
+.hero::before { content:''; position:absolute; inset:0; background:radial-gradient(ellipse at top, rgba(108,71,255,.14), transparent 60%); pointer-events:none; z-index:0; }
+.hero > * { position:relative; z-index:1; }
+.hero-badge { background:var(--accentD); color:var(--accent); padding:6px 14px; border-radius:100px; font-size:13px; font-weight:600; margin-bottom:24px; display:inline-block; animation:fadeInDown .5s ease-out; }
+.hero h1 { font-size:clamp(30px,5.5vw,56px); font-weight:800; line-height:1.1; margin-bottom:18px; color:var(--hi); letter-spacing:-.5px; animation:fadeInUp .6s ease-out; }
+.hero-sub { font-size:17px; color:var(--mid); max-width:560px; line-height:1.6; margin-bottom:36px; animation:fadeInUp .7s ease-out; }
+.hero-ctas { display:flex; gap:14px; flex-wrap:wrap; justify-content:center; animation:fadeInUp .8s ease-out; }
+@keyframes fadeInUp { from { opacity:0; transform:translateY(14px); } to { opacity:1; transform:translateY(0); } }
+@keyframes fadeInDown { from { opacity:0; transform:translateY(-8px); } to { opacity:1; transform:translateY(0); } }
 .features { display:flex; gap:16px; justify-content:center; padding:0 24px 40px; flex-wrap:wrap; }
-.feat-card { background:var(--s1); border:1px solid var(--b1); border-radius:var(--radiusL); padding:24px; max-width:200px; text-align:center; }
+.feat-card { background:var(--s1); border:1px solid var(--b1); border-radius:var(--radiusL); padding:28px 24px; max-width:220px; text-align:center; transition:transform .2s ease, box-shadow .2s ease, border-color .2s ease; }
+.feat-card:hover { transform:translateY(-4px); border-color:var(--accent); box-shadow:0 12px 32px rgba(108,71,255,.15); }
+.feat-icon { font-size:32px; margin-bottom:12px; display:inline-block; transition:transform .2s ease; }
+.feat-card:hover .feat-icon { transform:scale(1.15); }
+.feat-title { font-size:15px; font-weight:700; color:var(--hi); margin-bottom:6px; }
+.feat-desc { font-size:13px; color:var(--mid); line-height:1.5; }
+.features { display:flex; gap:18px; justify-content:center; padding:20px 24px 48px; flex-wrap:wrap; }
 .feat-icon { font-size:28px; margin-bottom:12px; }
 .feat-title { font-weight:600; font-size:14px; margin-bottom:6px; color:var(--hi); }
 .feat-desc { font-size:12px; color:var(--mid); line-height:1.5; }
@@ -716,11 +728,19 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 .vote-btn.voted { background:var(--b2); color:var(--dim); cursor:default; }
 
 /* ── Buttons ─────────────────────────────────────────── */
-.btn-accent { background:var(--accent); color:#fff; border:none; border-radius:var(--radius); padding:12px 28px; font-size:15px; font-weight:600; cursor:pointer; font-family:var(--sans); transition:opacity .15s; }
-.btn-accent:hover { opacity:.9; }
-.btn-ghost { background:transparent; color:var(--accent); border:1.5px solid var(--accent); border-radius:var(--radius); padding:12px 28px; font-size:15px; font-weight:600; cursor:pointer; font-family:var(--sans); }
-.btn-ghost:hover { background:var(--accentH); }
+.btn-accent { background:linear-gradient(135deg, var(--accent), #8a68ff); color:#fff; border:none; border-radius:var(--radius); padding:13px 30px; font-size:15px; font-weight:600; cursor:pointer; font-family:var(--sans); transition:all .15s ease; box-shadow:0 4px 14px rgba(108,71,255,.35); }
+.btn-accent:hover { transform:translateY(-2px); box-shadow:0 6px 20px rgba(108,71,255,.5); }
+.btn-accent:active { transform:translateY(0); box-shadow:0 2px 8px rgba(108,71,255,.35); }
+.btn-ghost { background:transparent; color:var(--accent); border:1.5px solid var(--accent); border-radius:var(--radius); padding:13px 30px; font-size:15px; font-weight:600; cursor:pointer; font-family:var(--sans); transition:all .15s ease; }
+.btn-ghost:hover { background:var(--accentH); transform:translateY(-1px); }
 .btn-full { width:100%; }
+.btn-primary { background:var(--accent); color:#fff; border:none; border-radius:var(--radius); padding:9px 16px; font-size:13px; font-weight:600; cursor:pointer; font-family:var(--sans); transition:all .15s ease; }
+.btn-primary:hover { background:#5a3fd6; transform:translateY(-1px); }
+.btn-primary:active { transform:translateY(0); }
+.modal-backdrop { position:fixed; inset:0; background:rgba(0,0,0,.55); backdrop-filter:blur(6px); display:flex; align-items:center; justify-content:center; z-index:1000; animation:mbFade .2s ease-out; padding:20px; }
+.modal-panel { background:var(--bg); border:1px solid var(--b1); border-radius:16px; padding:24px; max-width:520px; width:100%; box-shadow:0 24px 60px rgba(0,0,0,.35); animation:mpSlide .25s ease-out; max-height:90vh; overflow-y:auto; }
+@keyframes mbFade { from { opacity:0; } to { opacity:1; } }
+@keyframes mpSlide { from { opacity:0; transform:translateY(20px) scale(.97); } to { opacity:1; transform:translateY(0) scale(1); } }
 .btn-link { background:none; border:none; color:var(--mid); cursor:pointer; font-size:13px; text-align:center; margin-top:8px; font-family:var(--sans); }
 
 /* ── Lobby ───────────────────────────────────────────── */
@@ -765,8 +785,9 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 .tb-brand { font-size:15px; font-weight:700; color:var(--hi); white-space:nowrap; }
 .tb-brand span { color:var(--accent); }
 .tb-sep { width:1px; height:24px; background:var(--b1); }
-.session-code-chip { display:flex; align-items:center; gap:6px; background:var(--s1); border:1px solid var(--b1); border-radius:6px; padding:4px 10px; cursor:pointer; font-family:var(--mono); font-size:13px; font-weight:600; color:var(--hi); }
-.session-code-chip:hover { border-color:var(--accent); color:var(--accent); }
+.session-code-chip { display:flex; align-items:center; gap:6px; background:var(--accentD); border:1px solid var(--accent); border-radius:8px; padding:6px 14px; cursor:pointer; font-family:var(--mono); font-size:14px; font-weight:700; color:var(--accent); transition:all .15s; letter-spacing:1px; }
+.session-code-chip:hover { background:var(--accent); color:#fff; transform:translateY(-1px); box-shadow:0 4px 12px rgba(108,71,255,.3); }
+.session-code-chip::before { content:'📋'; font-size:12px; opacity:.7; }
 .copy-icon { font-size:14px; color:var(--mid); }
 .peer-avatars { display:flex; margin-left:4px; }
 .peer-avatar { width:28px; height:28px; border-radius:50%; border:2px solid var(--bg); display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:700; color:#fff; cursor:default; margin-left:-6px; transition:box-shadow .1s ease-out, transform .1s ease-out; }
@@ -803,12 +824,13 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 .email-btn:hover { background:var(--b1); }
 
 /* ── Quick join (landing) ──────────────────────────── */
-.quick-join { display:flex; gap:8px; margin-top:12px; width:100%; max-width:320px; }
-.quick-join input { flex:1; border:1px solid var(--b1); border-radius:8px; padding:10px 14px; font-family:var(--mono); font-size:15px; text-align:center; letter-spacing:.12em; text-transform:uppercase; color:var(--hi); outline:none; direction:ltr; }
-.quick-join input:focus { border-color:var(--accent); }
+.quick-join { display:flex; gap:8px; margin:14px auto 0; width:100%; max-width:340px; align-items:center; }
+.quick-join input { flex:1; min-width:0; border:1.5px solid var(--b1); border-radius:8px; padding:11px 14px; font-family:var(--mono); font-size:15px; text-align:center; letter-spacing:.12em; text-transform:uppercase; color:var(--hi); outline:none; direction:ltr; background:var(--s1); transition:border-color .15s; }
+.quick-join input:focus { border-color:var(--accent); background:var(--bg); }
 .quick-join input::placeholder { color:var(--dim); letter-spacing:0; text-transform:none; font-family:var(--sans); font-size:13px; }
-.quick-join button { padding:10px 16px; border-radius:8px; background:var(--accent); color:#fff; border:none; font-weight:600; cursor:pointer; white-space:nowrap; }
-.quick-join-divider { color:var(--dim); font-size:12px; margin-top:16px; }
+.quick-join button { flex-shrink:0; padding:11px 18px; border-radius:8px; background:var(--accent); color:#fff; border:none; font-weight:600; cursor:pointer; white-space:nowrap; transition:all .15s; }
+.quick-join button:hover { background:#5a3fd6; transform:translateY(-1px); }
+.quick-join-divider { color:var(--dim); font-size:12px; margin-top:20px; }
 
 /* ── Session timer ─────────────────────────────────── */
 .session-timer { display:flex; align-items:center; gap:4px; font-family:var(--mono); font-size:12px; color:var(--mid); background:var(--s1); border:1px solid var(--b1); border-radius:100px; padding:3px 10px; }
@@ -911,6 +933,13 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 .piano-size-btn { font-size:11px; padding:3px 10px; border:none; background:none; color:var(--mid); border-radius:4px; cursor:pointer; font-family:var(--sans); }
 .piano-size-btn:hover { color:var(--fg); }
 .piano-size-btn.active { background:var(--accent); color:#fff; font-weight:600; }
+.snd-mode-picker { display:flex; gap:2px; background:var(--s1); border:1px solid var(--b1); border-radius:6px; padding:2px; }
+.snd-mode-btn { font-size:11px; padding:3px 10px; border:none; background:none; color:var(--mid); border-radius:4px; cursor:pointer; font-family:var(--sans); }
+.snd-mode-btn:hover { color:var(--fg); }
+.snd-mode-btn.active { background:var(--accent); color:#fff; font-weight:600; }
+.snd-vol-wrap { display:flex; align-items:center; gap:6px; }
+.snd-vol-wrap input[type=range] { width:70px; height:4px; -webkit-appearance:none; appearance:none; background:var(--b1); border-radius:2px; outline:none; }
+.snd-vol-wrap input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:12px; height:12px; border-radius:50%; background:var(--accent); cursor:pointer; }
 .pk-w[data-peer], .pk-b[data-peer] { position:relative; }
 .pk-w[data-peer]::after, .pk-b[data-peer]::after {
   content:attr(data-peer); position:absolute; top:2px; left:50%; transform:translateX(-50%);
@@ -924,10 +953,12 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 .piano-close { background:none; border:none; cursor:pointer; color:var(--mid); font-size:16px; padding:0 4px; }
 .piano-ch select { font-size:11px; border:1px solid var(--b1); border-radius:4px; padding:2px 4px; color:var(--txt); background:var(--bg); }
 .piano-keys { position:relative; height:84px; display:flex; padding:6px 16px 0; overflow-x:auto; user-select:none; }
-.pk-w { width:32px; height:72px; background:#fff; border:1px solid #bbb; border-radius:0 0 4px 4px; cursor:pointer; flex-shrink:0; transition:background .05s; position:relative; z-index:1; display:flex; align-items:flex-end; justify-content:center; padding-bottom:4px; }
-.pk-w:hover,.pk-w.on { background:#e0d8ff; border-color:var(--accent); }
-.pk-b { width:22px; height:46px; background:#222; border-radius:0 0 3px 3px; cursor:pointer; flex-shrink:0; position:relative; z-index:2; margin:0 -11px; transition:background .05s; display:flex; align-items:flex-end; justify-content:center; padding-bottom:3px; }
-.pk-b:hover,.pk-b.on { background:var(--accent); }
+.pk-w { width:32px; height:78px; background:linear-gradient(180deg, #fefefe 0%, #ececec 100%); border:1px solid #b8b8b8; border-radius:0 0 5px 5px; cursor:pointer; flex-shrink:0; transition:all .06s ease-out; position:relative; z-index:1; display:flex; align-items:flex-end; justify-content:center; padding-bottom:5px; box-shadow:inset 0 -3px 0 rgba(0,0,0,.08), 0 1px 2px rgba(0,0,0,.15); }
+.pk-w:hover { background:linear-gradient(180deg, #f5f0ff 0%, #e5d8ff 100%); border-color:var(--accent); }
+.pk-w.on { background:linear-gradient(180deg, #d8c8ff 0%, #b8a0ff 100%); border-color:var(--accent); transform:translateY(1px); box-shadow:inset 0 -1px 0 rgba(0,0,0,.15); }
+.pk-b { width:22px; height:52px; background:linear-gradient(180deg, #333 0%, #111 100%); border-radius:0 0 4px 4px; cursor:pointer; flex-shrink:0; position:relative; z-index:2; margin:0 -11px; transition:all .06s ease-out; display:flex; align-items:flex-end; justify-content:center; padding-bottom:3px; box-shadow:inset 0 -3px 0 rgba(255,255,255,.08), 0 2px 4px rgba(0,0,0,.35); }
+.pk-b:hover { background:linear-gradient(180deg, #555 0%, #333 100%); }
+.pk-b.on { background:linear-gradient(180deg, var(--accent) 0%, #4a2fbe 100%); transform:translateY(1px); }
 .pk-label { font-size:8px; color:#aaa; pointer-events:none; }
 .pk-w .pk-label { color:var(--mid); }
 .piano-vel { display:flex; align-items:center; gap:8px; padding:4px 16px; font-size:11px; color:var(--mid); border-top:1px solid var(--b1); }
@@ -949,9 +980,14 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 .perm-badge.on-green { background:var(--gD); border-color:var(--green); color:var(--green); }
 
 /* ── Transport bar ───────────────────────────────────── */
-.transport-bar { height:56px; border-top:1px solid var(--b1); display:flex; align-items:center; gap:8px; padding:0 16px; background:var(--bg); flex-shrink:0; position:fixed; bottom:0; left:0; right:0; z-index:50; }
-.tc { width:34px; height:34px; border:1.5px solid var(--b1); border-radius:6px; background:none; cursor:pointer; font-size:14px; display:flex; align-items:center; justify-content:center; color:var(--txt); }
-.tc:hover { border-color:var(--accent); color:var(--accent); }
+.transport-bar { height:60px; border-top:1px solid var(--b1); display:flex; align-items:center; gap:6px; padding:0 16px; background:linear-gradient(180deg, var(--bg), var(--s1)); flex-shrink:0; position:fixed; bottom:0; left:0; right:0; z-index:50; backdrop-filter:blur(8px); box-shadow:0 -2px 12px rgba(0,0,0,.06); }
+.tc { min-width:36px; height:36px; padding:0 6px; border:1.5px solid var(--b1); border-radius:8px; background:none; cursor:pointer; font-size:13px; display:inline-flex; align-items:center; justify-content:center; gap:5px; color:var(--txt); transition:all .12s; white-space:nowrap; font-family:var(--sans); font-weight:500; }
+.tc:hover { border-color:var(--accent); color:var(--accent); transform:translateY(-1px); box-shadow:0 2px 6px rgba(108,71,255,.15); }
+.tc:active { transform:translateY(0); }
+.tc.active-share, .tc.active { background:rgba(108,71,255,.12); border-color:var(--accent); color:var(--accent); }
+.tc.recording { background:rgba(240,68,56,.15); border-color:#f04438; color:#f04438; animation:recPulse 1.8s ease-in-out infinite; }
+@keyframes recPulse { 0%,100% { box-shadow:0 0 0 0 rgba(240,68,56,.4); } 50% { box-shadow:0 0 0 6px rgba(240,68,56,0); } }
+.tc.muted-state { background:rgba(240,68,56,.12); border-color:#f04438; color:#f04438; }
 .latency-pill { background:var(--s1); border:1px solid var(--b1); border-radius:100px; padding:3px 10px; font-size:11px; font-family:var(--mono); color:var(--mid); }
 .midi-pill { background:var(--s1); border:1px solid var(--b1); border-radius:100px; padding:3px 10px; font-size:11px; color:var(--mid); cursor:pointer; user-select:none; transition:all .15s; }
 .midi-pill:hover { border-color:var(--accent); color:var(--fg); }
@@ -994,7 +1030,7 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 .recording { border:2px solid var(--rD) !important; background:rgba(255,60,60,.2) !important; animation:rec-pulse 1s ease infinite; }
 @keyframes rec-pulse { 0%,100%{opacity:1} 50%{opacity:.6} }
 .active-tool { border-color:var(--accent) !important; color:var(--accent) !important; }
-.tb-group-sep { width:1px; height:24px; background:var(--b1); margin:0 4px; flex-shrink:0; }
+.tb-group-sep { width:1px; height:28px; background:var(--b1); margin:0 6px; flex-shrink:0; opacity:.6; }
 .is-guest .host-only { display:none !important; }
 .guest-only { display:none !important; }
 .is-guest .guest-only { display:flex !important; }
@@ -1015,10 +1051,10 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 .dlog-entry { font-size:11px; font-family:var(--mono); color:var(--mid); padding:2px 0; border-bottom:1px solid var(--b1); }
 
 /* ── Toast ───────────────────────────────────────────── */
-#toastEl { position:fixed; bottom:72px; left:50%; transform:translateX(-50%); background:var(--hi); color:var(--bg); padding:10px 20px; border-radius:100px; font-size:13px; font-weight:500; opacity:0; transition:opacity .2s; pointer-events:none; z-index:300; white-space:nowrap; }
-#toastEl.toast-show { opacity:1; }
-#toastEl.toast-g { background:var(--green); color:#fff; }
-#toastEl.toast-r { background:var(--red); color:#fff; }
+#toastEl { position:fixed; bottom:80px; left:50%; transform:translateX(-50%) translateY(20px); background:var(--hi); color:var(--bg); padding:12px 22px; border-radius:100px; font-size:13px; font-weight:500; opacity:0; transition:all .25s cubic-bezier(.2,.9,.3,1.2); pointer-events:none; z-index:2000; white-space:nowrap; box-shadow:0 8px 24px rgba(0,0,0,.25); max-width:90vw; overflow:hidden; text-overflow:ellipsis; }
+#toastEl.toast-show { opacity:1; transform:translateX(-50%) translateY(0); }
+#toastEl.toast-g { background:linear-gradient(135deg, #03b28c, #059cc0); color:#fff; }
+#toastEl.toast-r { background:linear-gradient(135deg, #f04438, #d43128); color:#fff; }
 .rvb-mute:hover { background:rgba(255,255,255,.15); }
 .rvb-close { background:none; border:none; color:rgba(255,255,255,.7); cursor:pointer; font-size:18px; padding:0 2px; line-height:1; }
 .rvb-close:hover { color:#fff; }
@@ -1206,9 +1242,9 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
     <button class="tb-btn" id="themeToggleLand" onclick="toggleTheme()">🌙</button>
   </nav>
   <div class="hero" dir="rtl">
-    <div class="hero-badge">שיתוף פעולה מוסיקלי בזמן אמת</div>
-    <h1>עשו מוזיקה ביחד,<br>בזמן אמת</h1>
-    <p class="hero-sub">שתפו את מסך ה-DAW שלכם, שדרו אודיו איכותי, ותנו לכולם לשלוט בסשן — מכל מקום בעולם.</p>
+    <div class="hero-badge">✨ סטודיו משותף · MIDI חי · הרצאות אונליין</div>
+    <h1>ה-DAW שלכם.<br>הסטודיו של כולם.</h1>
+    <p class="hero-sub">שתפו מסך + שמע איכות מוזיקלית · נגנו MIDI מכל דפדפן · הקליטו והעלו ל-Drive · העבירו הרצאות עד 30 תלמידים. הכל בקוד קצר אחד.</p>
     <div class="hero-ctas">
       <button class="btn-accent" onclick="showLobby('create')">צור סשן</button>
       <button class="btn-ghost" onclick="showLobby('join')">הצטרף לסשן</button>
@@ -1221,19 +1257,19 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
   </div>
   <div class="features">
     <div class="feat-card" dir="rtl">
-      <div class="feat-icon">🔊</div>
-      <div class="feat-title">אודיו סטודיו</div>
-      <div class="feat-desc">שדר אודיו DAW בזמן אמת, לא דרך מיקרופון</div>
+      <div class="feat-icon">🎹</div>
+      <div class="feat-title">MIDI חי</div>
+      <div class="feat-desc">מקלדת חיצונית או ASDF במקלדת המחשב — נכתב ישר לטראק MIDI ב-DAW</div>
     </div>
     <div class="feat-card" dir="rtl">
-      <div class="feat-icon">🖱</div>
-      <div class="feat-title">שליטה מלאה</div>
-      <div class="feat-desc">כל משתתף יכול לשלוט ב-DAW — נגינה, עצירה, עריכה</div>
+      <div class="feat-icon">🖥</div>
+      <div class="feat-title">שיתוף מלא</div>
+      <div class="feat-desc">מסך, שמע DAW באיכות מוזיקלית, מיקרופון, ושליטת עכבר ומקלדת מרחוק</div>
     </div>
     <div class="feat-card" dir="rtl">
-      <div class="feat-icon">👥</div>
-      <div class="feat-title">עד 10 אנשים</div>
-      <div class="feat-desc">שתפו פעולה עם כל הלהקה או הכיתה בסשן אחד</div>
+      <div class="feat-icon">🎓</div>
+      <div class="feat-title">מצב הרצאה</div>
+      <div class="feat-desc">עד 30 תלמידים בסשן אחד, המרצה שולט מי מדבר ומי מנגן</div>
     </div>
   </div>
 
@@ -1392,6 +1428,15 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
   <div id="pianoWrap">
     <div class="piano-header">
       <span class="piano-header-label">🎹 פסנתר משותף — לחץ על הקלידים או השתמש במקלדת (M להפעלה)</span>
+      <div class="snd-mode-picker" title="מקור סאונד מקומי">
+        <button class="snd-mode-btn" data-mode="synth" onclick="setPianoSoundMode('synth')">🎹 פסנתר</button>
+        <button class="snd-mode-btn" data-mode="off" onclick="setPianoSoundMode('off')">🔇 דומם</button>
+      </div>
+      <div class="snd-vol-wrap" title="עוצמת פסנתר מקומי">
+        <span style="font-size:11px;color:var(--mid)">🔊</span>
+        <input type="range" id="sndVol" min="0" max="100" step="1" onchange="setPianoVolume(this.value/100)" oninput="setPianoVolume(this.value/100)" />
+        <span id="sndVolLbl" style="font-size:10px;color:var(--dim);min-width:32px">50%</span>
+      </div>
       <div class="piano-size-picker">
         <button class="piano-size-btn" data-size="2" onclick="setPianoSize(2)">קומפקטי</button>
         <button class="piano-size-btn" data-size="4" onclick="setPianoSize(4)">בינוני</button>
@@ -3208,9 +3253,15 @@ const PIANO = {
 };
 
 // ══════════════════════════════════════════════════════════
-// Web Audio piano synth — local sound for all note sources
+// Web Audio piano synth — richer local sound than a basic sine stack
+// Supports per-user mode: synth (built-in) / off (silent, e.g. when
+// listening to a real Ableton preset via the audio share stream)
 // ══════════════════════════════════════════════════════════
-const AUDIO = { ctx: null, master: null, voices: new Map() };
+const AUDIO = {
+  ctx: null, master: null, reverb: null, voices: new Map(),
+  mode: (typeof localStorage !== 'undefined' && localStorage.getItem('ss_sound_mode')) || 'synth', // 'synth' | 'off'
+  volume: (typeof localStorage !== 'undefined' ? Number(localStorage.getItem('ss_sound_vol') || 0.5) : 0.5)
+};
 
 function audioInit() {
   if (AUDIO.ctx) return;
@@ -3218,8 +3269,33 @@ function audioInit() {
   if (!AC) return;
   AUDIO.ctx = new AC();
   AUDIO.master = AUDIO.ctx.createGain();
-  AUDIO.master.gain.value = 0.35;
+  AUDIO.master.gain.value = AUDIO.volume;
+  // Very light body-resonance impulse response via a short exponential decay
+  // (Convolver would need an actual IR file; using a short reverb-ish delay chain instead.)
+  const wet = AUDIO.ctx.createGain(); wet.gain.value = 0.18;
+  const delay = AUDIO.ctx.createDelay(0.15); delay.delayTime.value = 0.055;
+  const feedback = AUDIO.ctx.createGain(); feedback.gain.value = 0.28;
+  const filter = AUDIO.ctx.createBiquadFilter(); filter.type = 'lowpass'; filter.frequency.value = 3600;
+  delay.connect(feedback); feedback.connect(filter); filter.connect(delay);
+  delay.connect(wet); wet.connect(AUDIO.master);
   AUDIO.master.connect(AUDIO.ctx.destination);
+  AUDIO.reverb = { input: delay };
+}
+
+function setPianoSoundMode(mode) {
+  AUDIO.mode = (mode === 'off') ? 'off' : 'synth';
+  try { localStorage.setItem('ss_sound_mode', AUDIO.mode); } catch(e) {}
+  document.querySelectorAll('.snd-mode-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === AUDIO.mode));
+  // If switching off, kill any ringing voices immediately
+  if (AUDIO.mode === 'off') { for (const n of [...AUDIO.voices.keys()]) stopPianoNote(n); }
+}
+
+function setPianoVolume(v) {
+  AUDIO.volume = Math.max(0, Math.min(1, Number(v) || 0));
+  try { localStorage.setItem('ss_sound_vol', String(AUDIO.volume)); } catch(e) {}
+  if (AUDIO.master) AUDIO.master.gain.setTargetAtTime(AUDIO.volume, AUDIO.ctx.currentTime, 0.02);
+  const label = document.getElementById('sndVolLbl');
+  if (label) label.textContent = Math.round(AUDIO.volume * 100) + '%';
 }
 
 function midiToFreq(note) {
@@ -3227,39 +3303,78 @@ function midiToFreq(note) {
 }
 
 function playPianoNote(note, velocity) {
+  if (AUDIO.mode === 'off') return; // user opted for pure MIDI passthrough
   audioInit();
   if (!AUDIO.ctx) return;
   if (AUDIO.ctx.state === 'suspended') AUDIO.ctx.resume();
 
-  // stop any existing voice on this note
   stopPianoNote(note);
 
   const freq = midiToFreq(note);
-  const vel = (velocity || 100) / 127;
+  const vel = Math.pow((velocity || 100) / 127, 0.8); // touch curve — small nuance
   const now = AUDIO.ctx.currentTime;
 
-  // Additive synth: 3 harmonics (fundamental + 2nd + 3rd) for piano-ish tone
-  const gain = AUDIO.ctx.createGain();
-  gain.gain.setValueAtTime(0, now);
-  gain.gain.linearRampToValueAtTime(vel * 0.9, now + 0.005);        // fast attack
-  gain.gain.exponentialRampToValueAtTime(vel * 0.35, now + 0.15);   // initial decay
-  gain.gain.exponentialRampToValueAtTime(vel * 0.15, now + 1.5);    // sustain-decay
-  gain.connect(AUDIO.master);
+  // Master voice bus
+  const bus = AUDIO.ctx.createGain();
+  bus.gain.value = 0;
+  bus.connect(AUDIO.master);
+  if (AUDIO.reverb) bus.connect(AUDIO.reverb.input);
+
+  // Piano-like envelope: instant hammer strike → fast initial decay → slow sustain-decay
+  // Lower notes decay slower (mimics longer bass strings).
+  const decayScale = 1 + Math.max(0, (60 - note)) * 0.02;
+  bus.gain.setValueAtTime(0, now);
+  bus.gain.linearRampToValueAtTime(vel * 1.0, now + 0.003);
+  bus.gain.exponentialRampToValueAtTime(vel * 0.4, now + 0.12);
+  bus.gain.exponentialRampToValueAtTime(vel * 0.12, now + 1.4 * decayScale);
+  bus.gain.exponentialRampToValueAtTime(0.0005, now + 4.5 * decayScale);
 
   const oscs = [];
-  const harmonics = [[1, 1], [2, 0.35], [3, 0.15]];
-  for (const [mult, amp] of harmonics) {
+  // Fundamental — sine with slight second-osc detune for chorus body
+  const partials = [
+    { type: 'sine',     mult: 1.000, amp: 1.00 },
+    { type: 'sine',     mult: 1.003, amp: 0.55 }, // detuned for beating / body
+    { type: 'triangle', mult: 2.000, amp: 0.30 },
+    { type: 'sine',     mult: 3.000, amp: 0.20 },
+    { type: 'sine',     mult: 4.010, amp: 0.10 }, // slight inharmonicity
+    { type: 'sine',     mult: 5.020, amp: 0.06 }
+  ];
+  const partialGain = AUDIO.ctx.createGain();
+  partialGain.gain.value = 0.7;
+  // Per-note filter that tracks pitch and slightly opens on velocity
+  const filt = AUDIO.ctx.createBiquadFilter();
+  filt.type = 'lowpass';
+  filt.frequency.value = Math.min(11000, freq * 8 + vel * 3000);
+  filt.Q.value = 0.6;
+  partialGain.connect(filt); filt.connect(bus);
+
+  for (const p of partials) {
     const o = AUDIO.ctx.createOscillator();
-    o.type = 'sine';
-    o.frequency.value = freq * mult;
+    o.type = p.type;
+    o.frequency.value = freq * p.mult;
     const g = AUDIO.ctx.createGain();
-    g.gain.value = amp;
-    o.connect(g); g.connect(gain);
+    g.gain.value = p.amp;
+    o.connect(g); g.connect(partialGain);
     o.start(now);
     oscs.push({ o, g });
   }
 
-  AUDIO.voices.set(note, { gain, oscs });
+  // Hammer noise burst (filtered noise, ~15ms)
+  const noiseBuf = AUDIO.ctx.createBuffer(1, AUDIO.ctx.sampleRate * 0.02, AUDIO.ctx.sampleRate);
+  const nd = noiseBuf.getChannelData(0);
+  for (let i = 0; i < nd.length; i++) nd[i] = (Math.random() * 2 - 1) * (1 - i / nd.length);
+  const noise = AUDIO.ctx.createBufferSource();
+  noise.buffer = noiseBuf;
+  const noiseGain = AUDIO.ctx.createGain();
+  noiseGain.gain.value = 0.12 * vel;
+  const noiseFilt = AUDIO.ctx.createBiquadFilter();
+  noiseFilt.type = 'bandpass';
+  noiseFilt.frequency.value = Math.min(6000, freq * 3);
+  noiseFilt.Q.value = 1.5;
+  noise.connect(noiseFilt); noiseFilt.connect(noiseGain); noiseGain.connect(bus);
+  noise.start(now);
+
+  AUDIO.voices.set(note, { gain: bus, oscs });
 }
 
 function stopPianoNote(note) {
@@ -3269,8 +3384,9 @@ function stopPianoNote(note) {
   try {
     v.gain.gain.cancelScheduledValues(now);
     v.gain.gain.setValueAtTime(v.gain.gain.value, now);
-    v.gain.gain.exponentialRampToValueAtTime(0.001, now + 0.2);
-    v.oscs.forEach(({o}) => o.stop(now + 0.25));
+    // Piano release: quick but not abrupt (mimics damper pedal off)
+    v.gain.gain.exponentialRampToValueAtTime(0.0005, now + 0.35);
+    v.oscs.forEach(({o}) => o.stop(now + 0.4));
   } catch (e) {}
   AUDIO.voices.delete(note);
 }
@@ -3329,6 +3445,12 @@ function togglePiano() {
     audioInit(); // unlock audio on user gesture
     if (AUDIO.ctx?.state === 'suspended') AUDIO.ctx.resume();
     if (!w.dataset.built) { buildPianoKeys(); w.dataset.built = '1'; }
+    // Reflect persisted sound-mode + volume state in the UI
+    document.querySelectorAll('.snd-mode-btn').forEach(b => b.classList.toggle('active', b.dataset.mode === AUDIO.mode));
+    const vol = document.getElementById('sndVol');
+    if (vol) vol.value = String(Math.round(AUDIO.volume * 100));
+    const vlbl = document.getElementById('sndVolLbl');
+    if (vlbl) vlbl.textContent = Math.round(AUDIO.volume * 100) + '%';
   }
 }
 
