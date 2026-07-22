@@ -1013,6 +1013,12 @@ body { font-family:var(--sans); background:var(--bg); color:var(--txt); overflow
 .ss-tile-val { font-size:20px; font-weight:700; color:var(--accent); }
 .ss-tile-lbl { font-size:11px; color:var(--dim); margin-top:2px; }
 .ss-peer { display:inline-flex; width:26px; height:26px; border-radius:50%; align-items:center; justify-content:center; color:#fff; font-size:11px; font-weight:700; }
+/* Self preview — floating cards in the bottom-right corner */
+#selfPreview { position:fixed; bottom:76px; left:16px; display:flex; flex-direction:column; gap:6px; z-index:60; pointer-events:none; }
+.self-preview-tile { position:relative; width:160px; aspect-ratio:16/9; border-radius:8px; overflow:hidden; background:#000; box-shadow:0 6px 20px rgba(0,0,0,.35); border:1.5px solid var(--accent); pointer-events:auto; }
+.self-preview-tile video { width:100%; height:100%; object-fit:cover; transform:scaleX(-1); }
+.self-preview-lbl { position:absolute; bottom:0; left:0; right:0; padding:3px 6px; background:linear-gradient(0deg, rgba(0,0,0,.7), transparent); color:#fff; font-size:10px; font-weight:600; text-align:center; }
+@media (max-width:700px) { .self-preview-tile { width:100px; } }
 .agent-pill { background:var(--s1); border:1px solid var(--b1); border-radius:100px; padding:3px 10px; font-size:11px; color:var(--dim); font-family:var(--sans); transition:all .2s; }
 .agent-pill.connected { border-color:#03b28c; color:#03b28c; background:rgba(3,178,140,.08); }
 .agent-pill.disconnected { border-color:#f04438; color:#f04438; background:rgba(240,68,56,.08); animation:agentBlink 1.4s ease-in-out infinite; }
@@ -2720,6 +2726,8 @@ function showRemoteStream(stream, peerId) {
   initVU(stream, 'out');
   voiceAttach(peerId, stream);
   stream.getTracks().forEach(t => { t.onended = () => { S.streams.delete(peerId); renderStreams(); stopVU('out'); voiceDetach(peerId); }; });
+  // If we already have a hot mic, this is exactly the moment feedback could start — warn once
+  if (stream.getAudioTracks().length && S.micStream && !S.selfMuted) maybeShowFeedbackWarning();
 }
 
 function closeRv() {
@@ -2771,7 +2779,13 @@ function renderStreams() {
   const container = document.getElementById('streamContainer');
   if (!mainEl || !thumbsEl) return;
 
-  if (S.streams.size === 0) {
+  // Update the floating self-preview whenever streams change
+  updateSelfPreview();
+
+  // Partition streams: peer streams go in the main view, own streams into the small self-preview only
+  const peerStreamKeys = [...S.streams.keys()].filter(k => !k.startsWith(S.cid));
+
+  if (peerStreamKeys.length === 0) {
     if (empty) empty.style.display = '';
     if (container) container.style.display = 'none';
     mainEl.innerHTML = '';
@@ -2783,9 +2797,9 @@ function renderStreams() {
   if (empty) empty.style.display = 'none';
   if (container) container.style.display = '';
 
-  // Pick focused stream
-  if (!S.focusedStream || !S.streams.has(S.focusedStream)) {
-    S.focusedStream = S.streams.keys().next().value;
+  // Pick focused stream — prefer peer streams over any leftover own stream
+  if (!S.focusedStream || !S.streams.has(S.focusedStream) || S.focusedStream.startsWith(S.cid)) {
+    S.focusedStream = peerStreamKeys[0];
   }
 
   // Main view (only in thumbnail mode)
@@ -2887,9 +2901,10 @@ function renderStreams() {
     mainEl.appendChild(lbl);
   }
 
-  // Thumbnails
+  // Thumbnails — peer streams only (own streams are shown in the self-preview overlay)
   thumbsEl.innerHTML = '';
   for (const [pid, s] of S.streams) {
+    if (pid.startsWith(S.cid)) continue;
     const thumb = createStreamEl(pid, s.stream, s.name);
     if (pid === S.focusedStream) thumb.classList.add('active');
     thumb.onclick = () => { S.focusedStream = pid; renderStreams(); };
@@ -2923,7 +2938,13 @@ async function toggleSelfMute() {
 
   if (!hasMicStream && !S.micStream) {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      // Force echo cancellation + noise suppression + auto gain for the mic —
+      // these are ON by default in most browsers, but be explicit so we don't
+      // accidentally inherit the OFF-for-music settings from getDisplayMedia.
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
+        video: false
+      });
       S.micStream = stream;
       S.selfMuted = false;
       for (const [, p] of S.peers) {
@@ -2933,6 +2954,7 @@ async function toggleSelfMute() {
       if (btn) { btn.textContent = '🎤'; btn.classList.remove('muted-state'); btn.title = 'השתק'; }
       voiceAttach(S.cid || 'self', stream);
       toast('מיקרופון פעיל', 'g');
+      maybeShowFeedbackWarning();
       return;
     } catch (e) {
       toast('לא ניתן לפתוח מיקרופון', 'r');
@@ -3253,6 +3275,77 @@ const PIANO = {
 };
 
 // ══════════════════════════════════════════════════════════
+// Self-preview — small floating card showing what YOU are broadcasting
+// (own camera / own screen), so you don't take over the main viewer
+// with your own feed.
+// ══════════════════════════════════════════════════════════
+function updateSelfPreview() {
+  const ownStreams = [...S.streams.entries()].filter(([k]) => k.startsWith(S.cid));
+  let container = document.getElementById('selfPreview');
+  if (!ownStreams.length) { if (container) container.remove(); return; }
+  if (!container) {
+    container = document.createElement('div');
+    container.id = 'selfPreview';
+    document.body.appendChild(container);
+  }
+  container.innerHTML = '';
+  for (const [key, s] of ownStreams) {
+    const isAudioOnly = key.endsWith(':audio');
+    if (isAudioOnly) continue; // no video to preview
+    const wrap = document.createElement('div');
+    wrap.className = 'self-preview-tile';
+    const vid = document.createElement('video');
+    vid.srcObject = s.stream;
+    vid.autoplay = true; vid.playsInline = true; vid.muted = true;
+    const lbl = document.createElement('div');
+    lbl.className = 'self-preview-lbl';
+    lbl.textContent = key.endsWith(':cam') ? '📷 המצלמה שלך' :
+                      key.startsWith('extra:') ? '🖥 מסך נוסף' : '🖥 המסך שלך';
+    wrap.appendChild(vid);
+    wrap.appendChild(lbl);
+    container.appendChild(wrap);
+  }
+}
+
+// ══════════════════════════════════════════════════════════
+// Headphone / feedback warning — asks the user to plug in headphones
+// the first time they enable BOTH microphone AND some incoming audio,
+// which is the exact combination that produces speaker→mic feedback.
+// ══════════════════════════════════════════════════════════
+function maybeShowFeedbackWarning() {
+  if (localStorage.getItem('ss_hp_ack_v1')) return;
+  const hasOwnMic = !!S.micStream && !S.selfMuted;
+  const hasIncomingAudio = [...S.streams.entries()].some(([k, s]) =>
+    !k.startsWith(S.cid) && s.stream.getAudioTracks().some(t => t.enabled)
+  );
+  if (!hasOwnMic || !hasIncomingAudio) return;
+  const html = \`
+    <div class="modal-backdrop" id="hpBackdrop" onclick="if(event.target===this)dismissHeadphoneWarning()">
+      <div class="modal-panel" style="max-width:420px" dir="rtl">
+        <h3 style="margin:0 0 10px">🎧 חבר אוזניות</h3>
+        <p style="font-size:13px;color:var(--mid);line-height:1.6;margin:0 0 16px">
+          המיקרופון וגם השמע של המשתתפים פועלים במקביל.<br>
+          <b>בלי אוזניות תוך שניות יתחיל פידבק ורעש מטורף</b> — המיקרופון קולט את מה שהרמקולים משמיעים ושולח את זה חזרה.
+        </p>
+        <p style="font-size:12px;color:var(--dim);line-height:1.5;margin:0 0 18px">
+          חבר אוזניות עכשיו, או השתק את עצמך (🎤) עד שיהיו לך אוזניות.
+        </p>
+        <div style="display:flex;gap:8px">
+          <button onclick="dismissHeadphoneWarning()" class="btn-primary" style="flex:1">חיברתי אוזניות</button>
+          <button onclick="dismissHeadphoneWarning();toggleSelfMute()" class="btn-primary" style="flex:1;background:#f04438">השתק אותי</button>
+        </div>
+      </div>
+    </div>
+  \`;
+  document.getElementById('hpBackdrop')?.remove();
+  document.body.insertAdjacentHTML('beforeend', html);
+}
+function dismissHeadphoneWarning() {
+  localStorage.setItem('ss_hp_ack_v1', '1');
+  document.getElementById('hpBackdrop')?.remove();
+}
+
+// ══════════════════════════════════════════════════════════
 // Web Audio piano synth — richer local sound than a basic sine stack
 // Supports per-user mode: synth (built-in) / off (silent, e.g. when
 // listening to a real Ableton preset via the audio share stream)
@@ -3309,6 +3402,13 @@ function playPianoNote(note, velocity) {
   if (AUDIO.ctx.state === 'suspended') AUDIO.ctx.resume();
 
   stopPianoNote(note);
+
+  // Voice cap — never let held-key spam or a bug pile up more than 12 concurrent notes
+  const MAX_VOICES = 12;
+  if (AUDIO.voices.size >= MAX_VOICES) {
+    const oldest = AUDIO.voices.keys().next().value;
+    stopPianoNote(oldest);
+  }
 
   const freq = midiToFreq(note);
   const vel = Math.pow((velocity || 100) / 127, 0.8); // touch curve — small nuance
